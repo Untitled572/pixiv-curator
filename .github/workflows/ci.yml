@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version embedded in release artifacts
+        required: false
+        type: string
+        default: dev
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Format and static checks
+        run: |
+          test -z "$(gofmt -l cmd internal)"
+          go vet ./...
+      - name: Unit tests
+        run: go test ./...
+      - name: Race detector
+        if: runner.os == 'Linux'
+        run: go test -race ./...
+      - name: Native executable smoke test
+        env:
+          EXE_SUFFIX: ${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: |
+          go build -o "smoke${EXE_SUFFIX}" ./cmd/api
+          python scripts/smoke-test.py --binary "./smoke${EXE_SUFFIX}" --version dev
+
+  binaries:
+    name: Linux and Windows release archives
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build all targets
+        env:
+          VERSION: ${{ inputs.version || 'dev' }}
+        run: python3 scripts/build-release.py --version "$VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-assets
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  docker:
+    name: Docker build and smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Read Go version
+        id: go
+        run: echo "version=$(awk '/^go / {print $2; exit}' go.mod)" >> "$GITHUB_OUTPUT"
+      - name: Build native image for execution
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          tags: pixiv-curator:ci
+          build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
+            VERSION=${{ inputs.version || 'dev' }}
+      - name: Run image and check endpoints
+        env:
+          VERSION: ${{ inputs.version || 'dev' }}
+        run: |
+          container=$(docker run --detach --publish 127.0.0.1::5722 pixiv-curator:ci)
+          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
+          address=$(docker port "$container" 5722/tcp)
+          python3 scripts/smoke-test.py --url "http://$address" --version "$VERSION"
+      - name: Build both image architectures
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: |
+            GO_VERSION=${{ steps.go.outputs.version }}
+            VERSION=${{ inputs.version || 'dev' }}

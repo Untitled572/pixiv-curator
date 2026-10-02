@@ -88,11 +88,17 @@ docs/roadmap.md          里程碑导航
 - [开发计划](docs/development-plan.md)：任务编号、依赖、当前状态与验收标准。
 - [架构概要](docs/architecture.md)：快速了解项目结构。
 
+## 构建与发布
+
+GitHub Actions 在普通提交/PR 时执行测试、Linux/Windows 构建和 Docker 验证；推送版本标签后生成完整 Release 和 GHCR 双架构镜像。
+
+发布约定与操作见 [构建与完整发布](docs/releasing.md)。业务功能仍处于初始化阶段。
+
 ## Git
 
 使用 main 分支进行版本管理。
 
-- origin：https://github.com/Untitled572/pixiv-curator.git
+- origin：git@github.com:Untitled572/pixiv-curator.git
 - Go module：github.com/Untitled572/pixiv-curator
 - 本地提交完成后，仅在用户要求时推送到远端。
 
