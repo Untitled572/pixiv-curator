@@ -86,3 +86,11 @@ gh run list --workflow release.yml
 - 包内 /version 返回对应版本。
 - GHCR manifest 同时包含 linux/amd64 和 linux/arm64。
 - Release 中记录的 digest 与 GHCR 一致。
+
+## 验证记录
+
+2026-10-02，提交 ad0c4df 的[首次 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/36960290306) 全部通过：Linux/Windows 测试及 HTTP 冒烟、Linux race 检查、四个平台压缩包构建与上传、Docker 双架构构建及 amd64 容器冒烟。
+
+本机 gh 2.102.0 已登录 Untitled572，SSH 认证及 main 推送成功；仓库保持私有。尚未创建版本标签，GHCR 推送与 GitHub Release 发布步骤需在首次正式发布时验证。
+
+本地 Docker Hub 拉取超时，镜像验证使用上述远端 CI 结果。该次运行还提示 Docker Actions 的 Node 20 声明已弃用（由 runner 强制使用 Node 24，运行成功）；后续维护时升级对应 Actions。arm64 尚未执行原生运行测试。

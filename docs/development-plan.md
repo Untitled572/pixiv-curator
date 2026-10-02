@@ -39,7 +39,7 @@
 
 | ID | 状态 | 产物 | 验收 |
 | --- | --- | --- | --- |
-| RELEASE-01 | 进行中 | CI、Linux/Windows 四个平台包、Docker 双架构、标签发布工作流 | 本地检查与首次远端 CI；真实版本发布单独执行 |
+| RELEASE-01 | 已完成 | CI、Linux/Windows 四个平台包、Docker 双架构、标签发布工作流 | 本地检查与[首次远端 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/36960290306) 已通过；真实版本发布单独执行 |
 
 后续每次完整发布都必须覆盖三个交付类型，见 [发布文档](releasing.md)。
 
