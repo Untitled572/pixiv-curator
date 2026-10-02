@@ -75,12 +75,25 @@ go build -trimpath -ldflags "-X main.version=v0.1.0" -o bin/pixiv-curator ./cmd/
 cmd/api/              API 进程入口
 internal/config/      环境变量与配置校验
 internal/httpapi/     HTTP 路由与响应
-docs/architecture.md  职责、数据模型与 PicHub 接口设计
-docs/roadmap.md       分阶段实施计划
+docs/architecture.md     架构概要与文档导航
+docs/detailed-design.md  数据、任务、状态与接口详细设计
+docs/development-plan.md 开发任务、依赖、状态与验收
+docs/roadmap.md          里程碑导航
 ```
+
+## 开发文档
+
+- [AGENTS.md](AGENTS.md)：仓库开发规范。
+- [详细设计](docs/detailed-design.md)：数据模型、任务状态机、推荐流程、HTTP 契约与 PicHub 边界。
+- [开发计划](docs/development-plan.md)：任务编号、依赖、当前状态与验收标准。
+- [架构概要](docs/architecture.md)：快速了解项目结构。
 
 ## Git
 
-使用 main 分支进行本地版本管理，初始化不创建远端仓库、不推送。Go module 暂为本地名称 pixiv-curator；确定远端地址后再统一调整 module 与 import。
+使用 main 分支进行版本管理。
+
+- origin：https://github.com/Untitled572/pixiv-curator.git
+- Go module：github.com/Untitled572/pixiv-curator
+- 本地提交完成后，仅在用户要求时推送到远端。
 
 设计文档中的接口和业务模块均为计划，不表示已经可用。
