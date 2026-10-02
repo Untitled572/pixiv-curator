@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"pixiv-curator/internal/config"
-	"pixiv-curator/internal/httpapi"
+	"github.com/Untitled572/pixiv-curator/internal/config"
+	"github.com/Untitled572/pixiv-curator/internal/httpapi"
 )
 
 // version can be overridden using go build -ldflags "-X main.version=...".
