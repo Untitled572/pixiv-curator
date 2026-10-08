@@ -5,8 +5,14 @@ import (
 	"net/http"
 )
 
-func NewHandler(version string) http.Handler {
+func NewHandler(version string) http.Handler { return NewHandlerWithRoutes(version, nil) }
+
+// NewHandlerWithRoutes keeps health routes available while allowing application wiring.
+func NewHandlerWithRoutes(version string, register func(*http.ServeMux)) http.Handler {
 	mux := http.NewServeMux()
+	if register != nil {
+		register(mux)
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})

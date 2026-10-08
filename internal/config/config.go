@@ -4,14 +4,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	Addr     string
-	LogLevel slog.Level
+	Addr           string
+	LogLevel       slog.Level
+	DatabasePath   string
+	AdminTokenFile string
+	PublicBaseURL  string
+	PixivTokenFile string
 }
 
 func Load() (Config, error) {
@@ -20,6 +25,20 @@ func Load() (Config, error) {
 
 func load(getenv func(string) string) (Config, error) {
 	cfg := Config{Addr: "127.0.0.1:5722", LogLevel: slog.LevelInfo}
+	cfg.DatabasePath = strings.TrimSpace(getenv("PIXIV_CURATOR_DATABASE_PATH"))
+	if cfg.DatabasePath == "" {
+		cfg.DatabasePath = "data/curator.db"
+	}
+	cfg.AdminTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_ADMIN_TOKEN_FILE"))
+	cfg.PixivTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_PIXIV_TOKEN_FILE"))
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(getenv("PIXIV_CURATOR_PUBLIC_BASE_URL")), "/")
+	if cfg.PublicBaseURL == "" {
+		cfg.PublicBaseURL = "http://127.0.0.1:5722"
+	}
+	base, err := url.Parse(cfg.PublicBaseURL)
+	if err != nil || base.Hostname() == "" || (base.Scheme != "http" && base.Scheme != "https") || base.User != nil || base.RawQuery != "" || base.Fragment != "" || base.Path != "" {
+		return Config{}, fmt.Errorf("PIXIV_CURATOR_PUBLIC_BASE_URL must be an absolute HTTP(S) origin")
+	}
 	if addr := strings.TrimSpace(getenv("PIXIV_CURATOR_ADDR")); addr != "" {
 		cfg.Addr = addr
 	}

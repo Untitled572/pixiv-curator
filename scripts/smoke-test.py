@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -30,7 +31,15 @@ def check(base, version, process):
     with opener.open(base + "/version", timeout=2) as response:
         assert response.status == 200
         assert json.load(response) == {"name": "pixiv-curator", "version": version}
-    print(f"PASS: healthz and version={version}", flush=True)
+    with opener.open(base + "/readyz", timeout=2) as response:
+        assert response.status == 200
+        assert json.load(response) == {"status": "ready"}
+    try:
+        opener.open(base + "/admin/api/artists", timeout=2)
+        raise AssertionError("management route accepted an unauthenticated request")
+    except urllib.error.HTTPError as error:
+        assert error.code == 401
+    print(f"PASS: healthz, readyz, management authentication and version={version}", flush=True)
 
 
 def main():
@@ -47,7 +56,10 @@ def main():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    env = dict(os.environ, PIXIV_CURATOR_ADDR=f"127.0.0.1:{port}")
+    private = tempfile.TemporaryDirectory(prefix="curator-smoke-")
+    env = dict(os.environ, PIXIV_CURATOR_ADDR=f"127.0.0.1:{port}",
+               PIXIV_CURATOR_DATABASE_PATH=str(Path(private.name) / "catalog.db"),
+               PIXIV_CURATOR_ADMIN_TOKEN_FILE="", PIXIV_CURATOR_PIXIV_TOKEN_FILE="")
     process = subprocess.Popen([str(args.binary.resolve())], env=env)
     try:
         check(f"http://127.0.0.1:{port}", args.version, process)
@@ -59,6 +71,7 @@ def main():
             process.kill()
             process.wait()
             raise
+        private.cleanup()
     # TerminateProcess is used on Windows; POSIX receives SIGTERM.
     if os.name != "nt" and process.returncode != 0:
         raise RuntimeError(f"server failed graceful shutdown: {process.returncode}")

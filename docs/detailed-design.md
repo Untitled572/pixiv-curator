@@ -1,8 +1,8 @@
 # 详细设计
 
-版本：0.1；更新日期：2026-10-02；状态：**待实现的设计基线**。
+版本：0.1；更新日期：2026-10-08；状态：**逐阶段实现的设计基线**。
 
-已实现范围仅为 Go 服务骨架、两项环境配置、日志、优雅退出、/healthz、/version。本文描述的数据库、业务 API、配置、任务和页面均需按 [开发计划](development-plan.md) 实现。
+已实现数据存储、事务迁移、持久队列、管理鉴权、画师手动导入/审核与任务管理的一部分，现有能力以 README 和 [开发计划](development-plan.md) 为准。其余接口及页面仍为设计契约。
 
 ## 1. 产品目标与边界
 
@@ -24,8 +24,8 @@ Curator 不持久缓存原图，不做下载归档。管理预览与原图端点
 
 ## 2. 技术与运行结构
 
-- 核心：Go 1.25+，HTTP 使用 net/http，日志使用 log/slog。
-- 数据：SQLite，具体驱动/版本在 DATA-01 验证和锁定；优先考虑纯 Go 驱动。
+- 核心：Go 1.26+，HTTP 使用 net/http，日志使用 log/slog。
+- 数据：SQLite，纯 Go 驱动 modernc.org/sqlite v1.60.1 已锁定。
 - 页面：优先 html/template + 少量原生 JavaScript，资源嵌入同一二进制；必要时再评估独立前端。
 - 部署：第一版一个进程内包含 HTTP、Scheduler 和受控 Worker，共用一个本地数据库。
 - 初始 Worker 并发 1；只有测量证明必要时增加并发。不要启动多个 API 实例共用 SQLite 文件。
@@ -80,7 +80,7 @@ flowchart LR
 
 ### 3.2 表与核心字段
 
-以下是迁移设计契约，不是已创建的 schema。
+以下为完整 schema 契约；目录与任务表已创建，推荐、偏好事件、选图历史表留待对应阶段迁移。
 
 | 表 | 核心字段 | 约束与用途 |
 | --- | --- | --- |
@@ -400,7 +400,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 
 ## 12. 配置与运维
 
-现有配置只有 PIXIV_CURATOR_ADDR 和 PIXIV_CURATOR_LOG_LEVEL，见 README。
+现有配置另包含数据库路径、PUBLIC_BASE_URL 和管理 token 文件，见 README。Pixiv token 文件字段尚未接入客户端，不作为可用配置公布。
 
 待实现配置分组：
 - 本地启动配置：数据库路径、PUBLIC_BASE_URL、管理 token 文件、Pixiv token 文件、日志级别。

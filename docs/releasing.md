@@ -51,7 +51,7 @@ GitHub Release 与 GHCR 无跨系统事务：若镜像已推送而 Release 上�
 
 ## 本地验证
 
-要求 Go 1.25+、Python 3.11+；Docker 验证需要 Buildx。
+要求 Go 1.26+、Python 3.11+；Docker 双架构验证需要 Buildx。
 
 ```sh
 make check build
@@ -64,7 +64,7 @@ docker run --rm -p 127.0.0.1:5722:5722 pixiv-curator:dev
 
 make check build 会检查代码并生成 bin/pixiv-curator。CI 不依赖本地 dist/bin。
 
-Docker 使用非 root UID 65532、scratch 运行层，包含 CA 证书；镜像内监听 0.0.0.0:5722，主机示例仅绑定 127.0.0.1。当前镜像只运行初始化服务，未实现持久业务数据；SQLite 实现阶段补充数据卷与目录权限设计。
+Docker 使用非 root UID 65532、scratch 运行层，包含 CA 证书；镜像内监听 0.0.0.0:5722，主机示例仅绑定 127.0.0.1。数据库默认 `/data/curator.db`，持久挂载 `/data` 并确保 UID 65532 可写；镜像内空数据目录已设置此所有者。管理凭据独立只读挂载，目录 0700、文件 0600 且 UID 65532 可读。不要多实例共用同一数据库。数据库迁移前备份，凭据单独恢复。
 
 ## 完整发布操作
 
