@@ -93,4 +93,4 @@ gh run list --workflow release.yml
 
 本机 gh 2.102.0 已登录 Untitled572，SSH 认证及 main 推送成功；仓库保持私有。尚未创建版本标签，GHCR 推送与 GitHub Release 发布步骤需在首次正式发布时验证。
 
-本地 Docker Hub 拉取超时，镜像验证使用上述远端 CI 结果。该次运行还提示 Docker Actions 的 Node 20 声明已弃用（由 runner 强制使用 Node 24，运行成功）；后续维护时升级对应 Actions。arm64 尚未执行原生运行测试。
+2026-10-08 的新业务与 SQLite 依赖已通过本机 race/vet、HTTP 冒烟和四平台 CGO=0 构建，但 Docker Hub 拉取超时且本机缺 Buildx。本轮镜像未验证；上述首次远端 CI 仅证明初始化版本，不作为新代码的容器验收。该次运行还提示 Docker Actions 的 Node 20 声明已弃用（由 runner 强制使用 Node 24，运行成功）；后续维护时升级对应 Actions。arm64 尚未执行原生运行测试。

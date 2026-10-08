@@ -2,7 +2,7 @@
 
 版本：0.1；更新日期：2026-10-08；状态：**逐阶段实现的设计基线**。
 
-已实现数据存储、事务迁移、持久队列、管理鉴权、画师手动导入/审核与任务管理的一部分，现有能力以 README 和 [开发计划](development-plan.md) 为准。其余接口及页面仍为设计契约。
+已实现目录、迁移、队列、管理鉴权、Pixiv 客户端与采集、推荐、筛选、转发和管理页面。当前仅离线/mock 验证；真实账号、PicHub 和新增依赖 Docker 验收未完成。具体状态以 README 和 [开发计划](development-plan.md) 为准。
 
 ## 1. 产品目标与边界
 
@@ -31,7 +31,7 @@ Curator 不持久缓存原图，不做下载归档。管理预览与原图端点
 - 初始 Worker 并发 1；只有测量证明必要时增加并发。不要启动多个 API 实例共用 SQLite 文件。
 - Pixiv 客户端与数据库通过接口隔离，离线测试使用固定响应样本。
 
-计划目录（业务包尚未创建）：
+模块布局（具体已有包见仓库；不为未来模块建立空包）：
 
 ```text
 cmd/api/                    启动、依赖装配、退出
@@ -227,9 +227,9 @@ sync_following 使用新的 run_id 逐页 upsert，记录 last_seen_follow_run�
 
 输入来自已关注画师的有限作品样本，结合 approved 画师和显式作品反馈。pending 推荐样本不能循环扩大正反馈画像。
 
-召回来源分阶段接入：相关画师、相关作品的画师；可选推荐流和标签搜索。每个来源有样本上限与总请求预算，一种可选来源失败不应清空其他候选。
+已接入召回来源：相关画师、相关作品的画师；推荐流和标签搜索尚未实现。每个来源有样本上限与总请求预算，一种可选来源失败不应清空其他候选。
 
-默认建议预算：最多 30 位种子画师、每画师 8 件样本、最多 60 位候选、每候选 4 件样本；推荐任务总外部请求上限 300。数值为初始配置提案，需小样本实网校准，允许结果不足。
+默认建议预算：最多 30 位种子画师、每画师 8 件样本、最多 60 位候选、每候选 4 件样本；推荐任务总外部请求上限 300。数值已作为固定默认值持久保存到批次，需小样本实网校准，允许结果不足；暂无预算编辑入口。
 
 排除已 approved、rejected、blocked；同一 UID 合并多个来源的证据。缺少足够样本的候选标记低置信度，不伪造精确审美分数。
 
@@ -242,7 +242,7 @@ sync_following 使用新的 run_id 逐页 upsert，记录 last_seen_follow_run�
 - 标签、来源证据、质量统计均归一化到 0–1。
 - 建议初始分数：0.55 标签匹配 + 0.25 多源证据 + 0.20 样本质量 - 负偏好惩罚，最终截断到 0–1。
 - 质量统计使用样本收藏中位数等稳健指标，不让单个爆款决定全部评分。
-- 记录 score_version 与分项，权重属于配置，需要通过用户反馈迭代。
+- 记录 score_version 与分项，当前权重随 heuristic-v1 固定，尚无编辑入口，需要通过用户反馈迭代。
 
 分数是启发式排序值，不是“喜欢概率”。标签方法对配色、笔触和构图的理解有限，视觉模型留待以后。
 
@@ -286,9 +286,9 @@ artwork_preferences 保存当前 like/dislike/neutral，显式 dislike 作为硬
 | GET | /healthz | 200，status=ok；只表示进程存活 |
 | GET | /version | 200，name/version |
 
-当前未知路由返回 404；下面的业务 API 均未实现。
+未知路由返回 404。以下供图与管理接口已接线，例外在表中注明。
 
-### 9.2 计划供图接口
+### 9.2 供图接口
 
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
@@ -298,7 +298,7 @@ artwork_preferences 保存当前 like/dislike/neutral，显式 dislike 作为硬
 
 第一版 collection 仅接受 preferred，format 仅接受 json，均可省略并使用此默认。未知参数或枚举返回 422，不声称兼容参考站所有参数。
 
-计划支持：
+已支持：
 - orientation=any|portrait|landscape|square。
 - r18=0|1|2：0 为 safe，1 为 r18/r18g，2 为所有已知级别；unknown 始终不隐式包含。全局若禁止成人内容，请求不可绕过。
 - ai_type=0|1|any：non_ai / ai / 已知两类；unknown 排除，全局限制仍适用。
@@ -306,7 +306,7 @@ artwork_preferences 保存当前 like/dislike/neutral，显式 dislike 作为硬
 - included_tags：重复参数为 AND，单值中的 | 为 OR。
 - excluded_tags：任意匹配即排除。
 - user_id：已 approved 的指定画师 UID。
-- strategy=balanced|random：balanced 使用作者均衡；random 在合格图片中抽样。两者均遵守硬过滤与去重。
+- strategy=balanced|random：balanced 使用作者均衡，作者内优先 like；random 在合格图片中抽样。两者均遵守硬过滤与去重。
 
 默认不传筛选参数时采用持久化的个人偏好；不能用接口默认值覆盖用户已保存的规则。
 
@@ -341,7 +341,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 }
 ```
 
-### 9.3 管理 API（计划，全部鉴权）
+### 9.3 管理 API（全部鉴权）
 
 | 方法 | 路径 | 语义 |
 | --- | --- | --- |
@@ -356,7 +356,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 | POST | /admin/api/artists/approve-batch | 批量确认，每项返回结果；每画师事务保证批准与入队一致 |
 | POST | /admin/api/recommendations | 新建有预算的推荐任务，返回 202 |
 | GET | /admin/api/recommendations | 按 run_id 查询候选 |
-| GET | /admin/api/artworks | 按画师、标签、状态查询作品 |
+| GET | /admin/api/artworks | 按 artist_id 与 cursor 分页查询作品；标签/状态筛选待扩展 |
 | GET/HEAD | /admin/api/previews/{illust_id}/{page_index} | 已知样本预览，可服务 pending 候选；只管理端可达 |
 | PUT | /admin/api/preferences/artworks/{illust_id} | like/dislike/neutral 幂等设置 |
 | GET/PUT | /admin/api/settings/preferences | 查看/更新偏好，使用 version 防止覆盖并发修改 |
@@ -366,7 +366,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 | POST | /admin/api/jobs/{id}/resume | 仅 paused_auth 可用；检查账号状态后恢复 pending |
 | GET | /admin/api/account/status | 只返回凭据状态 |
 | POST | /admin/api/account/credentials | 写入/更新凭据，不回显 |
-| GET | /admin/api/stats | 目录数、状态、任务和近期错误 |
+| GET | /admin/api/stats | 待实现：目录数、状态、任务和近期错误 |
 
 列表使用不透明 cursor，默认 50、最多 200；排序带唯一 ID 作为稳定次序。输入过大返回 413；格式/参数问题返回 422；状态冲突返回 409；未认证返回 401。
 
@@ -400,11 +400,11 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 
 ## 12. 配置与运维
 
-现有配置另包含数据库路径、PUBLIC_BASE_URL 和管理 token 文件，见 README。Pixiv token 文件字段尚未接入客户端，不作为可用配置公布。
+配置已接入数据库路径、PUBLIC_BASE_URL、管理 token 文件、Pixiv refresh token 文件及 OAuth 参数私密 JSON 文件，见 [运行与接入](running.md)。OAuth 参数不内置凭据；首次启动须自行提供。
 
-待实现配置分组：
+配置分组：
 - 本地启动配置：数据库路径、PUBLIC_BASE_URL、管理 token 文件、Pixiv token 文件、日志级别。
-- 持久非敏感设置：筛选规则、同步间隔、推荐预算、去重窗口。
+- 持久非敏感设置：筛选规则及其版本；同步间隔（6 小时）、推荐默认预算（30/8/60/4/300）和去重窗口（30 分钟/20 条）目前固定，尚未提供编辑入口。
 - 固定工程限制：最大请求体、转发大小、任务并发上限，通过验证后决定是否开放为配置。
 
 启动顺序：读配置 → 校验文件权限 → 打开库 → 校验/执行迁移 → 初始化客户端 → 恢复任务 → 启动 Worker/Scheduler → HTTP。

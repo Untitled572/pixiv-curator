@@ -6,17 +6,17 @@
 
 ## 当前状态
 
-已实现 Go 服务、SQLite 事务迁移与一致性备份、画师/作品/分页/标签/设置存储、持久任务队列与单 Worker、管理 Bearer/短期会话鉴权、画师手动导入及审核 API、任务列表/取消和本地就绪检查。
+已实现单进程 Go 服务与管理页面：SQLite 目录、管理鉴权、持久任务、Pixiv OAuth 刷新与关注/作品分页采集、元数据补全、候选推荐与人工审核、偏好选图、固定图片页转发。
 
-**尚未实现** Pixiv 认证与实网采集、推荐、随机选图、图片转发或管理界面。批准画师会原子创建采集任务，当前 Worker 将其暂停为 `paused_auth / ACCOUNT_NOT_CONFIGURED`。当前不会连接 Pixiv，也不会下载图片。
+以上通过离线/mock 测试及本机 HTTP 验证，**尚未完成真实 Pixiv/PicHub 联调与本轮 Docker 构建验收**。未配置账号时任务暂停为 `paused_auth`，不会把推荐候选自动批准。原图仅流式转发，不写磁盘。
 
 ## 技术栈
 
 - Go 1.26+；HTTP 使用标准库 net/http。
 - SQLite 使用纯 Go `modernc.org/sqlite v1.60.1`，WAL、外键检查、单写连接；迁移嵌入二进制，拒绝未知版本。
-- 计划同一代码库提供 API 与后台 Worker，共用目录数据。
+- 同一二进制提供 API、后台 Worker、定时维护与内嵌 Go 模板页面。
 - 原图下载、磁盘缓存和收藏由 PicHub 承担。
-- 管理页面后续按需求选择模板或独立前端；核心业务保持 Go 实现。
+- 管理页面使用 Go 模板和原生 JavaScript，无额外前端构建。
 
 ## 开始开发
 
@@ -48,6 +48,8 @@ healthz 当前只表示 HTTP 进程存活，不代表 Pixiv 连通、数据库�
 | PIXIV_CURATOR_DATABASE_PATH | data/curator.db | 本地 SQLite 文件，启动时执行版本迁移 |
 | PIXIV_CURATOR_PUBLIC_BASE_URL | http://127.0.0.1:5722 | HTTP(S) origin；浏览器管理写操作校验此 Origin |
 | PIXIV_CURATOR_ADMIN_TOKEN_FILE | 未配置 | 私密管理 token 文件；不配置时所有管理操作拒绝 |
+| PIXIV_CURATOR_PIXIV_TOKEN_FILE | 未配置 | refresh token 私密文件，轮换后原子写回；所在目录必须可写 |
+| PIXIV_CURATOR_OAUTH_CONFIG_FILE | 未配置 | OAuth 应用参数私密 JSON 文件，见部署说明 |
 
 ```sh
 PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
@@ -57,7 +59,11 @@ PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
 
 管理 token 文件应位于权限 0700 的目录，文件权限 0600；Windows 使用受限 ACL（应用不校验 POSIX 权限位）。管理 API 接受 `Authorization: Bearer ...`，浏览器通过 `POST /admin/login` 提交 JSON token 建立短期会话，Cookie 写操作同时要求匹配 Origin 和 `X-CSRF-Token`。会话重启失效，`POST /admin/logout` 撤销会话。勿将 token 放入 URL、日志或 localStorage。
 
-当前管理 API：`GET/POST /admin/api/artists`、`POST /admin/api/artists/{id}/{approve|reject|block|restore}`、`PATCH /admin/api/artists/{id}`（collection_enabled）、`GET /admin/api/jobs`、`POST /admin/api/jobs/{id}/cancel`。Pixiv ID JSON 使用字符串，列表采用 cursor，默认 50、最多 200。`GET /readyz` 检查本地数据库与 Worker；不表示 Pixiv 连通或目录有图。
+打开 `/admin/login` 登录，然后在账号页保存 refresh token、同步关注，在画师页明确勾选并批准采集，在推荐页启动推荐批次、查看预览并确认。任务入队并不表示采集完成；缺失或失效凭据需修复后显式恢复暂停任务。
+
+供图：`GET /random?format=json&collection=preferred` 返回 `url`、作品/页身份、尺寸与 `repeated`；`GET/HEAD /i/{illust_id}/{page_index}` 固定该页身份。默认只选择已批准、已知安全、非 AI 的静态作品；请求只能收紧全局规则。`balanced` 先均衡画师，再在画师内优先喜欢作品；`random` 保持随机。近期去重不足时只放宽去重，不放宽排除。
+
+管理 API、筛选参数和错误码见 [详细设计](docs/detailed-design.md)。`GET /readyz` 检查本地数据库与 Worker，不表示 Pixiv 连通或目录有图。首次账号、容器、备份恢复和 PicHub 图源配置见 [运行与接入](docs/running.md)。
 
 备份应停机后完整保存数据库，或使用 SQLite `.backup`；不要在运行期间只复制主 `.db`。库内 `Store.Backup` 使用 `VACUUM INTO` 生成包含 WAL 已提交数据的一致性快照，目标必须不存在。凭据独立备份。
 
@@ -101,7 +107,7 @@ docs/roadmap.md          里程碑导航
 
 GitHub Actions 在普通提交/PR 时执行测试、Linux/Windows 构建和 Docker 验证；推送版本标签后生成完整 Release 和 GHCR 双架构镜像。
 
-发布约定与操作见 [构建与完整发布](docs/releasing.md)。完整业务流程仍在开发。
+发布约定与操作见 [构建与完整发布](docs/releasing.md)。实网接入与本轮容器验证仍待完成。
 
 ## Git
 
