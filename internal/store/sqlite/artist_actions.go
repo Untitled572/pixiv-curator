@@ -131,6 +131,12 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 		if err = upsertArtwork(ctx, tx, a); err != nil {
 			return err
 		}
+		if a.MetadataState != "complete" || a.Rating == "unknown" || a.AIStatus == "unknown" {
+			payload, _ := json.Marshal(map[string]any{"illust_id": a.ID})
+			if _, err = enqueue(ctx, tx, "hydrate_artwork", fmt.Sprintf("hydrate:%d", a.ID), payload); err != nil {
+				return err
+			}
+		}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO artist_sync_state(artist_id,phase,cursor,run_id,last_full_sync_at,last_incremental_at) VALUES(?,?,?,?,?,?) ON CONFLICT(artist_id) DO UPDATE SET phase=excluded.phase,cursor=excluded.cursor,run_id=excluded.run_id,last_full_sync_at=COALESCE(excluded.last_full_sync_at,artist_sync_state.last_full_sync_at),last_incremental_at=COALESCE(excluded.last_incremental_at,artist_sync_state.last_incremental_at)`, artistID, phase, cursor, runID, finishedAt(cursor, phase == "full"), finishedAt(cursor, phase == "incremental"))
 	if err != nil {
@@ -139,6 +145,9 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 	if cursor == "" {
 		_, err = tx.ExecContext(ctx, `UPDATE artists SET last_synced_at=?,updated_at=? WHERE id=?`, time.Now().UnixMilli(), time.Now().UnixMilli(), artistID)
 		if err != nil {
+			return err
+		}
+		if err = completeJob(ctx, tx, j); err != nil {
 			return err
 		}
 	}
@@ -197,5 +206,90 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 	if err != nil {
 		return err
 	}
+	if complete {
+		if err = completeJob(ctx, tx, j); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
+}
+
+func completeJob(ctx context.Context, tx *sql.Tx, j domain.Job) error {
+	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_token='',lease_until=0,updated_at=? WHERE id=? AND lease_token=? AND lease_until>? AND cancel_requested=0`, time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
+	return leaseResult(r, err)
+}
+
+func (s *Store) ArtistCursor(ctx context.Context, id int64, runID string) (string, error) {
+	var cursor string
+	err := s.db.QueryRowContext(ctx, `SELECT cursor FROM artist_sync_state WHERE artist_id=? AND run_id=?`, id, runID).Scan(&cursor)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return cursor, err
+}
+
+func (s *Store) CommitHydration(ctx context.Context, j domain.Job, a domain.Artwork) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkLease(ctx, tx, j); err != nil {
+		return err
+	}
+	var allowed bool
+	if err = tx.QueryRowContext(ctx, `SELECT (review_status='approved' AND collection_enabled=1) OR (?='repair_media' AND review_status IN ('approved','pending')) FROM artists WHERE id=?`, j.Kind, a.ArtistID).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrConflict
+	}
+	if err = upsertArtwork(ctx, tx, a); err != nil {
+		return err
+	}
+	if err = completeJob(ctx, tx, j); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) CommitUnavailable(ctx context.Context, j domain.Job, id int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkLease(ctx, tx, j); err != nil {
+		return err
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE artworks SET metadata_state='unavailable',updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return domain.ErrNotFound
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE image_pages SET media_state='unavailable',last_error_code='NOT_FOUND',updated_at=? WHERE illust_id=?`, time.Now().UnixMilli(), id); err != nil {
+		return err
+	}
+	if err = completeJob(ctx, tx, j); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ResumeJob(ctx context.Context, id string) error {
+	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state='pending',attempt=0,available_at=?,error_code='',updated_at=? WHERE id=? AND state='paused_auth' AND cancel_requested=0`, time.Now().UnixMilli(), time.Now().UnixMilli(), id)
+	if err != nil {
+		return err
+	}
+	n, err := r.RowsAffected()
+	if err == nil && n != 1 {
+		return domain.ErrConflict
+	}
+	return err
 }

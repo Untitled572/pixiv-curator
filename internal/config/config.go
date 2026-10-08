@@ -11,12 +11,13 @@ import (
 )
 
 type Config struct {
-	Addr           string
-	LogLevel       slog.Level
-	DatabasePath   string
-	AdminTokenFile string
-	PublicBaseURL  string
-	PixivTokenFile string
+	Addr            string
+	LogLevel        slog.Level
+	DatabasePath    string
+	AdminTokenFile  string
+	PublicBaseURL   string
+	PixivTokenFile  string
+	OAuthConfigFile string
 }
 
 func Load() (Config, error) {
@@ -31,6 +32,7 @@ func load(getenv func(string) string) (Config, error) {
 	}
 	cfg.AdminTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_ADMIN_TOKEN_FILE"))
 	cfg.PixivTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_PIXIV_TOKEN_FILE"))
+	cfg.OAuthConfigFile = strings.TrimSpace(getenv("PIXIV_CURATOR_OAUTH_CONFIG_FILE"))
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(getenv("PIXIV_CURATOR_PUBLIC_BASE_URL")), "/")
 	if cfg.PublicBaseURL == "" {
 		cfg.PublicBaseURL = "http://127.0.0.1:5722"

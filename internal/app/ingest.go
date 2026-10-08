@@ -1,0 +1,197 @@
+package app
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"github.com/Untitled572/pixiv-curator/internal/jobs"
+	"github.com/Untitled572/pixiv-curator/internal/pixiv"
+	"time"
+)
+
+type PixivClient interface {
+	Following(context.Context, string) (pixiv.FollowingPage, error)
+	ArtistArtworks(context.Context, int64, string) (pixiv.ArtworkPage, error)
+	Artwork(context.Context, int64) (pixiv.RawArtwork, error)
+	Status() string
+	Credentials(context.Context, string) error
+}
+type IngestRepository interface {
+	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
+	CommitFollowingBatch(context.Context, domain.Job, string, []domain.Artist, json.RawMessage, bool) error
+	CommitArtistBatch(context.Context, domain.Job, int64, string, string, string, []domain.Artwork) error
+	ArtistCursor(context.Context, int64, string) (string, error)
+	CommitHydration(context.Context, domain.Job, domain.Artwork) error
+	CommitUnavailable(context.Context, domain.Job, int64) error
+	ResumeJob(context.Context, string) error
+}
+type Ingest struct {
+	store  IngestRepository
+	client PixivClient
+}
+
+func NewIngest(s IngestRepository, c PixivClient) *Ingest { return &Ingest{store: s, client: c} }
+func (s *Ingest) Handlers() map[string]jobs.Handler {
+	return map[string]jobs.Handler{"sync_following": s.following, "sync_artist": s.artist, "hydrate_artwork": s.hydrate, "repair_media": s.hydrate}
+}
+func (s *Ingest) SyncFollowing(ctx context.Context) (string, error) {
+	return s.store.Enqueue(ctx, "sync_following", "following:account", json.RawMessage(`{"cursor":""}`))
+}
+func (s *Ingest) AccountStatus() string { return s.client.Status() }
+func (s *Ingest) Credentials(ctx context.Context, token string) error {
+	return s.client.Credentials(ctx, token)
+}
+func (s *Ingest) Resume(ctx context.Context, id string) error {
+	if s.client.Status() != "configured" && s.client.Status() != "ready" {
+		return domain.ErrConflict
+	}
+	return s.store.ResumeJob(ctx, id)
+}
+
+func (s *Ingest) following(ctx context.Context, j domain.Job) error {
+	var payload struct {
+		Cursor string `json:"cursor"`
+	}
+	if json.Unmarshal(j.Payload, &payload) != nil {
+		return taskInvalid()
+	}
+	cursor := payload.Cursor
+	// Each job is a fresh snapshot; the durable payload tracks its continuation.
+	for pages := 0; pages < 10000; pages++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		page, err := s.client.Following(ctx, cursor)
+		if err != nil {
+			return classify(err)
+		}
+		if page.Next != "" && page.Next == cursor {
+			return taskInvalid()
+		}
+		artists := make([]domain.Artist, 0, len(page.Artists))
+		for _, raw := range page.Artists {
+			a, err := pixiv.NormalizeArtist(raw)
+			if err != nil {
+				return classify(err)
+			}
+			artists = append(artists, a)
+		}
+		nextPayload, _ := json.Marshal(map[string]string{"cursor": page.Next})
+		if err = s.store.CommitFollowingBatch(ctx, j, j.ID, artists, nextPayload, page.Next == ""); err != nil {
+			return classify(err)
+		}
+		if page.Next == "" {
+			return nil
+		}
+		cursor = page.Next
+	}
+	return &jobs.JobError{Class: jobs.Failed, Code: "PAGE_BUDGET_EXCEEDED"}
+}
+func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
+	var payload struct {
+		ArtistID int64  `json:"artist_id"`
+		Phase    string `json:"phase"`
+	}
+	if json.Unmarshal(j.Payload, &payload) != nil || payload.ArtistID <= 0 {
+		return taskInvalid()
+	}
+	phase := payload.Phase
+	if phase != "full" && phase != "incremental" {
+		return taskInvalid()
+	}
+	cursor, err := s.store.ArtistCursor(ctx, payload.ArtistID, j.ID)
+	if err != nil {
+		return classify(err)
+	}
+	for pages := 0; pages < 10000; pages++ {
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		page, err := s.client.ArtistArtworks(ctx, payload.ArtistID, cursor)
+		if err != nil {
+			return classify(err)
+		}
+		if page.Next != "" && page.Next == cursor {
+			return taskInvalid()
+		}
+		works := make([]domain.Artwork, 0, len(page.Artworks))
+		for _, raw := range page.Artworks {
+			a, err := pixiv.NormalizeArtwork(raw)
+			if err != nil {
+				return classify(err)
+			}
+			if a.ArtistID != payload.ArtistID {
+				return taskInvalid()
+			}
+			works = append(works, a)
+		}
+		if err = s.store.CommitArtistBatch(ctx, j, payload.ArtistID, j.ID, phase, page.Next, works); err != nil {
+			return classify(err)
+		}
+		if page.Next == "" {
+			return nil
+		}
+		cursor = page.Next
+	}
+	return &jobs.JobError{Class: jobs.Failed, Code: "PAGE_BUDGET_EXCEEDED"}
+}
+func (s *Ingest) hydrate(ctx context.Context, j domain.Job) error {
+	var payload struct {
+		ID int64 `json:"illust_id"`
+	}
+	if json.Unmarshal(j.Payload, &payload) != nil || payload.ID <= 0 {
+		return taskInvalid()
+	}
+	raw, err := s.client.Artwork(ctx, payload.ID)
+	if err != nil {
+		var upstream *pixiv.Error
+		if errors.As(err, &upstream) && upstream.Status == 404 {
+			return classify(s.store.CommitUnavailable(ctx, j, payload.ID))
+		}
+		return classify(err)
+	}
+	if raw.ID != payload.ID {
+		return taskInvalid()
+	}
+	a, err := pixiv.NormalizeArtwork(raw)
+	if err != nil {
+		return classify(err)
+	}
+	return classify(s.store.CommitHydration(ctx, j, a))
+}
+func taskInvalid() error { return &jobs.JobError{Class: jobs.Failed, Code: "INVALID_TASK"} }
+func classify(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	if errors.Is(err, domain.ErrInvalid) {
+		return taskInvalid()
+	}
+	if errors.Is(err, domain.ErrConflict) {
+		return &jobs.JobError{Class: jobs.Failed, Code: "ARTIST_STATE_CHANGED"}
+	}
+	var e *pixiv.Error
+	if errors.As(err, &e) {
+		switch {
+		case e.Status == 401 || e.Code == "CREDENTIAL_SAVE_FAILED" || e.Code == "ACCOUNT_NOT_CONFIGURED":
+			return &jobs.JobError{Class: jobs.PausedAuth, Code: e.Code}
+		case e.Status == 404:
+			return &jobs.JobError{Class: jobs.Failed, Code: e.Code}
+		case e.Status == 429:
+			return &jobs.JobError{Class: jobs.Retry, Code: e.Code, RetryAfter: e.RetryAfter}
+		case e.Code == "INVALID_NEXT_URL" || e.Code == "INVALID_RESPONSE":
+			return &jobs.JobError{Class: jobs.Failed, Code: e.Code}
+		default:
+			return &jobs.JobError{Class: jobs.Retry, Code: e.Code}
+		}
+	}
+	return &jobs.JobError{Class: jobs.Retry, Code: "STORE_ERROR", Err: fmt.Errorf("catalog operation failed")}
+}
+
+// SyncInterval is the initial conservative scheduler interval.
+const SyncInterval = 6 * time.Hour

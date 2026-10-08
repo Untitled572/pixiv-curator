@@ -15,6 +15,15 @@ type CatalogRepository interface {
 	Jobs(context.Context, string, int) ([]domain.Job, error)
 	Cancel(context.Context, string) error
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
+	Artworks(context.Context, int64, int, int64) ([]domain.Artwork, error)
+	RetryJob(context.Context, string) (string, error)
+}
+
+func (s *Catalog) Artworks(ctx context.Context, after int64, limit int, artistID int64) ([]domain.Artwork, error) {
+	return s.repository.Artworks(ctx, after, limit, artistID)
+}
+func (s *Catalog) Retry(ctx context.Context, id string) (string, error) {
+	return s.repository.RetryJob(ctx, id)
 }
 
 type Catalog struct{ repository CatalogRepository }

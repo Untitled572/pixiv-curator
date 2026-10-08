@@ -12,30 +12,38 @@ import (
 
 var ErrFile = errors.New("credential file must be a private regular file with a nonempty token")
 
-func Read(path string) (string, error) {
+func ReadBytes(path string) ([]byte, error) {
 	st, err := os.Lstat(path)
 	if err != nil {
-		return "", ErrFile
+		return nil, ErrFile
 	}
 	dir, err := os.Stat(filepath.Dir(path))
 	if err != nil {
-		return "", ErrFile
+		return nil, ErrFile
 	}
 	if !st.Mode().IsRegular() || st.Size() > 16384 || runtime.GOOS != "windows" && (st.Mode().Perm()&0077 != 0 || dir.Mode().Perm()&0077 != 0) {
-		return "", ErrFile
+		return nil, ErrFile
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return "", ErrFile
+		return nil, ErrFile
 	}
 	defer f.Close()
 	opened, err := f.Stat()
 	if err != nil || !os.SameFile(st, opened) || !opened.Mode().IsRegular() || runtime.GOOS != "windows" && opened.Mode().Perm()&0077 != 0 {
-		return "", ErrFile
+		return nil, ErrFile
 	}
 	data, err := io.ReadAll(io.LimitReader(f, 16385))
 	if err != nil || len(data) > 16384 {
-		return "", ErrFile
+		return nil, ErrFile
+	}
+	return data, nil
+}
+
+func Read(path string) (string, error) {
+	data, err := ReadBytes(path)
+	if err != nil {
+		return "", err
 	}
 	value := strings.TrimSuffix(strings.TrimSuffix(string(data), "\n"), "\r")
 	if value == "" || strings.ContainsAny(value, "\r\n\t ") {

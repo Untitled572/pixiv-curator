@@ -160,3 +160,41 @@ func (s *Store) Jobs(ctx context.Context, after string, limit int) ([]domain.Job
 	}
 	return result, rows.Err()
 }
+
+func (s *Store) RetryJob(ctx context.Context, id string) (string, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id=?`, id))
+	if err != nil {
+		return "", err
+	}
+	if j.State != "failed" && j.State != "canceled" && j.State != "succeeded" {
+		return "", domain.ErrConflict
+	}
+	if j.Kind == "sync_following" {
+		j.Payload = json.RawMessage(`{"cursor":""}`)
+	}
+	if j.Kind == "sync_artist" {
+		var p struct {
+			ID int64 `json:"artist_id"`
+		}
+		if json.Unmarshal(j.Payload, &p) != nil {
+			return "", domain.ErrInvalid
+		}
+		var allowed bool
+		if err = tx.QueryRowContext(ctx, `SELECT review_status='approved' AND collection_enabled=1 FROM artists WHERE id=?`, p.ID).Scan(&allowed); err != nil {
+			return "", err
+		}
+		if !allowed {
+			return "", domain.ErrConflict
+		}
+	}
+	newID, err := enqueue(ctx, tx, j.Kind, j.Key, j.Payload)
+	if err != nil {
+		return "", err
+	}
+	return newID, tx.Commit()
+}
