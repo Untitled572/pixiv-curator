@@ -18,6 +18,16 @@
 - 原图下载、磁盘缓存和收藏由 PicHub 承担。
 - 管理页面使用 Go 模板和原生 JavaScript，无额外前端构建。
 
+## 一键启动与 Pixiv 账号登录
+
+```sh
+./scripts/dev.sh
+```
+
+脚本准备 Python 登录依赖、Chromium、私密配置，构建并启动同端口的管理页面与 Go API。终端显示管理 token 的文件路径；登录管理页后进入「Pixiv 账号」，点击「打开 Pixiv 登录窗口」，直接在 Pixiv 页面输入账号并完成验证，授权自动保存。
+
+需要 Go 1.26+、Python 3.10+（含 venv/pip）和本机桌面。默认私密开发目录为 `data/dev`。仅离线查看页面/API 可运行 `./scripts/dev.sh --no-login-helper`。详细说明与限制见 [账号登录与本机联调](docs/pixiv-login.md)。
+
 ## 开始开发
 
 ```sh
@@ -49,7 +59,9 @@ healthz 当前只表示 HTTP 进程存活，不代表 Pixiv 连通、数据库�
 | PIXIV_CURATOR_PUBLIC_BASE_URL | http://127.0.0.1:5722 | HTTP(S) origin；浏览器管理写操作校验此 Origin |
 | PIXIV_CURATOR_ADMIN_TOKEN_FILE | 未配置 | 私密管理 token 文件；不配置时所有管理操作拒绝 |
 | PIXIV_CURATOR_PIXIV_TOKEN_FILE | 未配置 | refresh token 私密文件，轮换后原子写回；所在目录必须可写 |
-| PIXIV_CURATOR_OAUTH_CONFIG_FILE | 未配置 | OAuth 应用参数私密 JSON 文件，见部署说明 |
+| PIXIV_CURATOR_OAUTH_CONFIG_FILE | 未配置 | OAuth 应用参数私密 JSON 文件；一键脚本自动生成匹配配置 |
+| PIXIV_CURATOR_LOGIN_PYTHON | 未配置 | 可选：本机登录 Python 绝对路径，与 LOGIN_HELPER 同时设置 |
+| PIXIV_CURATOR_LOGIN_HELPER | 未配置 | 可选：scripts/pixiv-login.py 绝对路径 |
 
 ```sh
 PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
@@ -59,7 +71,7 @@ PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
 
 管理 token 文件应位于权限 0700 的目录，文件权限 0600；Windows 使用受限 ACL（应用不校验 POSIX 权限位）。管理 API 接受 `Authorization: Bearer ...`，浏览器通过 `POST /admin/login` 提交 JSON token 建立短期会话，Cookie 写操作同时要求匹配 Origin 和 `X-CSRF-Token`。会话重启失效，`POST /admin/logout` 撤销会话。勿将 token 放入 URL、日志或 localStorage。
 
-打开 `/admin/login` 登录，然后在账号页保存 refresh token、同步关注，在画师页明确勾选并批准采集，在推荐页启动推荐批次、查看预览并确认。任务入队并不表示采集完成；缺失或失效凭据需修复后显式恢复暂停任务。
+打开 `/admin/login` 登录，然后在账号页使用 Pixiv 浏览器登录或保存 refresh token、同步关注，在画师页明确勾选并批准采集，在推荐页启动推荐批次、查看预览并确认。任务入队并不表示采集完成；缺失或失效凭据需修复后显式恢复暂停任务。
 
 供图：`GET /random?format=json&collection=preferred` 返回 `url`、作品/页身份、尺寸与 `repeated`；`GET/HEAD /i/{illust_id}/{page_index}` 固定该页身份。默认只选择已批准、已知安全、非 AI 的静态作品；请求只能收紧全局规则。`balanced` 先均衡画师，再在画师内优先喜欢作品；`random` 保持随机。近期去重不足时只放宽去重，不放宽排除。
 

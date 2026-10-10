@@ -28,7 +28,7 @@
 
 [release.yml](../.github/workflows/release.yml) 在推送 v* 标签时触发，标签必须符合 vMAJOR.MINOR.PATCH 或带预发布后缀的格式。
 
-1. 复用 CI，全部测试、四个平台包和 Docker 验证成功后继续。
+1. 校验标签格式，再复用 CI；全部测试、四个平台包和 Docker 验证成功后继续。
 2. 使用 GITHUB_TOKEN 推送 GHCR 双架构镜像。
 3. 下载并校验四个压缩包，创建或恢复 GitHub Release 草稿并上传全部资产。
 4. 镜像和二进制均就绪后才发布 Release；说明中记录镜像 digest。
@@ -94,3 +94,7 @@ gh run list --workflow release.yml
 本机 gh 2.102.0 已登录 Untitled572，SSH 认证及 main 推送成功；仓库保持私有。尚未创建版本标签，GHCR 推送与 GitHub Release 发布步骤需在首次正式发布时验证。
 
 2026-10-08 的新业务与 SQLite 依赖已通过本机 race/vet、HTTP 冒烟和四平台 CGO=0 构建，但 Docker Hub 拉取超时且本机缺 Buildx。本轮镜像未验证；上述首次远端 CI 仅证明初始化版本，不作为新代码的容器验收。该次运行还提示 Docker Actions 的 Node 20 声明已弃用（由 runner 强制使用 Node 24，运行成功）；后续维护时升级对应 Actions。arm64 尚未执行原生运行测试。
+
+2026-10-10：本轮工作流经 actionlint 验证，CI 增加 Python 登录桥接离线测试与 Linux 启动脚本语法检查。查看远端最近 [CI 36960400585](https://github.com/Untitled572/pixiv-curator/actions/runs/36960400585)，Linux/Windows 测试、四个平台包与 Docker 构建均成功，但对应旧提交 4837f0e，不代表本轮代码通过远端 CI。未创建或推送版本标签。
+
+可选账号浏览器登录面向本机桌面源码联调。默认 Docker 镜像仍为纯 Go/scratch，不含 Python、Chromium 或桌面；容器使用私密 refresh token 配置。二进制包随附登录 helper、锁定依赖和说明，启用它仍需自行准备 Python/浏览器环境；一键开发脚本需要源码与 Go 工具链。

@@ -2,6 +2,10 @@
 
 本轮已通过离线/mock 测试、本机二进制 HTTP 冒烟与跨平台编译；真实 Pixiv 账号、CDN 出口、PicHub 下载/显示/收藏和新版本容器尚未验收。以下是接入步骤，不能作为实网通过记录。
 
+## 一键本机联调
+
+运行 `./scripts/dev.sh` 自动准备可选 gppt 登录依赖和私密配置，并启动管理页面/API。在管理页点击「打开 Pixiv 登录窗口」即可使用账号登录；不需要手工提取 refresh token 或填写 OAuth 参数。说明见 [pixiv-login.md](pixiv-login.md)。没有桌面或只做离线检查时使用 `./scripts/dev.sh --no-login-helper`。下文保留手动部署方式。
+
 ## 本机首次启动
 
 需要 Go 1.26+。先执行 `make check build`。在仓库外建立私密目录（POSIX 0700），生成随机管理 token 文件（0600），勿把真实内容写进命令行历史。设置以下环境变量后运行 `./bin/pixiv-curator`：
@@ -14,7 +18,7 @@ export PIXIV_CURATOR_DATABASE_PATH=/absolute/data/curator.db
 export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
 ```
 
-管理 token 和 refresh token 是纯文本，允许末尾换行。OAuth 文件为 JSON，字段 `client_id`、`client_secret` 必填，`hash_secret` 按应用协议提供；全部采用私密文件权限。程序不获取或内置 OAuth 应用凭据。refresh token 文件可先不存在，在 `/admin/login` 登录后的账号页面写入；其父目录必须可写，更新会原子替换文件。OAuth 配置变更后重启服务。
+管理 token 和 refresh token 是纯文本，允许末尾换行。OAuth 文件为 JSON，字段 `client_id`、`client_secret` 必填，`hash_secret` 按应用协议提供；全部采用私密文件权限。Go 程序不内置 OAuth 应用凭据；一键脚本从已安装 gppt 的客户端配置生成匹配私密文件。refresh token 文件可先不存在，在 `/admin/login` 登录后的账号页面写入；其父目录必须可写，更新会原子替换文件。OAuth 配置变更后重启服务。
 
 1. 打开 `/admin/login`，使用管理 token 建立短期会话。
 2. 在账号页保存 refresh token 并发起关注同步，查看后台任务状态。

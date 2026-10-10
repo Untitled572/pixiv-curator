@@ -37,8 +37,14 @@ def main():
                 "-o", str(binary), "./cmd/api",
             ], cwd=ROOT, env=env, check=True)
             files = [(binary, binary.name), (ROOT / "README.md", "README.md"),
+                     (ROOT / "LICENSE", "LICENSE"),
                      (ROOT / ".env.example", ".env.example"),
-                     (ROOT / "docs/releasing.md", "releasing.md")]
+                     (ROOT / "docs/releasing.md", "docs/releasing.md"),
+                     (ROOT / "docs/running.md", "docs/running.md"),
+                     (ROOT / "docs/pixiv-login.md", "docs/pixiv-login.md"),
+                     (ROOT / "docs/third-party.md", "docs/third-party.md"),
+                     (ROOT / "scripts/pixiv-login.py", "scripts/pixiv-login.py"),
+                     (ROOT / "scripts/requirements-login.txt", "scripts/requirements-login.txt")]
             if goos == "windows":
                 archive = args.output / f"{basename}.zip"
                 with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:

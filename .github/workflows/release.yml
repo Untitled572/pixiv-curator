@@ -12,7 +12,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate:
+    name: Validate version tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require a version tag
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH[-prerelease]'; exit 1; }
   build:
+    needs: validate
     uses: ./.github/workflows/ci.yml
     with:
       version: ${{ github.ref_name }}

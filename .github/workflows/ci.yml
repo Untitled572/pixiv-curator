@@ -40,6 +40,11 @@ jobs:
           go vet ./...
       - name: Unit tests
         run: go test ./...
+      - name: Offline login bridge tests
+        run: python scripts/test-login-helper.py
+      - name: Check local launcher syntax
+        if: runner.os == 'Linux'
+        run: sh -n scripts/dev.sh
       - name: Race detector
         if: runner.os == 'Linux'
         run: go test -race ./...

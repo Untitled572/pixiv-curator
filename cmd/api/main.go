@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Untitled572/pixiv-curator/internal/accountlogin"
 	"github.com/Untitled572/pixiv-curator/internal/admin"
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
@@ -84,6 +85,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		app.RunMaintenance(workerCtx, store, func(error) { logger.Warn("local maintenance failed") })
 	}()
 	client := pixiv.NewClient(cfg.PixivTokenFile, oauth, nil)
+	accountLogin := app.NewAccountLogin(workerCtx, accountlogin.Process{Python: cfg.LoginPython, Helper: cfg.LoginHelper}, client)
+	defer accountLogin.Close()
 	ingestion := app.NewIngest(store, client)
 	recommender := app.NewRecommender(store, client)
 	handlers := ingestion.Handlers()
@@ -99,6 +102,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	server := &http.Server{
 		Handler: httpapi.NewHandlerWithRoutes(version, func(mux *http.ServeMux) {
 			auth.Register(mux)
+			httpapi.RegisterAccountLogin(mux, accountLogin, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.Middleware(http.HandlerFunc(admin.Home)))
 			httpapi.RegisterImages(mux, images, media.NewProxy(nil), auth)

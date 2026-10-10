@@ -18,6 +18,8 @@ type Config struct {
 	PublicBaseURL   string
 	PixivTokenFile  string
 	OAuthConfigFile string
+	LoginPython     string
+	LoginHelper     string
 }
 
 func Load() (Config, error) {
@@ -33,6 +35,14 @@ func load(getenv func(string) string) (Config, error) {
 	cfg.AdminTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_ADMIN_TOKEN_FILE"))
 	cfg.PixivTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_PIXIV_TOKEN_FILE"))
 	cfg.OAuthConfigFile = strings.TrimSpace(getenv("PIXIV_CURATOR_OAUTH_CONFIG_FILE"))
+	cfg.LoginPython = strings.TrimSpace(getenv("PIXIV_CURATOR_LOGIN_PYTHON"))
+	cfg.LoginHelper = strings.TrimSpace(getenv("PIXIV_CURATOR_LOGIN_HELPER"))
+	if (cfg.LoginPython == "") != (cfg.LoginHelper == "") {
+		return Config{}, fmt.Errorf("PIXIV_CURATOR_LOGIN_PYTHON and PIXIV_CURATOR_LOGIN_HELPER must be configured together")
+	}
+	if cfg.LoginPython != "" && (cfg.PixivTokenFile == "" || cfg.OAuthConfigFile == "") {
+		return Config{}, fmt.Errorf("browser login requires Pixiv token and OAuth configuration paths")
+	}
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(getenv("PIXIV_CURATOR_PUBLIC_BASE_URL")), "/")
 	if cfg.PublicBaseURL == "" {
 		cfg.PublicBaseURL = "http://127.0.0.1:5722"
