@@ -4,6 +4,11 @@
   const globalMessage = $("#global-message");
   let artistCursor = "";
   let preferenceVersion = 0;
+  let jobsLoading = false;
+  let jobsTimer = null;
+  let highlightedJobID = "";
+  let trackedJobID = "";
+  const pendingJobActions = new Set();
   const selectedArtists = new Set();
 
   function showMessage(text, isError = false) {
@@ -60,7 +65,7 @@
     showMessage(labels[error.message] || `${context}失败，请稍后重试。`, true);
   }
   function statusLabel(status) {
-    const labels = { pending: "待审核", approved: "已批准", rejected: "已拒绝", blocked: "已屏蔽", succeeded: "已完成", running: "运行中", retry_wait: "等待重试", paused_auth: "等待凭据", failed: "失败", canceled: "已取消" };
+    const labels = { pending: "待审核", approved: "已批准", rejected: "已拒绝", blocked: "已屏蔽", succeeded: "已完成", running: "运行中", cancel_requested: "取消中", retry_wait: "等待重试", paused_auth: "等待凭据", failed: "失败", canceled: "已取消" };
     return labels[status] || status || "未知";
   }
 
@@ -69,7 +74,7 @@
     $$(".tab-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== tab.dataset.tab; });
     if (tab.dataset.tab === "artists") loadArtists(false);
     if (tab.dataset.tab === "recommendations") $("#recommendation-run-id").focus();
-    if (tab.dataset.tab === "jobs") loadJobs();
+    if (tab.dataset.tab === "jobs") { loadJobs(); startJobsPolling(); } else stopJobsPolling();
     if (tab.dataset.tab === "preferences") loadPreferences();
     if (tab.dataset.tab === "account") { loadAccount(); loadPixivLogin(); }
   }));
@@ -170,33 +175,63 @@
   $("#more-artists").addEventListener("click", () => loadArtists(true));
 
   async function loadJobs() {
-    const list = $("#job-list"); list.replaceChildren(node("p", "empty-cell", "正在读取任务…"));
+    if (jobsLoading) return;
+    jobsLoading = true;
+    const list = $("#job-list");
     try {
       const result = await api("/admin/api/jobs?limit=100");
-      list.replaceChildren();
       const jobs = Array.isArray(result.items) ? result.items : [];
-      if (!jobs.length) { list.append(node("p", "empty-cell", "暂无后台任务。")); return; }
+      if (trackedJobID && !jobs.some(job => String(job.id) === trackedJobID)) {
+        jobs.unshift(await api(`/admin/api/jobs/${encodeURIComponent(trackedJobID)}`));
+      }
+      list.replaceChildren();
+      if (!jobs.length) list.append(node("p", "empty-cell", "暂无后台任务。"));
       jobs.forEach((job) => list.append(renderJob(job)));
-    } catch (error) { list.replaceChildren(node("p", "empty-cell", "无法读取任务，请检查会话后重试。")); reportError(error, "读取任务"); }
+      const status = $("#job-refresh-status");
+      status.textContent = `最后更新：${new Date().toLocaleTimeString()}`;
+      status.classList.remove("is-error");
+      if (highlightedJobID) {
+        const target = list.querySelector(`[data-job-id="${CSS.escape(highlightedJobID)}"]`);
+        if (target) { target.classList.add("job-card-highlight"); target.scrollIntoView({ block: "center", behavior: "smooth" }); highlightedJobID = ""; }
+      }
+    } catch (error) {
+      const status = $("#job-refresh-status"); status.textContent = `加载失败：${error.message || "请求错误"}`; status.classList.add("is-error");
+      if (!list.children.length) list.append(node("p", "empty-cell", "无法读取任务，请检查会话后重试。"));
+    } finally { jobsLoading = false; }
   }
+  function jobsPanelVisible() { return !$("#panel-jobs").hidden && document.visibilityState === "visible"; }
+  function startJobsPolling() {
+    stopJobsPolling();
+    if (jobsPanelVisible()) jobsTimer = window.setInterval(() => { if (jobsPanelVisible()) loadJobs(); else stopJobsPolling(); }, 2000);
+  }
+  function stopJobsPolling() { if (jobsTimer !== null) { window.clearInterval(jobsTimer); jobsTimer = null; } }
+  document.addEventListener("visibilitychange", () => { if (jobsPanelVisible()) { loadJobs(); startJobsPolling(); } else stopJobsPolling(); });
   function renderJob(job) {
-    const card = node("article", "job-card");
+    const state = job.cancel_requested && job.state === "running" ? "cancel_requested" : job.state;
+    const card = node("article", "job-card"); card.dataset.jobId = String(job.id);
     const info = node("div");
     const kinds = { sync_artist: "采集画师作品", sync_following: "同步 Pixiv 关注", hydrate_artwork: "补全作品信息", repair_media: "修复图片链接", recommend_artists: "推荐画师" };
     info.append(node("div", "job-title", kinds[job.kind] || job.kind), node("div", "job-meta", `任务 ${job.id} · 尝试 ${job.attempt || 0}`));
-    const status = node("div", "job-status"); status.append(node("span", `pill ${job.state || "neutral"}`, statusLabel(job.state)));
+    const status = node("div", "job-status"); status.append(node("span", `pill ${state || "neutral"}`, state === "pending" ? "排队中" : statusLabel(state)));
     if (job.error_code) status.append(node("span", "job-code", job.error_code));
     const actions = node("div", "job-actions");
-    if (["pending", "running", "retry_wait", "paused_auth"].includes(job.state)) addButton(actions, "取消任务", "button button-quiet button-small", () => jobAction(job.id, "cancel"));
+    if (["pending", "running", "retry_wait", "paused_auth"].includes(state)) {
+      const button = addButton(actions, pendingJobActions.has(String(job.id)) ? "提交中…" : "取消任务", "button button-quiet button-small", (event) => jobAction(job.id, "cancel", event.currentTarget));
+      button.disabled = pendingJobActions.has(String(job.id));
+    }
+    if (state === "cancel_requested") actions.append(node("span", "job-meta", "取消中…"));
     if (job.state === "paused_auth") addButton(actions, "凭据修复后恢复", "button button-secondary button-small", () => jobAction(job.id, "resume"));
     if (job.state === "failed" || job.state === "canceled") addButton(actions, "重新排队", "button button-secondary button-small", () => jobAction(job.id, "retry"));
     card.append(info, status, actions); return card;
   }
-  async function jobAction(id, action) {
+  async function jobAction(id, action, button) {
+    pendingJobActions.add(String(id));
+    if (button) { button.disabled = true; button.textContent = "提交中…"; }
     try {
       const result = await api(`/admin/api/jobs/${encodeURIComponent(String(id))}/${action}`, { method: "POST" });
-      showMessage(action === "resume" ? "任务已恢复为待处理。" : action === "retry" ? `新任务 ${result.job_id || "已创建"} 已排队。` : "已请求取消任务；运行中的任务会在安全边界停止。"); await loadJobs();
-    } catch (error) { reportError(error, "更新任务"); }
+      showMessage(action === "resume" ? "任务已恢复并排队。" : action === "retry" ? `新任务 ${result.job_id || "已创建"} 已排队。` : "已请求取消任务；运行中的任务会在安全边界停止。"); await loadJobs();
+    } catch (error) { reportError(error, "更新任务"); if (button) { button.disabled = false; button.textContent = "取消任务"; } }
+    finally { pendingJobActions.delete(String(id)); await loadJobs(); }
   }
   $("#reload-jobs").addEventListener("click", loadJobs);
 
@@ -505,7 +540,13 @@
     const button = event.currentTarget; button.disabled = true;
     try {
       const result = await api("/admin/api/following/sync", { method: "POST" });
-      showMessage(`关注同步任务 ${result.job_id || "已创建"} 已排队；同步不会批准或采集画师。`); await loadJobs();
+      const jobID = result.job_id ? String(result.job_id) : "";
+      if (jobID) { highlightedJobID = jobID; trackedJobID = jobID; }
+      $$('.tab').forEach((tab) => tab.classList.toggle("is-active", tab.dataset.tab === "jobs"));
+      $$(".tab-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== "jobs"; });
+      startJobsPolling();
+      await loadJobs();
+      showMessage(jobID ? `关注同步任务 ${jobID} 已排队，正在后台任务页跟踪状态；同步不会批准或采集画师。` : "关注同步已排队，但服务未返回任务 ID；请查看后台任务列表。同步不会批准或采集画师。");
     } catch (error) { reportError(error, "同步关注"); }
     finally { button.disabled = false; }
   });

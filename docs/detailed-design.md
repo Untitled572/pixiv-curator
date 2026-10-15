@@ -179,7 +179,7 @@ running --取消请求--> 批次边界安全退出 -> canceled
 
 任务按至少一次执行设计，不承诺 exactly-once。Worker 在短事务内抢占任务并生成新的 lease_token，之后在事务外访问网络。
 
-- 初始租约 90 秒，每 20 秒续约；网络请求超时不超过 20 秒。
+- 初始租约 90 秒，每 20 秒续约；网络请求超时不超过 20 秒。续约发现取消标志时，同一条更新将任务置为 canceled 并撤销租约，随后中止执行者；不再等到租约自然过期才显示已取消。
 - 完成、游标更新和批量数据写入必须在同一事务校验 lease_token 与未过期 lease。
 - 过期执行者即使返回成功结果也不能继续提交，避免重启后的旧任务覆写新任务。
 - 过期 running 进入 retry_wait，保留 cursor。超过尝试预算进入 failed。
@@ -364,6 +364,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 | GET/PUT | /admin/api/settings/preferences | 查看/更新偏好，使用 version 防止覆盖并发修改 |
 | GET | /admin/api/jobs | 查看任务、游标摘要、错误码 |
 | POST | /admin/api/jobs/{id}/retry | 显式重试终态任务，遵循业务去重 |
+| GET | /admin/api/jobs/{id} | 查询单个任务状态（需管理鉴权，不返回任务载荷或租约密钥） |
 | POST | /admin/api/jobs/{id}/cancel | 请求取消 |
 | POST | /admin/api/jobs/{id}/resume | 仅 paused_auth 可用；检查账号状态后恢复 pending |
 | GET | /admin/api/account/status | 只返回凭据状态 |

@@ -169,6 +169,14 @@ func NewAdminHandler(service *app.Catalog, ingestion ...*app.Ingest) http.Handle
 		}
 		writeJSON(w, 200, map[string]bool{"collection_enabled": *in.Enabled})
 	})
+	mux.HandleFunc("GET /admin/api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
+		job, err := service.Job(r.Context(), r.PathValue("id"))
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 200, job)
+	})
 	mux.HandleFunc("GET /admin/api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		after, limit, err := listParams(r)
 		if err != nil {

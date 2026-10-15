@@ -275,3 +275,48 @@ func TestRetryAttemptBudgetEndsInFailed(t *testing.T) {
 		t.Fatalf("Claim after attempt budget = %v, want ErrNotFound", err)
 	}
 }
+
+func TestRenewFinalizesCancellationWithoutWaitingForExpiry(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "cancel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	id, err := s.Enqueue(ctx, "sync_following", "cancel-now", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.Claim(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Cancel(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	stale := job
+	stale.LeaseToken = "wrong-lease"
+	if err = s.Renew(ctx, stale, time.Now()); !errors.Is(err, domain.ErrLease) {
+		t.Fatal("stale lease accepted")
+	}
+	before, err := s.Jobs(ctx, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before[0].State != "running" || !before[0].CancelRequested {
+		t.Fatal("stale worker finalized cancellation")
+	}
+	if err = s.Renew(ctx, job, time.Now()); !errors.Is(err, domain.ErrLease) {
+		t.Fatalf("renew: %v", err)
+	}
+	after, err := s.Jobs(ctx, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after[0].State != "canceled" || after[0].LeaseToken != "" || after[0].LeaseUntil != 0 {
+		t.Fatal("cancellation not finalized")
+	}
+	if err = s.Finish(ctx, job, "succeeded", "", time.Now()); !errors.Is(err, domain.ErrLease) {
+		t.Fatal("canceled worker overwrote terminal state")
+	}
+}

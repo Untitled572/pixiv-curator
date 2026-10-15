@@ -207,3 +207,21 @@ func TestAdminJobsResponseHidesPayloadAndLease(t *testing.T) {
 		}
 	}
 }
+
+func TestJobDetailAuthenticationAndSafeResponse(t *testing.T) {
+	handler, store := newAdminTestServer(t)
+	id, err := store.Enqueue(context.Background(), "sync_following", "detail-test", json.RawMessage(`{"private":"not-for-ui"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := adminRequest(handler, "GET", "/admin/api/jobs/"+id, "", false); rec.Code != 401 {
+		t.Fatal("unauthenticated detail allowed")
+	}
+	rec := adminRequest(handler, "GET", "/admin/api/jobs/"+id, "", true)
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "not-for-ui") || strings.Contains(rec.Body.String(), "lease_token") {
+		t.Fatal("unsafe or missing detail")
+	}
+	if rec = adminRequest(handler, "GET", "/admin/api/jobs/missing", "", true); rec.Code != 404 {
+		t.Fatal("missing detail status")
+	}
+}

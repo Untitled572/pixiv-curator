@@ -12,6 +12,7 @@ type CatalogRepository interface {
 	Artists(context.Context, int64, int) ([]domain.Artist, error)
 	DecideArtist(context.Context, int64, string) (string, error)
 	SetCollection(context.Context, int64, bool) error
+	Job(context.Context, string) (domain.Job, error)
 	Jobs(context.Context, string, int) ([]domain.Job, error)
 	Cancel(context.Context, string) error
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
@@ -51,3 +52,7 @@ func (s *Catalog) Jobs(ctx context.Context, after string, limit int) ([]domain.J
 	return s.repository.Jobs(ctx, after, limit)
 }
 func (s *Catalog) Cancel(ctx context.Context, id string) error { return s.repository.Cancel(ctx, id) }
+
+func (s *Catalog) Job(ctx context.Context, id string) (domain.Job, error) {
+	return s.repository.Job(ctx, id)
+}

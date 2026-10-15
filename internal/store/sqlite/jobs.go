@@ -96,8 +96,20 @@ func scanJob(row scanner) (domain.Job, error) {
 }
 
 func (s *Store) Renew(ctx context.Context, j domain.Job, now time.Time) error {
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET lease_until=?,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>? AND cancel_requested=0`, now.Add(90*time.Second).UnixMilli(), now.UnixMilli(), j.ID, j.LeaseToken, now.UnixMilli())
-	return leaseResult(r, err)
+	// A canceled lease is revoked and finalized atomically. Returning ErrLease
+	// tells the worker to stop its handler; stale writes remain fenced out.
+	var canceled bool
+	err := s.db.QueryRowContext(ctx, `UPDATE jobs SET
+ state=CASE WHEN cancel_requested=1 THEN 'canceled' ELSE state END,
+ lease_token=CASE WHEN cancel_requested=1 THEN '' ELSE lease_token END,
+ lease_until=CASE WHEN cancel_requested=1 THEN 0 ELSE ? END,
+ error_code=CASE WHEN cancel_requested=1 THEN '' ELSE error_code END,
+ updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>?
+ RETURNING cancel_requested`, now.Add(90*time.Second).UnixMilli(), now.UnixMilli(), j.ID, j.LeaseToken, now.UnixMilli()).Scan(&canceled)
+	if err == sql.ErrNoRows || err == nil && canceled {
+		return domain.ErrLease
+	}
+	return err
 }
 
 func leaseResult(r sql.Result, err error) error {
@@ -197,4 +209,8 @@ func (s *Store) RetryJob(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	return newID, tx.Commit()
+}
+
+func (s *Store) Job(ctx context.Context, id string) (domain.Job, error) {
+	return scanJob(s.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id=?`, id))
 }
