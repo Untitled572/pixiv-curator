@@ -328,3 +328,26 @@ func TestEnvironmentTransportSelectionAndTargetBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestConfiguredProxyReceivesOnlyValidatedCDNConnect(t *testing.T) {
+	seen := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r.Method + " " + r.Host
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	proxyURL, _ := url.Parse(server.URL)
+	p := NewProxyWithResolver(func(*http.Request) (*url.URL, error) { return proxyURL, nil })
+	err := p.Forward(httptest.NewRecorder(), request(http.MethodGet), "https://i.pximg.net/img-original/4.jpg")
+	if err == nil {
+		t.Fatal("failed CONNECT reported success")
+	}
+	select {
+	case got := <-seen:
+		if got != "CONNECT i.pximg.net:443" {
+			t.Fatalf("unexpected proxy target: %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("configured proxy was bypassed")
+	}
+}

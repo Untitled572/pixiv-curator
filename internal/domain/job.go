@@ -13,5 +13,9 @@ type Job struct {
 	LeaseToken      string          `json:"-"`
 	LeaseUntil      int64           `json:"-"`
 	CancelRequested bool            `json:"cancel_requested"`
+	ProgressPages   int64           `json:"progress_pages"`
+	ProgressItems   int64           `json:"progress_items"`
+	CreatedAt       int64           `json:"created_at"`
+	UpdatedAt       int64           `json:"updated_at"`
 	ErrorCode       string          `json:"error_code"`
 }

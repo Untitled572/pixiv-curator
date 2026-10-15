@@ -23,6 +23,7 @@
       <button class="tab" data-tab="recommendations" type="button">推荐候选</button>
       <button class="tab" data-tab="jobs" type="button">后台任务</button>
       <button class="tab" data-tab="preferences" type="button">选图偏好</button>
+      <button class="tab" data-tab="network" type="button">网络设置</button>
       <button class="tab" data-tab="account" type="button">Pixiv 账号</button>
     </nav>
     <div id="global-message" class="notice" role="status" aria-live="polite" hidden></div>
@@ -48,6 +49,7 @@
 
     <section class="panel tab-panel" id="panel-jobs" data-panel="jobs" hidden>
       <div class="panel-heading"><div><p class="eyebrow">可恢复的后台工作</p><h2>后台任务</h2><p class="muted">任务状态反映处理进度，不代表远端关注、收藏或用户喜欢。</p><p id="job-refresh-status" class="muted" aria-live="polite">尚未刷新</p></div><button id="reload-jobs" class="button button-secondary" type="button">刷新任务</button></div>
+      <div class="job-toolbar"><span id="job-counts" class="muted">本次加载 0 项</span><div class="job-filters" role="group" aria-label="任务筛选"><button class="button button-quiet button-small is-active" data-job-filter="active" type="button">活动</button><button class="button button-quiet button-small" data-job-filter="all" type="button">全部</button><button class="button button-quiet button-small" data-job-filter="failed" type="button">失败</button></div></div>
       <div id="job-list" class="job-list"><p class="empty-cell">正在读取任务…</p></div>
     </section>
 
@@ -60,6 +62,21 @@
         <label for="include-tags">必须包含的标签组 <span class="muted">每行一个组，逗号分隔表示组内任选</span></label><textarea id="include-tags" rows="3" placeholder="例如：风景,天空&#10;猫"></textarea>
         <label for="exclude-tags">排除标签 <span class="muted">逗号分隔；显式排除优先</span></label><textarea id="exclude-tags" rows="2" placeholder="例如：旧图,不喜欢"></textarea>
         <div class="form-actions"><span id="preference-version" class="muted">版本读取中…</span><button class="button button-primary" type="submit">保存偏好</button></div>
+      </form>
+    </section>
+
+    <section class="panel tab-panel" id="panel-network" data-panel="network" hidden>
+      <div class="panel-heading"><div><p class="eyebrow">服务端网络出口</p><h2>网络设置</h2><p class="muted">仅影响服务端后续发起的 API 与图片请求。管理页面使用浏览器自己的网络代理。</p></div><button id="reload-network" class="button button-secondary" type="button">读取设置</button></div>
+      <form id="network-form" class="network-form">
+        <fieldset><legend>代理模式</legend><div class="network-mode-list">
+          <label class="network-mode"><input type="radio" name="network-mode" value="system"><span><strong>系统代理</strong><small>使用服务运行环境配置的代理。</small></span></label>
+          <label class="network-mode"><input type="radio" name="network-mode" value="direct"><span><strong>直连</strong><small>不通过代理访问上游。</small></span></label>
+          <label class="network-mode"><input type="radio" name="network-mode" value="custom"><span><strong>自定义代理</strong><small>使用下方 HTTP/HTTPS 代理地址。</small></span></label>
+        </div></fieldset>
+        <label for="network-proxy-url">自定义代理 URL</label><input id="network-proxy-url" type="password" autocomplete="off" spellcheck="false" placeholder="http://host:port 或含凭据的代理 URL">
+        <p id="network-proxy-current" class="field-help" aria-live="polite">当前代理地址：读取中…</p>
+        <p class="field-help">保存后立即影响服务端后续 API 和图片请求；不会改变浏览器自身代理。Docker 中的 localhost 指容器自身，如代理运行在宿主机，请填写容器可访问的宿主机地址。保存后输入框会清空；自定义模式留空会保留已保存地址。</p>
+        <div class="form-actions"><span id="network-status" class="muted" aria-live="polite"></span><button class="button button-primary" type="submit">保存网络设置</button></div>
       </form>
     </section>
 

@@ -17,7 +17,10 @@ type Error struct{ Code string }
 
 func (e *Error) Error() string { return e.Code }
 
-type Process struct{ Python, Helper string }
+type Process struct {
+	Python, Helper string
+	Environment    func() []string
+}
 
 func (p Process) AutoCallback() bool { return os.Getenv("PIXIV_CURATOR_CALLBACK_DIR") != "" }
 
@@ -34,7 +37,7 @@ func (p Process) Login(ctx context.Context) (string, error) {
 	}
 	defer os.RemoveAll(dir)
 	cmd := exec.CommandContext(ctx, p.Python, p.Helper, "login")
-	cmd.Env = append(os.Environ(), "TMPDIR="+dir, "TMP="+dir, "TEMP="+dir, "PYTHONUNBUFFERED=1")
+	cmd.Env = append(p.environment(), "TMPDIR="+dir, "TMP="+dir, "TEMP="+dir, "PYTHONUNBUFFERED=1")
 	configureCancellation(cmd)
 	cmd.WaitDelay = 3 * time.Second
 	var out boundedOutput
@@ -76,4 +79,11 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 		return 0, errors.New("login output exceeded limit")
 	}
 	return b.Buffer.Write(p)
+}
+
+func (p Process) environment() []string {
+	if p.Environment != nil {
+		return p.Environment()
+	}
+	return os.Environ()
 }

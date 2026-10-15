@@ -17,6 +17,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
 	"github.com/Untitled572/pixiv-curator/internal/media"
+	"github.com/Untitled572/pixiv-curator/internal/network"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/secret"
 	"github.com/Untitled572/pixiv-curator/internal/store/sqlite"
@@ -77,6 +78,13 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	if err = store.CleanupSelectionHistory(ctx); err != nil {
 		return fmt.Errorf("clean selection history: %w", err)
 	}
+	networkSettings, err := network.Open(cfg.NetworkConfigFile)
+	if err != nil {
+		return fmt.Errorf("load network settings: %w", err)
+	}
+	apiTransport := http.DefaultTransport.(*http.Transport).Clone()
+	apiTransport.Proxy = networkSettings.Proxy
+	defer apiTransport.CloseIdleConnections()
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	maintenanceDone := make(chan struct{})
@@ -84,8 +92,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		defer close(maintenanceDone)
 		app.RunMaintenance(workerCtx, store, func(error) { logger.Warn("local maintenance failed") })
 	}()
-	client := pixiv.NewClient(cfg.PixivTokenFile, oauth, nil)
-	accountLogin := app.NewAccountLogin(workerCtx, accountlogin.Process{Python: cfg.LoginPython, Helper: cfg.LoginHelper}, client)
+	client := pixiv.NewClient(cfg.PixivTokenFile, oauth, apiTransport)
+	accountLogin := app.NewAccountLogin(workerCtx, accountlogin.Process{Python: cfg.LoginPython, Helper: cfg.LoginHelper, Environment: networkSettings.Environment}, client)
 	defer accountLogin.Close()
 	ingestion := app.NewIngest(store, client)
 	recommender := app.NewRecommender(store, client)
@@ -103,9 +111,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		Handler: httpapi.NewHandlerWithRoutes(version, func(mux *http.ServeMux) {
 			auth.Register(mux)
 			httpapi.RegisterAccountLogin(mux, accountLogin, auth)
+			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.Middleware(http.HandlerFunc(admin.Home)))
-			httpapi.RegisterImages(mux, images, media.NewProxy(nil), auth)
+			httpapi.RegisterImages(mux, images, media.NewProxyWithResolver(networkSettings.Proxy), auth)
 			httpapi.RegisterRecommendations(mux, recommender, auth)
 			mux.Handle("/admin/", auth.Middleware(httpapi.NewAdminHandler(service, ingestion)))
 			mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {

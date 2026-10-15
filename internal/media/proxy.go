@@ -25,6 +25,12 @@ func (e *Error) Error() string { return "media: " + e.Code }
 type Proxy struct{ http *http.Client }
 
 func NewProxy(transport http.RoundTripper) *Proxy {
+	return newProxy(transport, http.ProxyFromEnvironment)
+}
+func NewProxyWithResolver(resolve func(*http.Request) (*url.URL, error)) *Proxy {
+	return newProxy(nil, resolve)
+}
+func newProxy(transport http.RoundTripper, resolve func(*http.Request) (*url.URL, error)) *Proxy {
 	if transport == nil {
 		direct := http.DefaultTransport.(*http.Transport).Clone()
 		direct.Proxy = nil
@@ -32,9 +38,13 @@ func NewProxy(transport http.RoundTripper) *Proxy {
 		direct.TLSHandshakeTimeout = 10 * time.Second
 		direct.DialContext = safeDial
 		proxied := http.DefaultTransport.(*http.Transport).Clone()
+		proxied.Proxy = func(r *http.Request) (*url.URL, error) {
+			u, _ := r.Context().Value(proxyContextKey{}).(*url.URL)
+			return u, nil
+		}
 		proxied.ResponseHeaderTimeout = 10 * time.Second
 		proxied.TLSHandshakeTimeout = 10 * time.Second
-		transport = environmentTransport{direct: direct, proxied: proxied, proxy: http.ProxyFromEnvironment}
+		transport = environmentTransport{direct: direct, proxied: proxied, proxy: resolve}
 	}
 	return &Proxy{http: &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if len(via) > 3 || !domain.ValidImageURL(r.URL.String()) {
@@ -46,6 +56,8 @@ func NewProxy(transport http.RoundTripper) *Proxy {
 
 // Retain DNS pinning for direct requests, but allow the operator-configured
 // proxy endpoint (often loopback) to perform CONNECT to the validated CDN URL.
+type proxyContextKey struct{}
+
 type environmentTransport struct {
 	direct, proxied http.RoundTripper
 	proxy           func(*http.Request) (*url.URL, error)
@@ -62,7 +74,7 @@ func (t environmentTransport) RoundTrip(r *http.Request) (*http.Response, error)
 	if proxy == nil {
 		return t.direct.RoundTrip(r)
 	}
-	return t.proxied.RoundTrip(r)
+	return t.proxied.RoundTrip(r.Clone(context.WithValue(r.Context(), proxyContextKey{}, proxy)))
 }
 
 func safeDial(ctx context.Context, network, address string) (net.Conn, error) {

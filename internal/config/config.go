@@ -6,20 +6,22 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
 
 type Config struct {
-	Addr            string
-	LogLevel        slog.Level
-	DatabasePath    string
-	AdminTokenFile  string
-	PublicBaseURL   string
-	PixivTokenFile  string
-	OAuthConfigFile string
-	LoginPython     string
-	LoginHelper     string
+	Addr              string
+	LogLevel          slog.Level
+	DatabasePath      string
+	AdminTokenFile    string
+	PublicBaseURL     string
+	PixivTokenFile    string
+	OAuthConfigFile   string
+	LoginPython       string
+	LoginHelper       string
+	NetworkConfigFile string
 }
 
 func Load() (Config, error) {
@@ -31,6 +33,10 @@ func load(getenv func(string) string) (Config, error) {
 	cfg.DatabasePath = strings.TrimSpace(getenv("PIXIV_CURATOR_DATABASE_PATH"))
 	if cfg.DatabasePath == "" {
 		cfg.DatabasePath = "data/curator.db"
+	}
+	cfg.NetworkConfigFile = strings.TrimSpace(getenv("PIXIV_CURATOR_NETWORK_CONFIG_FILE"))
+	if cfg.NetworkConfigFile == "" {
+		cfg.NetworkConfigFile = filepath.Join(filepath.Dir(cfg.DatabasePath), "private", "network.json")
 	}
 	cfg.AdminTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_ADMIN_TOKEN_FILE"))
 	cfg.PixivTokenFile = strings.TrimSpace(getenv("PIXIV_CURATOR_PIXIV_TOKEN_FILE"))

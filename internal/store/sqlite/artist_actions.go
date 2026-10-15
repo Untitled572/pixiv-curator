@@ -124,6 +124,16 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 	if !allowed {
 		return domain.ErrConflict
 	}
+	// A committed cursor is the page fence: if the same page is retried after
+	// its transaction committed, do not count or persist it twice.
+	var savedPhase, savedCursor, savedRun string
+	err = tx.QueryRowContext(ctx, `SELECT phase,cursor,run_id FROM artist_sync_state WHERE artist_id=?`, artistID).Scan(&savedPhase, &savedCursor, &savedRun)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil && savedPhase == phase && savedCursor == cursor && savedRun == runID {
+		return tx.Commit()
+	}
 	for _, a := range artworks {
 		if a.ArtistID != artistID {
 			return domain.ErrInvalid
@@ -137,6 +147,9 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 				return err
 			}
 		}
+	}
+	if err = incrementJobProgress(ctx, tx, j, len(artworks)); err != nil {
+		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO artist_sync_state(artist_id,phase,cursor,run_id,last_full_sync_at,last_incremental_at) VALUES(?,?,?,?,?,?) ON CONFLICT(artist_id) DO UPDATE SET phase=excluded.phase,cursor=excluded.cursor,run_id=excluded.run_id,last_full_sync_at=COALESCE(excluded.last_full_sync_at,artist_sync_state.last_full_sync_at),last_incremental_at=COALESCE(excluded.last_incremental_at,artist_sync_state.last_incremental_at)`, artistID, phase, cursor, runID, finishedAt(cursor, phase == "full"), finishedAt(cursor, phase == "incremental"))
 	if err != nil {
@@ -186,6 +199,15 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 	if err = checkLease(ctx, tx, j); err != nil {
 		return err
 	}
+	var savedPayload string
+	var savedPages int64
+	err = tx.QueryRowContext(ctx, `SELECT payload_json,progress_pages FROM jobs WHERE id=?`, j.ID).Scan(&savedPayload, &savedPages)
+	if err != nil {
+		return err
+	}
+	if savedPages > 0 && savedPayload == string(nextPayload) {
+		return tx.Commit()
+	}
 	for _, a := range artists {
 		if a.ID <= 0 {
 			return domain.ErrInvalid
@@ -202,6 +224,9 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 			return err
 		}
 	}
+	if err = incrementJobProgress(ctx, tx, j, len(artists)); err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, `UPDATE jobs SET payload_json=?,updated_at=? WHERE id=?`, string(nextPayload), time.Now().UnixMilli(), j.ID)
 	if err != nil {
 		return err
@@ -212,6 +237,11 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 		}
 	}
 	return tx.Commit()
+}
+
+func incrementJobProgress(ctx context.Context, tx *sql.Tx, j domain.Job, items int) error {
+	r, err := tx.ExecContext(ctx, `UPDATE jobs SET progress_pages=progress_pages+1,progress_items=progress_items+?,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>? AND cancel_requested=0`, items, time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
+	return leaseResult(r, err)
 }
 
 func completeJob(ctx context.Context, tx *sql.Tx, j domain.Job) error {

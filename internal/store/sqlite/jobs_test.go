@@ -83,6 +83,25 @@ type claimResult struct {
 	err error
 }
 
+func TestFinishCanceledClearsErrorCode(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	if _, err := s.Enqueue(ctx, "sync_artist", "cancel-finish", json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Claim(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, j, "canceled", "LEASE_EXPIRED", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Job(ctx, j.ID)
+	if err != nil || got.State != "canceled" || got.ErrorCode != "" {
+		t.Fatalf("finished canceled job = %+v, err=%v", got, err)
+	}
+}
+
 func TestExpiredLeaseRejectsRenewAndFinish(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
@@ -184,6 +203,9 @@ func TestCancellationAndLeaseRecoverySurviveReopen(t *testing.T) {
 	if err := s.Cancel(ctx, runningID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET error_code='LEASE_EXPIRED' WHERE id=?`, runningID); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +228,11 @@ func TestCancellationAndLeaseRecoverySurviveReopen(t *testing.T) {
 	}
 	if states[pendingID] != "canceled" || states[runningID] != "canceled" {
 		t.Fatalf("persisted job states = %v, want both canceled", states)
+	}
+	for _, job := range jobs {
+		if job.ID == runningID && job.ErrorCode != "" {
+			t.Fatalf("canceled job retained error_code %q", job.ErrorCode)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ func (p Process) LoginBrowser(ctx context.Context, publish func(string), codes <
 		return "", &Error{"LOGIN_UNAVAILABLE"}
 	}
 	cmd := exec.CommandContext(ctx, p.Python, p.Helper, "browser-login")
+	cmd.Env = p.environment()
 	configureCancellation(cmd)
 	cmd.WaitDelay = 3 * time.Second
 	out, err := cmd.StdoutPipe()

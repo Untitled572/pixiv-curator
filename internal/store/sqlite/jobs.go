@@ -56,7 +56,7 @@ func (s *Store) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
 		return domain.Job{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' WHEN attempt>=5 THEN 'failed' ELSE 'retry_wait' END,lease_token='',lease_until=0,available_at=?,updated_at=?,error_code='LEASE_EXPIRED' WHERE state='running' AND lease_until<=?`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
+	_, err = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' WHEN attempt>=5 THEN 'failed' ELSE 'retry_wait' END,lease_token='',lease_until=0,available_at=?,updated_at=?,error_code=CASE WHEN cancel_requested=1 THEN '' ELSE 'LEASE_EXPIRED' END WHERE state='running' AND lease_until<=?`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return domain.Job{}, err
 	}
@@ -80,14 +80,14 @@ func (s *Store) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
 	return j, tx.Commit()
 }
 
-const jobColumns = `id,kind,dedupe_key,payload_json,state,attempt,available_at,lease_token,lease_until,cancel_requested,error_code`
+const jobColumns = `id,kind,dedupe_key,payload_json,state,attempt,available_at,lease_token,lease_until,cancel_requested,error_code,progress_pages,progress_items,created_at,updated_at`
 
 type scanner interface{ Scan(...any) error }
 
 func scanJob(row scanner) (domain.Job, error) {
 	var j domain.Job
 	var raw string
-	err := row.Scan(&j.ID, &j.Kind, &j.Key, &raw, &j.State, &j.Attempt, &j.AvailableAt, &j.LeaseToken, &j.LeaseUntil, &j.CancelRequested, &j.ErrorCode)
+	err := row.Scan(&j.ID, &j.Kind, &j.Key, &raw, &j.State, &j.Attempt, &j.AvailableAt, &j.LeaseToken, &j.LeaseUntil, &j.CancelRequested, &j.ErrorCode, &j.ProgressPages, &j.ProgressItems, &j.CreatedAt, &j.UpdatedAt)
 	j.Payload = json.RawMessage(raw)
 	if err == sql.ErrNoRows {
 		err = domain.ErrNotFound
@@ -137,7 +137,7 @@ func (s *Store) Finish(ctx context.Context, j domain.Job, state, code string, av
 	if state == "retry_wait" && j.Attempt >= 5 {
 		state = "failed"
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' ELSE ? END,error_code=?,available_at=?,lease_token='',lease_until=0,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>?`, state, code, available.UnixMilli(), time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
+	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' ELSE ? END,error_code=CASE WHEN cancel_requested=1 OR ?='canceled' THEN '' ELSE ? END,available_at=?,lease_token='',lease_until=0,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>?`, state, state, code, available.UnixMilli(), time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
 	return leaseResult(r, err)
 }
 

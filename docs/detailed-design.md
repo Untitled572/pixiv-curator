@@ -365,6 +365,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 | GET | /admin/api/jobs | 查看任务、游标摘要、错误码 |
 | POST | /admin/api/jobs/{id}/retry | 显式重试终态任务，遵循业务去重 |
 | GET | /admin/api/jobs/{id} | 查询单个任务状态（需管理鉴权，不返回任务载荷或租约密钥） |
+| GET/PUT | /admin/api/settings/network | 读取安全代理状态 / 保存代理模式及只写 proxy_url |
 | POST | /admin/api/jobs/{id}/cancel | 请求取消 |
 | POST | /admin/api/jobs/{id}/resume | 仅 paused_auth 可用；检查账号状态后恢复 pending |
 | GET | /admin/api/account/status | 只返回凭据状态 |
@@ -460,3 +461,9 @@ PicHub 不会自动透传所有 Curator 筛选参数；第一版通过固定图�
 - pixivcat-backend：按作品 ID 转发图片。
 
 外部参考：[Random Mage 文档](https://i.mukyu.ru/docs)、[PicHub-Aggregator](https://github.com/Untitled572/PicHub-Aggregator)。本次文档依据此前已核查的本地代码与接口信息，不宣称再次完成实网业务验证。
+
+## 15. 网络设置与分页进度（2026-10-15）
+
+网络设置保存在独立私密 JSON 文件，管理 GET/PUT 仍要求鉴权，Cookie PUT 校验 CSRF。mode 为 system/direct/custom；GET 返回 mode、去掉 userinfo 的 proxy_address、has_credentials，不回显密码；PUT 的 proxy_url 为只写。保存成功后下一次 API/图片请求及新登录进程采用新配置，已有请求不强制中断。图片白名单与重定向校验保持；直连继续固定公网解析地址，代理模式允许管理员配置的代理端点。
+
+迁移 005 增加 jobs.progress_pages/progress_items。关注/画师分页提交时与目录和游标同事务增加计数，重复游标提交不重复累计；created_at/updated_at 和进度作为安全字段返回。计数表示已处理记录数而非新增数，不声称知道上游总量。旧任务计数初始为0，不对历史完成任务回填估算。

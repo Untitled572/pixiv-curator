@@ -8,6 +8,8 @@
   let jobsTimer = null;
   let highlightedJobID = "";
   let trackedJobID = "";
+  let loadedJobs = [];
+  let jobFilter = "active";
   const pendingJobActions = new Set();
   const selectedArtists = new Set();
 
@@ -76,6 +78,7 @@
     if (tab.dataset.tab === "recommendations") $("#recommendation-run-id").focus();
     if (tab.dataset.tab === "jobs") { loadJobs(); startJobsPolling(); } else stopJobsPolling();
     if (tab.dataset.tab === "preferences") loadPreferences();
+    if (tab.dataset.tab === "network") loadNetworkSettings();
     if (tab.dataset.tab === "account") { loadAccount(); loadPixivLogin(); }
   }));
 
@@ -184,9 +187,9 @@
       if (trackedJobID && !jobs.some(job => String(job.id) === trackedJobID)) {
         jobs.unshift(await api(`/admin/api/jobs/${encodeURIComponent(trackedJobID)}`));
       }
-      list.replaceChildren();
-      if (!jobs.length) list.append(node("p", "empty-cell", "暂无后台任务。"));
-      jobs.forEach((job) => list.append(renderJob(job)));
+      const uniqueJobs = new Map(jobs.map((job) => [String(job.id), job]));
+      loadedJobs = Array.from(uniqueJobs.values());
+      renderJobs();
       const status = $("#job-refresh-status");
       status.textContent = `最后更新：${new Date().toLocaleTimeString()}`;
       status.classList.remove("is-error");
@@ -198,6 +201,27 @@
       const status = $("#job-refresh-status"); status.textContent = `加载失败：${error.message || "请求错误"}`; status.classList.add("is-error");
       if (!list.children.length) list.append(node("p", "empty-cell", "无法读取任务，请检查会话后重试。"));
     } finally { jobsLoading = false; }
+  }
+  function jobGroup(job) {
+    if (["running", "cancel_requested"].includes(job.cancel_requested && job.state === "running" ? "cancel_requested" : job.state)) return 0;
+    if (["pending", "retry_wait", "paused_auth"].includes(job.state)) return 1;
+    return 2;
+  }
+  function renderJobs() {
+    const list = $("#job-list");
+    const jobs = loadedJobs.slice().sort((a, b) => jobGroup(a) - jobGroup(b) || Number(b.updated_at || b.created_at || 0) - Number(a.updated_at || a.created_at || 0));
+    const counts = { active: loadedJobs.filter((job) => jobGroup(job) < 2).length, failed: loadedJobs.filter((job) => job.state === "failed").length, all: loadedJobs.length };
+    $("#job-counts").textContent = `本次加载 ${counts.all} 项 · 活动 ${counts.active} · 失败 ${counts.failed}`;
+    list.replaceChildren();
+    const visible = jobs.filter((job) => String(job.id) === highlightedJobID || jobFilter === "all" || (jobFilter === "failed" ? job.state === "failed" : jobGroup(job) < 2));
+    if (!visible.length) { list.append(node("p", "empty-cell", jobFilter === "active" ? "当前没有活动任务。切换到“全部”可查看已结束任务。" : "没有符合条件的任务。")); return; }
+    const headings = ["正在运行或取消", "排队、重试或等待凭据", "已结束"];
+    let previous = -1;
+    visible.forEach((job) => {
+      const group = jobGroup(job);
+      if (jobFilter !== "failed" && group !== previous) { list.append(node("h3", "job-group-title", headings[group])); previous = group; }
+      list.append(renderJob(job));
+    });
   }
   function jobsPanelVisible() { return !$("#panel-jobs").hidden && document.visibilityState === "visible"; }
   function startJobsPolling() {
@@ -211,9 +235,25 @@
     const card = node("article", "job-card"); card.dataset.jobId = String(job.id);
     const info = node("div");
     const kinds = { sync_artist: "采集画师作品", sync_following: "同步 Pixiv 关注", hydrate_artwork: "补全作品信息", repair_media: "修复图片链接", recommend_artists: "推荐画师" };
-    info.append(node("div", "job-title", kinds[job.kind] || job.kind), node("div", "job-meta", `任务 ${job.id} · 尝试 ${job.attempt || 0}`));
+    info.append(node("div", "job-title", kinds[job.kind] || job.kind), node("div", "job-meta", `尝试 ${job.attempt || 0}`));
+    const progress = [];
+    if (Number(job.progress_pages) > 0) progress.push(`已完成 ${Number(job.progress_pages)} 页`);
+    if (Number(job.progress_items) > 0) {
+      const itemName = job.kind === "sync_following" ? "位画师" : "件作品";
+      progress.push(`已处理 ${Number(job.progress_items)} ${itemName}`);
+    }
+    if (progress.length && job.state !== "succeeded") progress.push("总量未知");
+    if (!progress.length && ["sync_following", "sync_artist"].includes(job.kind)) progress.push(jobGroup(job) === 2 ? "无可用的分页进度记录" : "尚无已提交分页；总量未知");
+    if (progress.length) info.append(node("div", "job-progress", progress.join(" · ")));
+    const timestamps = [];
+    if (Number(job.created_at) > 0) timestamps.push(`创建 ${formatJobTime(job.created_at)}`);
+    if (Number(job.updated_at) > 0) timestamps.push(`更新 ${formatJobTime(job.updated_at)}`);
+    if (timestamps.length) info.append(node("div", "job-meta", timestamps.join(" · ")));
     const status = node("div", "job-status"); status.append(node("span", `pill ${state || "neutral"}`, state === "pending" ? "排队中" : statusLabel(state)));
-    if (job.error_code) status.append(node("span", "job-code", job.error_code));
+    if (job.error_code && !["canceled", "cancel_requested"].includes(state)) {
+      status.append(node("span", "job-code", `${job.state === "running" ? "上次错误：" : ""}${jobErrorLabel(job.error_code)}`));
+    }
+    if (job.state === "retry_wait" && Number(job.available_at) > 0) status.append(node("span", "job-meta", `下次重试：${formatJobTime(job.available_at)}`));
     const actions = node("div", "job-actions");
     if (["pending", "running", "retry_wait", "paused_auth"].includes(state)) {
       const button = addButton(actions, pendingJobActions.has(String(job.id)) ? "提交中…" : "取消任务", "button button-quiet button-small", (event) => jobAction(job.id, "cancel", event.currentTarget));
@@ -222,7 +262,21 @@
     if (state === "cancel_requested") actions.append(node("span", "job-meta", "取消中…"));
     if (job.state === "paused_auth") addButton(actions, "凭据修复后恢复", "button button-secondary button-small", () => jobAction(job.id, "resume"));
     if (job.state === "failed" || job.state === "canceled") addButton(actions, "重新排队", "button button-secondary button-small", () => jobAction(job.id, "retry"));
-    card.append(info, status, actions); return card;
+    const details = node("details", "job-details");
+    const summary = node("summary", "button button-quiet button-small", "任务详情");
+    const fullID = node("code", "job-full-id", String(job.id));
+    const copy = addButton(details, "复制任务 ID", "button button-quiet button-small", async () => {
+      try { await navigator.clipboard.writeText(String(job.id)); showMessage("任务 ID 已复制。"); }
+      catch (_) { showMessage(`任务 ID：${job.id}`); }
+    });
+    details.append(summary, fullID, copy);
+    if (job.error_code && !["canceled", "cancel_requested"].includes(state)) details.append(node("code", "job-full-id", job.error_code));
+    card.append(info, status, actions, details); return card;
+  }
+  function formatJobTime(value) { const date = new Date(Number(value)); return Number.isNaN(date.getTime()) ? "时间未知" : date.toLocaleString(); }
+  function jobErrorLabel(code) {
+    const labels = { NETWORK_ERROR: "网络连接失败，可稍后重试", LEASE_EXPIRED: "任务执行中断（租约过期）", AUTH_REQUIRED: "需要修复 Pixiv 凭据", RATE_LIMITED: "上游请求限速，等待后重试", TIMEOUT: "请求超时", UPSTREAM_ERROR: "上游暂时不可用" };
+    return labels[code] || "任务遇到错误";
   }
   async function jobAction(id, action, button) {
     pendingJobActions.add(String(id));
@@ -234,6 +288,11 @@
     finally { pendingJobActions.delete(String(id)); await loadJobs(); }
   }
   $("#reload-jobs").addEventListener("click", loadJobs);
+  $$("[data-job-filter]").forEach((button) => button.addEventListener("click", () => {
+    jobFilter = button.dataset.jobFilter;
+    $$("[data-job-filter]").forEach((item) => item.classList.toggle("is-active", item === button));
+    renderJobs();
+  }));
 
   $("#start-recommendations").addEventListener("click", async (event) => {
     const button = event.currentTarget; button.disabled = true;
@@ -442,6 +501,39 @@
       $("#preference-version").textContent = `当前版本 ${preferenceVersion}`; showMessage("选图偏好已保存；未知分类仍会保持未知并被默认规则排除。");
     } catch (error) { reportError(error, "保存偏好"); }
   });
+
+  async function loadNetworkSettings() {
+    const status = $("#network-status");
+    status.textContent = "正在读取…";
+    try {
+      const result = await api("/admin/api/settings/network");
+      const mode = ["system", "direct", "custom"].includes(result.mode) ? result.mode : "system";
+      const radio = $(`input[name="network-mode"][value="${mode}"]`);
+      if (radio) radio.checked = true;
+      $("#network-proxy-url").value = "";
+      const address = result.proxy_address || "未设置";
+      $("#network-proxy-current").textContent = `当前代理地址：${address}${result.has_credentials ? "（已保存凭据，内容不回显）" : ""}`;
+      status.textContent = "设置已读取";
+    } catch (error) { status.textContent = "无法读取网络设置"; reportError(error, "读取网络设置"); }
+  }
+  $("#network-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const mode = $('input[name="network-mode"]:checked')?.value || "system";
+    const input = $("#network-proxy-url");
+    const proxyURL = input.value;
+    input.value = "";
+    const button = event.submitter;
+    if (button) button.disabled = true;
+    $("#network-status").textContent = "正在保存…";
+    try {
+      const result = await api("/admin/api/settings/network", { method: "PUT", body: JSON.stringify({ mode, proxy_url: mode === "custom" ? proxyURL : "" }) });
+      $("#network-proxy-current").textContent = `当前代理地址：${result.proxy_address || "未设置"}${result.has_credentials ? "（已保存凭据，内容不回显）" : ""}`;
+      $("#network-status").textContent = "已保存并生效于后续请求";
+      showMessage("网络设置已保存；服务端后续 API 与图片请求将使用新配置。浏览器请求使用浏览器自身网络代理。");
+    } catch (error) { $("#network-status").textContent = "保存失败"; reportError(error, "保存网络设置"); }
+    finally { if (button) button.disabled = false; }
+  });
+  $("#reload-network").addEventListener("click", loadNetworkSettings);
 
   async function loadAccount() {
     try {

@@ -60,6 +60,7 @@ healthz 当前只表示 HTTP 进程存活，不代表 Pixiv 连通、数据库�
 | PIXIV_CURATOR_ADMIN_TOKEN_FILE | 未配置 | 私密管理 token 文件；不配置时所有管理操作拒绝 |
 | PIXIV_CURATOR_PIXIV_TOKEN_FILE | 未配置 | refresh token 私密文件，轮换后原子写回；所在目录必须可写 |
 | PIXIV_CURATOR_OAUTH_CONFIG_FILE | 未配置 | OAuth 应用参数私密 JSON 文件；一键脚本自动生成匹配配置 |
+| PIXIV_CURATOR_NETWORK_CONFIG_FILE | 数据库父目录/private/network.json | 管理页代理设置的私密持久化文件 |
 | PIXIV_CURATOR_LOGIN_PYTHON | 未配置 | 保留配置项：旧版本机登录 helper 的 Python 绝对路径 |
 | PIXIV_CURATOR_LOGIN_HELPER | 未配置 | 保留配置项：旧版 `scripts/pixiv-login.py` 绝对路径 |
 
@@ -78,6 +79,8 @@ PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
 管理 API、筛选参数和错误码见 [详细设计](docs/detailed-design.md)。`GET /readyz` 检查本地数据库与 Worker，不表示 Pixiv 连通或目录有图。首次账号、容器、备份恢复和 PicHub 图源配置见 [运行与接入](docs/running.md)。
 
 备份应停机后完整保存数据库，或使用 SQLite `.backup`；不要在运行期间只复制主 `.db`。库内 `Store.Backup` 使用 `VACUUM INTO` 生成包含 WAL 已提交数据的一致性快照，目标必须不存在。凭据独立备份。
+
+管理页“网络设置”可选择继承环境、直连或填写自定义 HTTP/HTTPS 代理，保存后影响后续请求，无需重启。后台任务展示已提交页数、处理数量、重试时间与中文错误说明；详情见 [运行与接入](docs/running.md)。
 
 ## 常用命令
 

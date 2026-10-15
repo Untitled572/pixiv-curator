@@ -112,6 +112,13 @@ func TestCommitArtistBatchRequiresLiveLeaseAndApprovedEnabledArtist(t *testing.T
 	if err := s.CommitArtistBatch(ctx, job, 7105, "run-1", "full", "next", []domain.Artwork{good}); err != nil {
 		t.Fatalf("commit valid live batch: %v", err)
 	}
+	if err := s.CommitArtistBatch(ctx, job, 7105, "run-1", "full", "next", []domain.Artwork{good}); err != nil {
+		t.Fatalf("repeat committed batch: %v", err)
+	}
+	progress, err := s.Job(ctx, job.ID)
+	if err != nil || progress.ProgressPages != 1 || progress.ProgressItems != 1 || progress.CreatedAt == 0 || progress.UpdatedAt == 0 {
+		t.Fatalf("artist progress = %+v, err=%v; want one page/item and timestamps", progress, err)
+	}
 	if err := s.Finish(ctx, job, "succeeded", "", time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -191,11 +198,18 @@ func TestFollowingBatchesOnlyMarkUnfollowedOnCompleteSnapshot(t *testing.T) {
 	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
+		t.Fatalf("repeat committed following page: %v", err)
+	}
 	assertFollowing(t, s, 7201, true, "approved", true)
 	assertFollowing(t, s, 7202, true, "approved", true)
 
 	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":""}`), true); err != nil {
 		t.Fatal(err)
+	}
+	progress, err := s.Job(ctx, job.ID)
+	if err != nil || progress.ProgressPages != 2 || progress.ProgressItems != 2 {
+		t.Fatalf("following progress = %+v, err=%v; want two pages/items", progress, err)
 	}
 	assertFollowing(t, s, 7201, false, "approved", true)
 	assertFollowing(t, s, 7202, true, "approved", true)
