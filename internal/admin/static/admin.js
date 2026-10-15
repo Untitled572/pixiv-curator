@@ -432,7 +432,7 @@
     const running = status.state === "running";
     $("#pixiv-login-start").disabled = !status.enabled || running;
     $("#pixiv-login-cancel").hidden = !running;
-    const labels = { idle: "准备就绪。点击后在新标签打开 Pixiv 登录。", running: "请在 Pixiv 标签完成登录，再复制 Network 中的授权 code 到此页提交。", succeeded: "登录授权已保存。可以开始同步关注；暂停任务需手动恢复。", canceled: "登录已取消。" };
+    const labels = { idle: "准备就绪。点击后在新标签打开 Pixiv 登录。", running: status.auto_callback ? "请完成 Pixiv 登录，并允许浏览器打开 Pixiv Curator Login；授权会自动保存。" : "请在 Pixiv 标签完成登录，再复制 Network 中的授权 code 到此页提交。", succeeded: "登录授权已保存。可以开始同步关注；暂停任务需手动恢复。", canceled: "登录已取消。" };
     $("#pixiv-login-status").textContent = !status.enabled ? pixivLoginLabels.LOGIN_UNAVAILABLE : (pixivLoginLabels[status.error_code] || labels[status.state] || pixivLoginLabels.LOGIN_FAILED);
     const loginURL = validPixivLoginURL(status.login_url);
     const manualLink = $("#pixiv-login-open-link");

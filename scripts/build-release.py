@@ -44,6 +44,7 @@ def main():
                      (ROOT / "docs/pixiv-login.md", "docs/pixiv-login.md"),
                      (ROOT / "docs/third-party.md", "docs/third-party.md"),
                      (ROOT / "scripts/pixiv-login.py", "scripts/pixiv-login.py"),
+                     (ROOT / "scripts/pixiv-callback.py", "scripts/pixiv-callback.py"),
                      (ROOT / "scripts/requirements-login.txt", "scripts/requirements-login.txt")]
             if goos == "windows":
                 archive = args.output / f"{basename}.zip"

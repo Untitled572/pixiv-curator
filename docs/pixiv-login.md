@@ -2,7 +2,21 @@
 
 更新：2026-10-15。
 
-## 使用普通浏览器登录
+## Linux 桌面：自动回调
+
+本机桌面运行 `./scripts/dev.sh` 后，会为当前用户注册 **Pixiv Curator Login** 接收器。管理页打开登录标签，完成登录后允许浏览器打开 **Pixiv Curator Login**，然后回管理页等待授权保存，无需 F12。
+
+仅适用于浏览器与服务在同一台 Linux 桌面、同一用户下运行。已有其他应用的协议关联不会被覆盖。设置 `PIXIV_CURATOR_LOCAL_CALLBACK=0` 可禁用自动注册。无 DISPLAY/WAYLAND 的服务器不注册桌面协议。接收器使用 0700 目录及 0600 Unix socket，不把授权码写入普通文件。
+
+注册文件为 `~/.local/share/applications/pixiv-curator-login.desktop`（遵循 XDG_DATA_HOME）。卸载时删除该文件并在用户 mimeapps.list 移除相应关联。
+
+## Docker 与跨设备部署
+
+服务器不需要 GUI 或浏览器。纯 Go Docker 镜像不包含 Python/gppt，也不提供桌面回调；使用管理页已有的 Refresh Token 导入功能即可。可在有桌面的电脑上完成本机授权，将其私密 `data/dev/pixiv-refresh-token` 文件内容粘贴到远端管理页的 Refresh Token 框保存。请使用可信 HTTPS 或 SSH 隧道访问远端管理页，不通过聊天传递凭据。本机与远端不要同时运行采集任务并共用轮换中的 token。
+
+如果服务器另行安装了 Python helper，可在客户端浏览器打开服务器生成的 PKCE 链接并手动回填 code。浏览器和服务器不在同一设备时，应禁用 LOCAL_CALLBACK；Linux 接收器不能自动把本机 code 交给远端服务。跨设备自动回传尚未实现。
+
+## 普通浏览器手动回填（备用）
 
 启动服务并登录管理页面后，打开「Pixiv 账号」页，点击「打开 Pixiv 登录」。页面会在点击动作中预先打开一个新标签，待服务返回授权地址后导航到 Pixiv。若浏览器拦截或预留标签无法导航，可使用页面显示的“手动打开 Pixiv 登录链接”。
 

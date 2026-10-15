@@ -15,6 +15,9 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('login_bridge', Path(__file__).with_name('pixiv-login.py'))
 bridge = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bridge)
+callback_spec = importlib.util.spec_from_file_location('callback_bridge', Path(__file__).with_name('pixiv-callback.py'))
+callback_bridge = importlib.util.module_from_spec(callback_spec)
+callback_spec.loader.exec_module(callback_bridge)
 
 
 def modules():
@@ -79,6 +82,19 @@ class BridgeTests(unittest.TestCase):
             self.assertEqual(bridge.browser_login(), {'refresh_token': 'test-refresh'})
         self.assertEqual(list(json.loads(out.getvalue())), ['login_url'])
         self.assertNotIn('private', out.getvalue())
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'Linux desktop callback')
+    def test_private_callback_and_invalid_uri(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with callback_bridge.receiver(directory) as server:
+                with self.assertRaises(ValueError):
+                    callback_bridge.callback(directory, 'https://evil.test/?code=bad')
+                callback_bridge.callback(directory, 'pixiv://account/login?code=offline-code')
+                value = json.loads(callback_bridge.wait_code(server, io.StringIO('')))
+                self.assertEqual(value, {'code': 'offline-code'})
+                self.assertEqual((Path(directory)/'login.sock').stat().st_mode & 0o777, 0o600)
+            self.assertFalse((Path(directory)/'login.sock').exists())
+            self.assertEqual((Path(directory)/'login.lock').read_text(), '')
 
     def test_errors_do_not_expose_upstream_payload(self):
         out = io.StringIO()

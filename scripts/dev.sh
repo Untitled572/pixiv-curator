@@ -39,15 +39,20 @@ db_file="$dev_dir/curator.db"
 
 # Check bind availability without displaying or reading any credential contents.
 python3 - "$addr" <<'PY'
-import socket, sys
+import errno, socket, sys
 addr = sys.argv[1]
 try:
     host, port = addr.rsplit(':', 1)
     host = host.strip('[]')
     with socket.socket(socket.AF_INET6 if ':' in host else socket.AF_INET, socket.SOCK_STREAM) as s:
+        # Match Go net.Listen on Unix: closed connections must not block restart.
+        # Do not use SO_REUSEPORT; an active listener must still be rejected.
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((host, int(port)))
-except OSError:
-    print(f"监听地址 {addr} 已被占用或不可用；为避免误认已有服务，本次不连接或停止它。", file=sys.stderr)
+        s.listen(1)
+except OSError as exc:
+    reason = "已有进程监听或绑定" if exc.errno == errno.EADDRINUSE else "无法绑定，请检查地址与权限"
+    print(f"监听地址 {addr}：{reason}（errno={exc.errno}）；未停止任何现有进程。", file=sys.stderr)
     raise SystemExit(1)
 except Exception:
     print(f"无效监听地址: {addr}", file=sys.stderr)
@@ -112,6 +117,15 @@ PY
     mv -f "$marker_tmp" "$marker"
   fi
   "$venv/bin/python" "$helper" configure "$oauth_file"
+  unset PIXIV_CURATOR_CALLBACK_DIR
+  if [ "${PIXIV_CURATOR_LOCAL_CALLBACK:-1}" = 1 ] && [ "$(uname -s)" = Linux ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-mime >/dev/null 2>&1; then
+    if "$venv/bin/python" "$repo/scripts/pixiv-callback.py" install "$dev_dir/callback"; then
+      export PIXIV_CURATOR_CALLBACK_DIR="$dev_dir/callback"
+      echo "已启用本机自动回调：登录后允许浏览器打开 Pixiv Curator Login。"
+    else
+      echo "本机回调未启用，仍可使用手动授权码方式。" >&2
+    fi
+  fi
   export PIXIV_CURATOR_LOGIN_PYTHON="$venv/bin/python"
   export PIXIV_CURATOR_LOGIN_HELPER="$helper"
 fi

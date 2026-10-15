@@ -16,6 +16,9 @@ func TestProcessHelper(t *testing.T) {
 		return
 	}
 	switch os.Getenv("CURATOR_TEST_MODE") {
+	case "browser-auto":
+		fmt.Println(`{"login_url":"https://app-api.pixiv.net/web/v1/login?code_challenge=test&code_challenge_method=S256"}`)
+		fmt.Print(`{"refresh_token":"fake-refresh"}`)
 	case "browser":
 		fmt.Println(`{"login_url":"https://app-api.pixiv.net/web/v1/login?code_challenge=test&code_challenge_method=S256"}`)
 		var input struct {
@@ -96,5 +99,17 @@ func TestBrowserURLBoundary(t *testing.T) {
 		if validLoginURL(url) {
 			t.Fatal("unsafe URL accepted")
 		}
+	}
+}
+
+func TestBrowserAutomaticResultWithoutManualCode(t *testing.T) {
+	executable, _ := os.Executable()
+	t.Setenv("CURATOR_TEST_HELPER", "1")
+	t.Setenv("CURATOR_TEST_MODE", "browser-auto")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	token, err := (Process{Python: executable, Helper: "-test.run=^TestProcessHelper$"}).LoginBrowser(ctx, func(string) {}, make(chan string))
+	if err != nil || token != "fake-refresh" {
+		t.Fatalf("automatic result failed: %v", err)
 	}
 }

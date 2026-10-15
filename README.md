@@ -26,7 +26,7 @@
 
 脚本准备 Python OAuth 依赖与私密配置，构建并启动同端口的管理页面与 Go API。终端显示管理 token 的文件路径；登录管理页后进入「Pixiv 账号」，点击「打开 Pixiv 登录」，在普通浏览器中完成 Pixiv 登录，再从浏览器 Network 请求中复制授权 code 回管理页提交。
 
-需要 Go 1.26+、Python 3.10+（含 venv/pip）；登录不需要 Chromium 或服务端桌面。默认私密开发目录为 `data/dev`。仅离线查看页面/API 可运行 `./scripts/dev.sh --no-login-helper`。登录步骤与限制见 [账号登录与本机联调](docs/pixiv-login.md)。
+需要 Go 1.26+、Python 3.10+（含 venv/pip）；登录不需要 Chromium 或服务端桌面。默认私密开发目录为 `data/dev`。仅离线查看页面/API 可运行 `./scripts/dev.sh --no-login-helper`。Linux 同机桌面可自动接收回调；无 GUI/Docker 使用凭据导入，跨设备不依赖服务器窗口。登录步骤与限制见 [账号登录与本机联调](docs/pixiv-login.md)。
 
 ## 开始开发
 

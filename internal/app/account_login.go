@@ -20,12 +20,13 @@ type AccountCredentialWriter interface {
 }
 
 type AccountLoginStatus struct {
-	LoginURL   string `json:"login_url,omitempty"`
-	Enabled    bool   `json:"enabled"`
-	State      string `json:"state"`
-	ErrorCode  string `json:"error_code,omitempty"`
-	StartedAt  int64  `json:"started_at,omitempty"`
-	FinishedAt int64  `json:"finished_at,omitempty"`
+	AutoCallback bool   `json:"auto_callback"`
+	LoginURL     string `json:"login_url,omitempty"`
+	Enabled      bool   `json:"enabled"`
+	State        string `json:"state"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	StartedAt    int64  `json:"started_at,omitempty"`
+	FinishedAt   int64  `json:"finished_at,omitempty"`
 }
 
 // AccountLogin runs a bounded, non-persistent local login. Passwords stay in Pixiv's window.
@@ -46,7 +47,11 @@ type AccountLogin struct {
 }
 
 func NewAccountLogin(ctx context.Context, p AccountLoginProvider, c AccountCredentialWriter) *AccountLogin {
-	return &AccountLogin{root: ctx, provider: p, credentials: c, status: AccountLoginStatus{Enabled: p.Enabled(), State: "idle"}, timeout: 6 * time.Minute}
+	auto := false
+	if provider, ok := p.(interface{ AutoCallback() bool }); ok {
+		auto = provider.AutoCallback()
+	}
+	return &AccountLogin{root: ctx, provider: p, credentials: c, status: AccountLoginStatus{AutoCallback: auto, Enabled: p.Enabled(), State: "idle"}, timeout: 6 * time.Minute}
 }
 func (s *AccountLogin) Status() AccountLoginStatus { s.mu.Lock(); defer s.mu.Unlock(); return s.status }
 func (s *AccountLogin) Start() (AccountLoginStatus, error) {
@@ -71,7 +76,7 @@ func (s *AccountLogin) Start() (AccountLoginStatus, error) {
 	s.cancel = cancel
 	s.codes = make(chan string, 1)
 	s.submitted = false
-	s.status = AccountLoginStatus{Enabled: true, State: "running", StartedAt: now.UnixMilli()}
+	s.status = AccountLoginStatus{AutoCallback: s.status.AutoCallback, Enabled: true, State: "running", StartedAt: now.UnixMilli()}
 	s.wg.Add(1)
 	go s.run(ctx, cancel)
 	return s.status, nil

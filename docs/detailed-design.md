@@ -207,7 +207,7 @@ running --取消请求--> 批次边界安全退出 -> canceled
 
 App API 页码/next_url 必须验证固定上游域与协议，不能无校验地跟随响应中的任意 URL。图片请求不携带 App API Authorization。
 
-可选普通浏览器登录：复用 gppt 5.1.0 的 PKCE 与 code 交换函数。管理页在用户浏览器新标签打开 Pixiv，用户从 Network 复制回调 code，通过鉴权与 CSRF 检查的 POST 接口回填一次。私密 verifier 留在 Python 子进程，refresh token 经受限管道交给 Go 保存；不控制浏览器、不收集密码。状态只在内存，同一时刻一次，最多 6 分钟，每分钟最多 3 次；取消/退出终止辅助进程。详情见 [pixiv-login.md](pixiv-login.md)。
+可选普通浏览器登录：复用 gppt 5.1.0 的 PKCE 与 code 交换函数。管理页在用户浏览器新标签打开 Pixiv，Linux 同机桌面可通过当前用户的 pixiv:// 接收器及私密 Unix socket 自动传回 code。跨设备可手动回填 code，或在客户端完成授权后向远端导入 refresh token；纯 Go Docker 不需要 GUI。手动 code 通过鉴权与 CSRF 检查的 POST 接口回填一次。私密 verifier 留在 Python 子进程，refresh token 经受限管道交给 Go 保存；不控制浏览器、不收集密码。状态只在内存，同一时刻一次，最多 6 分钟，每分钟最多 3 次；取消/退出终止辅助进程。详情见 [pixiv-login.md](pixiv-login.md)。
 
 ### 6.2 关注快照
 

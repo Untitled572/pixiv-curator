@@ -2,6 +2,7 @@
 """Private subprocess bridge to gppt 5.1.0; never print upstream diagnostics."""
 import contextlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -96,9 +97,17 @@ def browser_login():
     import gppt.token
     gppt.token.requests = SimpleNamespace(post=guarded_post)
     verifier, challenge = generate_pkce()
-    # Only the challenge URL crosses into the management UI; verifier stays in this process.
-    print(json.dumps({'login_url': build_login_url(challenge)}), flush=True)
-    raw = sys.stdin.readline(16385)
+    directory = os.getenv('PIXIV_CURATOR_CALLBACK_DIR') if sys.platform.startswith('linux') else None
+    if directory:
+        spec = importlib.util.spec_from_file_location('pixiv_callback', Path(__file__).with_name('pixiv-callback.py'))
+        callback = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(callback)
+        with callback.receiver(directory) as server:
+            print(json.dumps({'login_url': build_login_url(challenge)}), flush=True)
+            raw = callback.wait_code(server, sys.stdin)
+    else:
+        print(json.dumps({'login_url': build_login_url(challenge)}), flush=True)
+        raw = sys.stdin.readline(16385)
     if len(raw) > 16384:
         raise BridgeError('LOGIN_FAILED')
     supplied = json.loads(raw).get('code', '')

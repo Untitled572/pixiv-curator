@@ -46,20 +46,26 @@ func (p Process) LoginBrowser(ctx context.Context, publish func(string), codes <
 		return "", &Error{"LOGIN_FAILED"}
 	}
 	publish(first.URL)
-	var code string
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case code = <-codes:
-	}
-	if json.NewEncoder(in).Encode(map[string]string{"code": code}) != nil {
-		return "", &Error{"LOGIN_FAILED"}
-	}
-	in.Close()
 	var result struct {
 		Refresh string `json:"refresh_token"`
 	}
-	err = decoder.Decode(&result)
+	decoded := make(chan error, 1)
+	go func() { decoded <- decoder.Decode(&result) }()
+	select {
+	case err = <-decoded:
+	case <-ctx.Done():
+		_ = cmd.Cancel()
+		<-decoded
+		return "", ctx.Err()
+	case code := <-codes:
+		if json.NewEncoder(in).Encode(map[string]string{"code": code}) != nil {
+			_ = cmd.Cancel()
+			<-decoded
+			return "", &Error{"LOGIN_FAILED"}
+		}
+		in.Close()
+		err = <-decoded
+	}
 	waitErr := cmd.Wait()
 	if ctx.Err() != nil {
 		return "", ctx.Err()

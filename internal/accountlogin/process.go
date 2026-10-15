@@ -19,6 +19,8 @@ func (e *Error) Error() string { return e.Code }
 
 type Process struct{ Python, Helper string }
 
+func (p Process) AutoCallback() bool { return os.Getenv("PIXIV_CURATOR_CALLBACK_DIR") != "" }
+
 func (p Process) Enabled() bool { return p.Python != "" && p.Helper != "" }
 
 // Login runs only a configured executable; HTTP input never selects a command.
