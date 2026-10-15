@@ -4,7 +4,7 @@
 
 ## 一键本机联调
 
-运行 `./scripts/dev.sh` 自动准备可选 gppt 登录依赖和私密配置，并启动管理页面/API。在管理页点击「打开 Pixiv 登录窗口」即可使用账号登录；不需要手工提取 refresh token 或填写 OAuth 参数。说明见 [pixiv-login.md](pixiv-login.md)。没有桌面或只做离线检查时使用 `./scripts/dev.sh --no-login-helper`。下文保留手动部署方式。
+运行 `./scripts/dev.sh` 自动准备可选 gppt 登录依赖和私密配置，并启动管理页面/API。在管理页点击「打开 Pixiv 登录」使用普通浏览器授权；Linux 同机桌面支持自动回调，跨设备可导入 refresh token。说明见 [pixiv-login.md](pixiv-login.md)。没有桌面或只做离线检查时使用 `./scripts/dev.sh --no-login-helper`。下文保留手动部署方式。
 
 ## 本机首次启动
 
@@ -21,7 +21,7 @@ export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
 管理 token 和 refresh token 是纯文本，允许末尾换行。OAuth 文件为 JSON，字段 `client_id`、`client_secret` 必填，`hash_secret` 按应用协议提供；全部采用私密文件权限。Go 程序不内置 OAuth 应用凭据；一键脚本从已安装 gppt 的客户端配置生成匹配私密文件。refresh token 文件可先不存在，在 `/admin/login` 登录后的账号页面写入；其父目录必须可写，更新会原子替换文件。OAuth 配置变更后重启服务。
 
 1. 打开 `/admin/login`，使用管理 token 建立短期会话。
-2. 在账号页保存 refresh token 并发起关注同步，查看后台任务状态。
+2. 在账号页保存 refresh token；显示“已配置，等待认证”仅代表保存完成。点击“开始同步”，首次后台请求才进行令牌刷新验证，在“后台任务”查看完成或失败状态。
 3. 在画师页勾选确认，或输入 UID 后明确批准。关注不会自动变成采集许可。
 4. 查看作品预览和任务完成状态；首次采集、补全均在后台进行。
 5. 启动推荐，记录返回的 run_id，刷新候选并预览，明确批准后才加入供图范围。
@@ -35,7 +35,22 @@ export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
 
 `PUBLIC_BASE_URL` 必须同时满足管理页面访问 Origin 和 PicHub 返回图片 URL 可达的要求，监听地址由 `ADDR` 单独设置。反向代理可提供共同可达的域名；HTTPS 下 Cookie 启用 Secure。供图接口当前无独立服务鉴权，只部署到受控本机/内网，公网接入需要单独设计。
 
-图片出口直连固定 `i.pximg.net:443`，无任意 URL/代理配置，不转发账号 token、Cookie 或 Range，不建立原图缓存。需要确认当前网络可达 Pixiv OAuth/App API 与图片 CDN。
+Pixiv OAuth、App API 和图片请求默认继承进程的 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`（也支持对应小写变量）。未配置代理或命中 NO_PROXY 时直连；直连图片继续校验并固定 CDN 公网 IP，使用代理时由管理员配置的代理建立连接。图片目标仍限 `i.pximg.net`，不转发账号 token、Cookie 或 Range，不建立原图缓存。
+
+本机启动示例（替换为实际代理端口）：
+
+```sh
+HTTPS_PROXY=http://127.0.0.1:7890 \
+HTTP_PROXY=http://127.0.0.1:7890 \
+NO_PROXY=localhost,127.0.0.1,::1 \
+./scripts/dev.sh
+```
+
+Go 不自动读取 GNOME/KDE 的代理设置或 PAC，也不使用 ALL_PROXY；请明确导出上述变量。浏览器采用自己的代理设置，与服务器出口独立。修改代理后重启进程。
+
+Docker 必须显式传入代理环境变量；容器内的 127.0.0.1 指容器自身，宿主代理请使用容器可达地址（例如配置 host-gateway 后的 host.docker.internal）和实际监听端口。本机登录后导入远端 token 不会替远端配置网络。
+
+不提供任意第三方 Pixiv 镜像域名替换。账号与刷新请求始终指向官方 HTTPS 地址，镜像通常只覆盖图片且不能代替 OAuth/App API 出口。
 
 ## PicHub 图源配置
 

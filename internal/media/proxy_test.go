@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -287,5 +288,43 @@ func TestForwardAllowsOnlyBoundedSameHostRedirects(t *testing.T) {
 	}
 	if calls != 4 {
 		t.Fatalf("same-host redirect calls=%d; want 4", calls)
+	}
+}
+
+func TestEnvironmentTransportSelectionAndTargetBoundary(t *testing.T) {
+	for _, useProxy := range []bool{false, true} {
+		directCalls, proxyCalls := 0, 0
+		transport := environmentTransport{
+			direct: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				directCalls++
+				return successfulImage(io.NopCloser(strings.NewReader("image"))), nil
+			}),
+			proxied: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				proxyCalls++
+				return successfulImage(io.NopCloser(strings.NewReader("image"))), nil
+			}),
+			proxy: func(*http.Request) (*url.URL, error) {
+				if useProxy {
+					return url.Parse("http://127.0.0.1:7890")
+				}
+				return nil, nil
+			},
+		}
+		req, _ := http.NewRequest("GET", "https://i.pximg.net/img-original/4.jpg", nil)
+		response, err := transport.RoundTrip(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if useProxy && (proxyCalls != 1 || directCalls != 0) || !useProxy && (directCalls != 1 || proxyCalls != 0) {
+			t.Fatal("incorrect proxy routing")
+		}
+		req, _ = http.NewRequest("GET", "https://untrusted.example/image.jpg", nil)
+		if _, err = transport.RoundTrip(req); err == nil {
+			t.Fatal("invalid target accepted")
+		}
+		if directCalls+proxyCalls != 1 {
+			t.Fatal("invalid target reached network")
+		}
 	}
 }

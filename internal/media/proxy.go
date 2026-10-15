@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -25,12 +26,15 @@ type Proxy struct{ http *http.Client }
 
 func NewProxy(transport http.RoundTripper) *Proxy {
 	if transport == nil {
-		t := http.DefaultTransport.(*http.Transport).Clone()
-		t.Proxy = nil
-		t.ResponseHeaderTimeout = 10 * time.Second
-		t.TLSHandshakeTimeout = 10 * time.Second
-		t.DialContext = safeDial
-		transport = t
+		direct := http.DefaultTransport.(*http.Transport).Clone()
+		direct.Proxy = nil
+		direct.ResponseHeaderTimeout = 10 * time.Second
+		direct.TLSHandshakeTimeout = 10 * time.Second
+		direct.DialContext = safeDial
+		proxied := http.DefaultTransport.(*http.Transport).Clone()
+		proxied.ResponseHeaderTimeout = 10 * time.Second
+		proxied.TLSHandshakeTimeout = 10 * time.Second
+		transport = environmentTransport{direct: direct, proxied: proxied, proxy: http.ProxyFromEnvironment}
 	}
 	return &Proxy{http: &http.Client{Transport: transport, Timeout: 20 * time.Second, CheckRedirect: func(r *http.Request, via []*http.Request) error {
 		if len(via) > 3 || !domain.ValidImageURL(r.URL.String()) {
@@ -38,6 +42,27 @@ func NewProxy(transport http.RoundTripper) *Proxy {
 		}
 		return nil
 	}}}
+}
+
+// Retain DNS pinning for direct requests, but allow the operator-configured
+// proxy endpoint (often loopback) to perform CONNECT to the validated CDN URL.
+type environmentTransport struct {
+	direct, proxied http.RoundTripper
+	proxy           func(*http.Request) (*url.URL, error)
+}
+
+func (t environmentTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if !domain.ValidImageURL(r.URL.String()) {
+		return nil, &Error{Code: "INVALID_TARGET"}
+	}
+	proxy, err := t.proxy(r)
+	if err != nil {
+		return nil, &Error{Code: "UPSTREAM_UNAVAILABLE"}
+	}
+	if proxy == nil {
+		return t.direct.RoundTrip(r)
+	}
+	return t.proxied.RoundTrip(r)
 }
 
 func safeDial(ctx context.Context, network, address string) (net.Conn, error) {
