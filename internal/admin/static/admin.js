@@ -416,11 +416,13 @@
     } catch (error) { $("#account-status").textContent = "无法读取"; reportError(error, "读取账号状态"); }
   }
   let pixivLoginTimer;
+  let pixivLoginTab = null;
+  let pixivLoginDestination = "";
   const pixivLoginLabels = {
     LOGIN_UNAVAILABLE: "浏览器登录未启用，请使用 scripts/dev.sh 启动。",
     LOGIN_DEPENDENCY_UNAVAILABLE: "登录依赖不可用，请重新运行 scripts/dev.sh。",
     LOGIN_BROWSER_UNAVAILABLE: "登录浏览器尚未安装，请重新运行 scripts/dev.sh。",
-    LOGIN_DISPLAY_UNAVAILABLE: "服务所在电脑没有可用的桌面显示环境，请使用令牌方式。",
+    LOGIN_DISPLAY_UNAVAILABLE: "登录流程无法启动，请检查服务状态后重试。",
     LOGIN_TIMEOUT: "登录等待已超时，请重试。",
     LOGIN_RATE_LIMITED: "登录尝试过于频繁，请一分钟后重试。",
     CREDENTIAL_SAVE_FAILED: "授权已返回，但保存失败，请检查私密目录权限后重新登录。",
@@ -430,17 +432,45 @@
     const running = status.state === "running";
     $("#pixiv-login-start").disabled = !status.enabled || running;
     $("#pixiv-login-cancel").hidden = !running;
-    const labels = { idle: "准备就绪，登录期间最多等待 6 分钟。", running: "正在等待 Pixiv 登录窗口中的操作…", succeeded: "登录授权已保存。可以开始同步关注；暂停任务需手动恢复。", canceled: "登录已取消。" };
+    const labels = { idle: "准备就绪。点击后在新标签打开 Pixiv 登录。", running: "请在 Pixiv 标签完成登录，再复制 Network 中的授权 code 到此页提交。", succeeded: "登录授权已保存。可以开始同步关注；暂停任务需手动恢复。", canceled: "登录已取消。" };
     $("#pixiv-login-status").textContent = !status.enabled ? pixivLoginLabels.LOGIN_UNAVAILABLE : (pixivLoginLabels[status.error_code] || labels[status.state] || pixivLoginLabels.LOGIN_FAILED);
+    const loginURL = validPixivLoginURL(status.login_url);
+    const manualLink = $("#pixiv-login-open-link");
+    if (running && loginURL) {
+      manualLink.href = loginURL;
+      manualLink.hidden = false;
+      if (pixivLoginDestination !== loginURL) {
+        pixivLoginDestination = loginURL;
+        try { if (pixivLoginTab && !pixivLoginTab.closed) pixivLoginTab.location.replace(loginURL); }
+        catch (_) { /* The manual link remains available if the reserved tab cannot navigate. */ }
+      }
+    } else {
+      manualLink.hidden = true;
+      manualLink.removeAttribute("href");
+    }
     clearTimeout(pixivLoginTimer);
     if (running) pixivLoginTimer = setTimeout(loadPixivLogin, 1500);
     if (status.state === "succeeded") loadAccount();
+  }
+  function validPixivLoginURL(raw) {
+    if (typeof raw !== "string" || !raw) return "";
+    try {
+      const url = new URL(raw);
+      const allowed = (url.hostname === "app-api.pixiv.net" && url.pathname === "/web/v1/login") ||
+        (url.hostname === "accounts.pixiv.net" && url.pathname === "/login");
+      if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash || !allowed) return "";
+      return url.href;
+    } catch (_) { return ""; }
   }
   async function loadPixivLogin() {
     try { renderPixivLogin(await api("/admin/api/account/login")); }
     catch (error) { $("#pixiv-login-status").textContent = "无法读取登录状态，请刷新后重试。"; reportError(error, "读取登录状态"); }
   }
   $("#pixiv-login-start").addEventListener("click", async (event) => {
+    // Open synchronously in the user gesture so popup blockers allow this tab.
+    pixivLoginTab = window.open("about:blank", "_blank");
+    pixivLoginDestination = "";
+    if (pixivLoginTab) pixivLoginTab.opener = null;
     event.currentTarget.disabled = true;
     try { renderPixivLogin(await api("/admin/api/account/login", { method: "POST", body: "{}" })); }
     catch (error) {
@@ -451,6 +481,17 @@
   $("#pixiv-login-cancel").addEventListener("click", async () => {
     try { renderPixivLogin(await api("/admin/api/account/login/cancel", { method: "POST" })); }
     catch (error) { reportError(error, "取消登录"); }
+  });
+  $("#pixiv-login-code-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("#pixiv-login-code");
+    const code = input.value.trim();
+    input.value = "";
+    try {
+      await api("/admin/api/account/login/code", { method: "POST", body: JSON.stringify({ code }) });
+      showMessage("授权 code 已提交，正在等待 Pixiv 授权结果。");
+      await loadPixivLogin();
+    } catch (error) { reportError(error, "提交授权 code"); }
   });
   $("#reload-account").addEventListener("click", loadAccount);
   $("#credential-form").addEventListener("submit", async (event) => {

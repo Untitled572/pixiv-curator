@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ type AccountCredentialWriter interface {
 }
 
 type AccountLoginStatus struct {
+	LoginURL   string `json:"login_url,omitempty"`
 	Enabled    bool   `json:"enabled"`
 	State      string `json:"state"`
 	ErrorCode  string `json:"error_code,omitempty"`
@@ -39,6 +41,8 @@ type AccountLogin struct {
 	attempts    int
 	window      time.Time
 	timeout     time.Duration
+	codes       chan string
+	submitted   bool
 }
 
 func NewAccountLogin(ctx context.Context, p AccountLoginProvider, c AccountCredentialWriter) *AccountLogin {
@@ -65,6 +69,8 @@ func (s *AccountLogin) Start() (AccountLoginStatus, error) {
 	s.attempts++
 	ctx, cancel := context.WithTimeout(s.root, s.timeout)
 	s.cancel = cancel
+	s.codes = make(chan string, 1)
+	s.submitted = false
 	s.status = AccountLoginStatus{Enabled: true, State: "running", StartedAt: now.UnixMilli()}
 	s.wg.Add(1)
 	go s.run(ctx, cancel)
@@ -73,7 +79,21 @@ func (s *AccountLogin) Start() (AccountLoginStatus, error) {
 func (s *AccountLogin) run(ctx context.Context, cancel context.CancelFunc) {
 	defer s.wg.Done()
 	defer cancel()
-	token, err := s.provider.Login(ctx)
+	var token string
+	var err error
+	if p, ok := s.provider.(interface {
+		LoginBrowser(context.Context, func(string), <-chan string) (string, error)
+	}); ok {
+		token, err = p.LoginBrowser(ctx, func(url string) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			if ctx.Err() == nil {
+				s.status.LoginURL = url
+			}
+		}, s.codes)
+	} else {
+		token, err = s.provider.Login(ctx)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ctx.Err() != nil {
@@ -86,6 +106,7 @@ func (s *AccountLogin) run(ctx context.Context, cancel context.CancelFunc) {
 		}
 	}
 	token = ""
+	s.status.LoginURL = ""
 	s.status.FinishedAt = time.Now().UnixMilli()
 	s.cancel = nil
 	switch {
@@ -123,4 +144,20 @@ func (s *AccountLogin) Close() {
 	}
 	s.mu.Unlock()
 	s.wg.Wait()
+}
+
+// SubmitCode consumes a single authorization response for the current PKCE attempt.
+func (s *AccountLogin) SubmitCode(code string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 8192 || strings.ContainsAny(code, "\r\n") {
+		return domain.ErrInvalid
+	}
+	if s.status.State != "running" || s.status.LoginURL == "" || s.submitted || s.closed {
+		return domain.ErrConflict
+	}
+	s.submitted = true
+	s.codes <- code
+	return nil
 }

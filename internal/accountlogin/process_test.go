@@ -16,6 +16,15 @@ func TestProcessHelper(t *testing.T) {
 		return
 	}
 	switch os.Getenv("CURATOR_TEST_MODE") {
+	case "browser":
+		fmt.Println(`{"login_url":"https://app-api.pixiv.net/web/v1/login?code_challenge=test&code_challenge_method=S256"}`)
+		var input struct {
+			Code string `json:"code"`
+		}
+		if json.NewDecoder(os.Stdin).Decode(&input) != nil || input.Code != "fake-code" {
+			os.Exit(1)
+		}
+		fmt.Print(`{"refresh_token":"fake-refresh"}`)
 	case "success":
 		fmt.Print(`{"refresh_token":"fake-refresh"}`)
 	case "leak":
@@ -62,5 +71,30 @@ func TestProcessBoundaries(t *testing.T) {
 				t.Fatal("timeout did not cancel process")
 			}
 		})
+	}
+}
+
+func TestBrowserProcessProtocol(t *testing.T) {
+	executable, _ := os.Executable()
+	t.Setenv("CURATOR_TEST_HELPER", "1")
+	t.Setenv("CURATOR_TEST_MODE", "browser")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	codes := make(chan string, 1)
+	token, err := (Process{Python: executable, Helper: "-test.run=^TestProcessHelper$"}).LoginBrowser(ctx, func(url string) {
+		if !validLoginURL(url) {
+			t.Error("invalid URL")
+		}
+		codes <- "fake-code"
+	}, codes)
+	if err != nil || token != "fake-refresh" {
+		t.Fatalf("protocol failed: %v", err)
+	}
+}
+func TestBrowserURLBoundary(t *testing.T) {
+	for _, url := range []string{"https://evil.test/login?code_challenge=x&code_challenge_method=S256", "javascript:alert(1)", "https://accounts.pixiv.net@evil.test/login", "https://app-api.pixiv.net/web/v1/login?code_challenge=x"} {
+		if validLoginURL(url) {
+			t.Fatal("unsafe URL accepted")
+		}
 	}
 }

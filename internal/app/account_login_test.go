@@ -151,3 +151,40 @@ func TestAccountLoginRootContextExitRejectsRestart(t *testing.T) {
 		t.Fatal("Start after root context cancellation succeeded")
 	}
 }
+
+type browserLoginProvider struct{ ready chan struct{} }
+
+func (p browserLoginProvider) Enabled() bool                         { return true }
+func (p browserLoginProvider) Login(context.Context) (string, error) { panic("automated login used") }
+func (p browserLoginProvider) LoginBrowser(ctx context.Context, publish func(string), codes <-chan string) (string, error) {
+	publish("https://app-api.pixiv.net/web/v1/login?code_challenge=test")
+	close(p.ready)
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-codes:
+		return "fake-token", nil
+	}
+}
+func TestBrowserCodeLifecycle(t *testing.T) {
+	p := browserLoginProvider{make(chan struct{})}
+	s := NewAccountLogin(context.Background(), p, credentialWriterFunc(func(context.Context, string) error { return nil }))
+	defer s.Close()
+	if s.SubmitCode("early") == nil {
+		t.Fatal("accepted outside login")
+	}
+	if _, err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	<-p.ready
+	if err := s.SubmitCode("one-time-code"); err != nil {
+		t.Fatal(err)
+	}
+	if s.SubmitCode("duplicate") == nil {
+		t.Fatal("accepted duplicate")
+	}
+	status := waitAccountLogin(t, s, "succeeded")
+	if status.LoginURL != "" {
+		t.Fatal("URL retained after completion")
+	}
+}

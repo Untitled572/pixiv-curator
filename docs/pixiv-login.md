@@ -1,76 +1,38 @@
 # Pixiv 账号登录与一键联调
 
-更新：2026-10-10。
+更新：2026-10-15。
 
-## 启动
+## 使用普通浏览器登录
 
-在装有 Go 1.26+、Python 3.10+（含 venv/pip）和桌面环境的 Linux/macOS 上执行：
+启动服务并登录管理页面后，打开「Pixiv 账号」页，点击「打开 Pixiv 登录」。页面会在点击动作中预先打开一个新标签，待服务返回授权地址后导航到 Pixiv。若浏览器拦截或预留标签无法导航，可使用页面显示的“手动打开 Pixiv 登录链接”。
 
-```sh
-./scripts/dev.sh
-```
+使用普通浏览器完成 Pixiv 登录。登录前建议按 F12 打开开发者工具，在 Network 面板勾选 **Preserve log**，并筛选 `callback` 或 `pixiv`。登录完成后，在请求记录中找到 `pixiv://account/login?code=...` 回调，从请求 URL 复制 `code` 参数的值，或复制完整回调 URL，粘贴到管理页的授权输入框并提交。授权 code 有效期很短，取得后应立即提交；失效需重新开始登录。输入框采用密码类型；提交时页面会立即清空输入内容。服务端用 gppt 提供的 `oauth.generate_pkce`、`oauth.extract_code` 与 `token.exchange` 处理授权 code 并保存 refresh token。这里通过用户自己的浏览器完成页面交互，不使用 Playwright 或其他浏览器自动化。
 
-可以从其他目录调用脚本的绝对路径。脚本自动准备独立 Python 环境、锁定登录依赖、Chromium、匹配的 OAuth 配置和管理 token，构建并启动 Go 服务，检查就绪后打开管理登录页。管理页面与 API 内嵌在同一服务、同一端口，无需另开前端构建服务。
+验证码、两步验证及其他 Pixiv 风控是否通过由 Pixiv 决定，本流程不保证每次验证都能成功。若无法取得回调 code，可重试，或使用下方 Refresh Token 手动保存方式。Google 旧自动化登录方式已不再支持；请在普通浏览器里选择 Pixiv 提供的登录方式完成授权。
 
-终端只显示管理 token 文件路径，用本机编辑器打开并复制到登录页。文件默认在 `data/dev/admin-token`；不会输出令牌内容。登录管理页后进入「Pixiv 账号」，点击「打开 Pixiv 登录窗口」，在弹出的 **Pixiv 官方页面**输入账号、密码并完成验证码/两步验证。登录成功后自动保存 refresh token，页面只返回保存状态；接着可同步关注。任务仍需人工批准画师，暂停的任务也需显式恢复。
+## 配置与限制
 
-登录窗口出现在**运行 Go 服务的电脑**。远程服务器或无桌面容器请继续使用原来的 refresh token 导入方式。登录总等待时间最多 6 分钟，同一时刻仅允许一次登录，每分钟最多启动 3 次；可以点击取消。服务重启清除登录状态，已成功保存的 refresh token 保留。
+`./scripts/dev.sh` 准备 Python OAuth 依赖与私密配置并构建启动 Go 服务；需要 Python 3.10+（含 venv/pip），但登录无需 Chromium 或服务端桌面环境。默认开发数据目录为 `data/dev`，其中保存独立数据库和私密凭据。脚本的 `--no-login-helper` 参数可用于离线查看页面/API，此时不启用登录辅助能力。首次启动和管理 token 说明见 [README](../README.md)。
 
-首次下载依赖和浏览器需要网络。缺少系统动态库时按 Playwright 的诊断安装所需系统包，脚本不会自动 sudo；不要在 root 用户下关闭浏览器沙箱来规避错误。仅检查本地页面/API 可使用：
+登录在服务端最多等待 6 分钟，同一时刻仅允许一次登录，每分钟最多启动 3 次；可点击取消。服务重启会清除正在等待的登录状态，已成功保存的 refresh token 保留。远程部署时，登录链接会在打开管理页的浏览器中访问；无需在运行 Go 服务的主机上打开窗口。
 
-```sh
-./scripts/dev.sh --no-login-helper
-```
+第三方 OAuth 实现复用 [eggplants/get-pixivpy-token](https://github.com/eggplants/get-pixivpy-token) 发布版 **gppt 5.1.0** 的 `oauth.generate_pkce`、`oauth.extract_code` 与 `token.exchange`，许可与来源见 [third-party.md](third-party.md)。这些是 `oauth_login` 使用的同一组函数；Go 端不实现另一套 token 交换协议。登录链接从后端状态接口取得；前端只允许导航到 `https://app-api.pixiv.net/web/v1/login` 或兼容的 `https://accounts.pixiv.net/login` 地址，不接受其他域名。授权 code 只通过鉴权后的管理 API 提交，不写入 URL、日志或浏览器存储。
 
-此模式不安装登录依赖、不启用浏览器登录。启动脚本的 Ctrl+C 会停止其启动的服务和未完成登录；不会停止占用端口的其他服务。
-
-## 可选配置
-
-```sh
-PIXIV_CURATOR_DEV_DIR=/absolute/private/curator-dev \
-PIXIV_CURATOR_ADDR=127.0.0.1:5723 \
-PIXIV_CURATOR_OPEN_BROWSER=0 \
-./scripts/dev.sh
-```
-
-默认目录 `data/dev` 被 Git 忽略，保存独立目录数据库、私密凭据、Python 环境与浏览器缓存。已有管理 token 保留；不要在多个进程中共用该数据库。页面或 Go 代码修改后停止并重新运行脚本即可重新构建。
-
-手动启动二进制时，额外配置 `PIXIV_CURATOR_LOGIN_PYTHON`（隔离 Python 的绝对路径）与 `PIXIV_CURATOR_LOGIN_HELPER`（`scripts/pixiv-login.py` 绝对路径），并提供现有 OAuth/refresh token 文件配置。两个登录路径必须同时设置；不设置则保留纯 Go 运行方式。镜像默认不打包 Python/Chromium，也不提供桌面登录窗口。
-
-## 第三方接入
-
-采用 [eggplants/get-pixivpy-token](https://github.com/eggplants/get-pixivpy-token) 的 PyPI 发布版 **gppt 5.1.0**，MIT 许可。使用公开库接口 `gppt.login(headless=False)`；不使用会保存账号密码的 profile/get_token 模式，也不复制其 Python 实现。许可副本和来源见 [third-party.md](third-party.md)。所有 Python 运行依赖版本锁定于 `scripts/requirements-login.txt`，不会改动 Go 依赖。
-
-启动 helper 从所安装 gppt 的客户端常量生成匹配的私密 OAuth 文件；仓库不写入应用密钥常量。存在其他客户端配置时拒绝覆盖，避免混用。登录结果通过受限子进程管道返回 Go，Go 使用现有原子凭据写入接口保存。第三方原始异常、回调 URL 和令牌不进入 HTTP 或服务日志。
-
-适配层关闭 token 请求重定向、禁止登录过程中自动安装浏览器/系统包，并启用 Chromium 沙箱。浏览器会使用临时会话目录，退出/取消后清理。网站 UI、验证码或上游协议变化可能导致登录失败；该功能不绕过验证码，也不代表已完成真实账号验收。
-
-## 接口与验证
+## 接口
 
 全部接口沿用管理 Bearer/会话鉴权；Cookie 写请求需要 Origin 与 CSRF：
 
 | 接口 | 行为 |
 | --- | --- |
-| `GET /admin/api/account/login` | 返回 enabled、state、脱敏 error_code 和时间 |
-| `POST /admin/api/account/login`，JSON `{}` | 启动异步本机登录，202；重复运行409，频率超限429 |
-| `POST /admin/api/account/login/cancel` | 请求取消，202；轮询直到 canceled |
+| `GET /admin/api/account/login` | 返回 enabled、state、脱敏 error_code 和时间；仅在 running 且授权链接就绪后包含 `login_url` |
+| `POST /admin/api/account/login`，JSON `{}` | 启动授权流程，返回 202 |
+| `POST /admin/api/account/login/code`，JSON `{"code":"…"}` | 提交 code 或完整 `pixiv://account/login?code=...` 回调 URL，返回 202；code 仅允许提交一次 |
+| `POST /admin/api/account/login/cancel` | 取消当前流程，返回 202 |
 
-状态为 idle/running/succeeded/failed/canceled。succeeded 表示授权已保存，后续采集成功与否请看后台任务；不自动开始采集或修改 Pixiv 关注。
+状态包括 idle/running/succeeded/failed/canceled。succeeded 表示授权已保存；不会自动开始采集或修改 Pixiv 关注。后续采集任务仍需单独触发与管理。
 
-离线检查：
+## 验证说明
 
-```sh
-make check
-python3 scripts/test-login-helper.py
-sh -n scripts/dev.sh
-```
-
-测试覆盖并发登录、取消/超时、保存失败、鉴权/CSRF、错误脱敏和 OAuth 重定向，均不访问 Pixiv。真实账号验收需用户在 Pixiv 窗口完成登录，再验证同步和出图；不要把模拟测试当作实网通过。
-
-## Google 登录提示“浏览器可能不安全”
-
-辅助窗口由 Playwright 控制，Google 会限制自动化浏览器登录，见 [Google 支持说明](https://support.google.com/accounts/answer/7675428)。当前集成不支持在辅助窗口中使用 Google 登录，不通过隐藏自动化标记或关闭浏览器安全功能绕过限制。
-
-可在辅助窗口选择 Pixiv 自身的“通过邮箱登录”并完成验证。如果不确定绑定邮箱，可在日常浏览器通过 Google 登录 [Pixiv 账号门户](https://accounts.pixiv.net/)，确认邮箱或管理登录方式，再回辅助窗口重试。参考 [Pixiv 官方登录说明](https://www.pixiv.help/hc/en-us/articles/235583008-I-ve-lost-my-password)。日常浏览器的登录不会自动传回本项目；不要将 Google 密码填入 Pixiv 密码栏。真实账号验证仍需用户操作。
+离线测试不访问 Pixiv，不能证明真实账号登录或验证码流程成功。真实联调应由用户在普通浏览器完成 Pixiv 登录，并确认状态变为成功；不要将 mock、页面加载或 API 接受请求描述为真实认证通过。
 
 管理登录页的“记住登录（30 天）”只保存会话 Cookie，不保存管理令牌。未勾选时为浏览器会话 Cookie，服务端最长 12 小时；退出登录或服务重启均使会话失效。

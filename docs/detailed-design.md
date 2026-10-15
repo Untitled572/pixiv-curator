@@ -207,7 +207,7 @@ running --取消请求--> 批次边界安全退出 -> canceled
 
 App API 页码/next_url 必须验证固定上游域与协议，不能无校验地跟随响应中的任意 URL。图片请求不携带 App API Authorization。
 
-本机可选浏览器登录：通过 gppt 5.1.0 的独立 Python 进程打开 Pixiv 官方登录页，密码和验证流程在该页面完成，返回的 refresh token 仅通过受限管道交给 Go 原子保存。异步状态仅保存在内存，同一时刻一次，最多等待 6 分钟，每分钟最多 3 次；取消/服务退出终止进程树并清理临时目录。详情见 [pixiv-login.md](pixiv-login.md)。
+可选普通浏览器登录：复用 gppt 5.1.0 的 PKCE 与 code 交换函数。管理页在用户浏览器新标签打开 Pixiv，用户从 Network 复制回调 code，通过鉴权与 CSRF 检查的 POST 接口回填一次。私密 verifier 留在 Python 子进程，refresh token 经受限管道交给 Go 保存；不控制浏览器、不收集密码。状态只在内存，同一时刻一次，最多 6 分钟，每分钟最多 3 次；取消/退出终止辅助进程。详情见 [pixiv-login.md](pixiv-login.md)。
 
 ### 6.2 关注快照
 
@@ -367,8 +367,9 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 | POST | /admin/api/jobs/{id}/cancel | 请求取消 |
 | POST | /admin/api/jobs/{id}/resume | 仅 paused_auth 可用；检查账号状态后恢复 pending |
 | GET | /admin/api/account/status | 只返回凭据状态 |
-| GET/POST | /admin/api/account/login | 查询本机登录状态 / 以空 JSON 对象启动登录，202 |
-| POST | /admin/api/account/login/cancel | 取消本机浏览器登录，202 |
+| GET/POST | /admin/api/account/login | 查询登录状态及就绪的 login_url / 以空 JSON 对象启动登录，202 |
+| POST | /admin/api/account/login/code | 提交一次授权 code 或完整回调 URL，202 |
+| POST | /admin/api/account/login/cancel | 取消浏览器授权，202 |
 | POST | /admin/api/account/credentials | 写入/更新凭据，不回显 |
 | GET | /admin/api/stats | 待实现：目录数、状态、任务和近期错误 |
 

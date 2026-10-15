@@ -101,22 +101,17 @@ PY
   marker="$venv/.requirements-login.sha256"
   installed_hash=
   if [ -r "$marker" ]; then installed_hash=$(cat "$marker"); fi
-  if [ "$installed_hash" != "$req_hash" ] || ! "$venv/bin/python" -c 'import importlib.metadata, gppt, playwright; from pathlib import Path; from playwright.sync_api import sync_playwright; assert importlib.metadata.version("gppt") == "5.1.0"; p = sync_playwright().start(); path = Path(p.chromium.executable_path); p.stop(); assert path.is_file()' >/dev/null 2>&1 || ! "$venv/bin/python" -m pip check >/dev/null 2>&1; then
+  if [ "$installed_hash" != "$req_hash" ] || ! "$venv/bin/python" -c 'import importlib.metadata, gppt; assert importlib.metadata.version("gppt") == "5.1.0"' >/dev/null 2>&1 || ! "$venv/bin/python" -m pip check >/dev/null 2>&1; then
     rm -f "$marker"
     "$venv/bin/python" -m pip install --disable-pip-version-check -r "$req"
     "$venv/bin/python" -c 'import gppt, playwright; import importlib.metadata; assert importlib.metadata.version("gppt") == "5.1.0"'
     "$venv/bin/python" -m pip check
-    "$venv/bin/python" -m playwright install chromium
-    "$venv/bin/python" -c 'from pathlib import Path; from playwright.sync_api import sync_playwright; p = sync_playwright().start(); path = Path(p.chromium.executable_path); p.stop(); assert path.is_file()'
     marker_tmp="$marker.tmp.$$"
     printf '%s\n' "$req_hash" > "$marker_tmp"
     chmod 600 "$marker_tmp"
     mv -f "$marker_tmp" "$marker"
   fi
   "$venv/bin/python" "$helper" configure "$oauth_file"
-  if [ "$(uname -s)" = Linux ] && [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    echo "未检测到图形显示环境；服务仍会启动，浏览器登录将返回 LOGIN_DISPLAY_UNAVAILABLE。" >&2
-  fi
   export PIXIV_CURATOR_LOGIN_PYTHON="$venv/bin/python"
   export PIXIV_CURATOR_LOGIN_HELPER="$helper"
 fi

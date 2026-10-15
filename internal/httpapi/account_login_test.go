@@ -44,6 +44,7 @@ func TestAccountLoginRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 		{http.MethodGet, "/admin/api/account/login"},
 		{http.MethodPost, "/admin/api/account/login"},
 		{http.MethodPost, "/admin/api/account/login/cancel"},
+		{http.MethodPost, "/admin/api/account/login/code"},
 	} {
 		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
 		rec := httptest.NewRecorder()
@@ -69,7 +70,7 @@ func TestAccountLoginRoutesRequireAuthenticationAndCSRF(t *testing.T) {
 	if session == nil {
 		t.Fatal("session cookie missing")
 	}
-	write := httptest.NewRequest(http.MethodPost, "/admin/api/account/login/cancel", strings.NewReader(`{}`))
+	write := httptest.NewRequest(http.MethodPost, "/admin/api/account/login/code", strings.NewReader(`{}`))
 	write.AddCookie(session)
 	write.Header.Set("Origin", "https://curator.test")
 	writeRec := httptest.NewRecorder()

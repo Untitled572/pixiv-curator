@@ -32,6 +32,20 @@ func RegisterAccountLogin(mux *http.ServeMux, s *app.AccountLogin, auth *Auth) {
 		}
 		writeJSON(w, 202, status)
 	})))
+	mux.Handle("POST /admin/api/account/login/code", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input struct {
+			Code string `json:"code"`
+		}
+		if !decodeBody(w, r, &input) {
+			return
+		}
+		if err := s.SubmitCode(input.Code); err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 202, s.Status())
+	})))
+
 	mux.Handle("POST /admin/api/account/login/cancel", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.Cancel()
 		writeJSON(w, 202, s.Status())

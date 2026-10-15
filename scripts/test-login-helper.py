@@ -60,6 +60,26 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn('--no-sandbox', gppt.browser.BROWSER_ARGS)
         self.assertIs(gppt.browser.install, bridge.installed_only)
 
+    def test_browser_pkce_uses_no_automation(self):
+        gppt, mods = modules()
+        oauth = ModuleType('gppt.oauth')
+        oauth.generate_pkce = lambda: ('private-verifier', 'public-challenge')
+        oauth.build_login_url = lambda challenge: 'https://app-api.pixiv.net/web/v1/login?code_challenge=' + challenge
+        oauth.extract_code = lambda value: value
+        oauth.Authorization = lambda **kw: SimpleNamespace(**kw)
+        mods['gppt.oauth'] = oauth
+        def exchange(auth):
+            self.assertEqual(auth.code, 'sample-code')
+            self.assertEqual(auth.code_verifier, 'private-verifier')
+            print('private upstream output')
+            return SimpleNamespace(refresh_token='test-refresh')
+        gppt.token.exchange = exchange
+        out = io.StringIO()
+        with patch.dict(sys.modules, mods), patch.object(bridge, 'dependencies', return_value=gppt), patch.object(sys, 'stdin', io.StringIO('{"code":"sample-code"}\n')), contextlib.redirect_stdout(out):
+            self.assertEqual(bridge.browser_login(), {'refresh_token': 'test-refresh'})
+        self.assertEqual(list(json.loads(out.getvalue())), ['login_url'])
+        self.assertNotIn('private', out.getvalue())
+
     def test_errors_do_not_expose_upstream_payload(self):
         out = io.StringIO()
         with patch.object(sys, 'argv', ['helper', 'login']), patch.object(bridge, 'login', side_effect=RuntimeError('private-token-value')), contextlib.redirect_stdout(out):

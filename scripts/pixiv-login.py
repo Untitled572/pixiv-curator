@@ -90,11 +90,34 @@ def login():
     return {'refresh_token': value}
 
 
+def browser_login():
+    dependencies()
+    from gppt.oauth import generate_pkce, build_login_url, extract_code, Authorization
+    import gppt.token
+    gppt.token.requests = SimpleNamespace(post=guarded_post)
+    verifier, challenge = generate_pkce()
+    # Only the challenge URL crosses into the management UI; verifier stays in this process.
+    print(json.dumps({'login_url': build_login_url(challenge)}), flush=True)
+    raw = sys.stdin.readline(16385)
+    if len(raw) > 16384:
+        raise BridgeError('LOGIN_FAILED')
+    supplied = json.loads(raw).get('code', '')
+    if not isinstance(supplied, str):
+        raise BridgeError('LOGIN_FAILED')
+    code = extract_code(supplied)
+    with open(os.devnull, 'w') as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        issued = gppt.token.exchange(Authorization(code=code, code_verifier=verifier))
+    return {'refresh_token': issued.refresh_token}
+
+
 def main():
     os.umask(0o077)
     try:
         if len(sys.argv) == 3 and sys.argv[1] == 'configure':
             configure(sys.argv[2])
+            return 0
+        if sys.argv[1:] == ['browser-login']:
+            json.dump(browser_login(), sys.stdout)
             return 0
         if sys.argv[1:] == ['login']:
             # Go receives this through a bounded private pipe, never the HTTP response.
