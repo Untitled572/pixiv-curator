@@ -69,6 +69,7 @@
   }
   function setTab(tabName) {
     activeTab = tabName;
+    $("#current-page-title").textContent = { library: "画师图库", discover: "发现画师", settings: "设置" }[tabName];
     $$(".tab").forEach((tab) => {
       const selected = tab.dataset.tab === tabName;
       tab.classList.toggle("is-active", selected);
@@ -82,12 +83,18 @@
     if (tabName === "discover") loadLatestRecommendations();
     if (tabName === "settings") { loadAccounts(); loadNetwork(); loadPreferences(); startAccountPolling(); }
   }
+  const mobileNavigation = window.matchMedia("(max-width: 767px)");
+  function updateNavigationOrientation() {
+    $(".tabs").setAttribute("aria-orientation", mobileNavigation.matches ? "horizontal" : "vertical");
+  }
+  mobileNavigation.addEventListener("change", updateNavigationOrientation);
+  updateNavigationOrientation();
   $$(".tab").forEach((tab, index, tabs) => {
     tab.addEventListener("click", () => setTab(tab.dataset.tab));
     tab.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
-      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (event.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+      const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (index + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : tabs.length - 1)) % tabs.length;
       tabs[next].focus(); tabs[next].click();
     });
   });
