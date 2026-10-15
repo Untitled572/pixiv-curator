@@ -72,7 +72,7 @@ PicHub 可设置 JSON 响应，图片字段路径为 `url`。按需把 `account_
 
 设置页中的服务端代理模式影响 Curator 后续发出的 Pixiv OAuth、App API 等服务请求；它不控制浏览器预览或 PicHub 下载原图时使用的网络。浏览器按本机代理设置访问预览，PicHub 按其运行环境访问返回的图片 URL。保存代理只影响新建请求，不切换正在运行的请求。
 
-服务端支持继承环境变量、直连或配置 HTTP/HTTPS 代理。环境变量包括 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及小写对应项；不自动读取桌面 PAC，也不支持 SOCKS。自定义代理凭据只写入私密配置，管理 GET 不回显密码。Docker 中的 `127.0.0.1` 指容器自身，代理必须从容器网络可达。
+未保存网络配置时，服务端默认使用 `http://127.0.0.1:7890` HTTP 代理；已保存的配置保持不变。设置页明文显示代理地址，支持继承环境变量、直连或配置 HTTP/HTTPS 代理。环境变量包括 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及小写对应项；不自动读取桌面 PAC，也不支持 SOCKS。自定义代理凭据只写入私密配置，管理 GET 不回显密码。Docker 中的 `127.0.0.1` 指容器自身，代理必须从容器网络可达。
 
 网络设置文件默认是数据库父目录下的 `private/network.json`，可由 `PIXIV_CURATOR_NETWORK_CONFIG_FILE` 指定。更换部署位置时要一并迁移此文件。
 

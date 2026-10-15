@@ -516,12 +516,16 @@
   });
   $("#reload-accounts").addEventListener("click", loadAccounts);
 
+  let savedProxyAddress = "";
+  let proxyHasCredentials = false;
   async function loadNetwork() {
     try {
       const result = await api("/admin/api/settings/network");
       const mode = result.mode || "system";
       const radio = $(`input[name="network-mode"][value="${mode}"]`); if (radio) radio.checked = true;
-      $("#network-proxy-url").value = "";
+      savedProxyAddress = result.proxy_address || "";
+      proxyHasCredentials = Boolean(result.has_credentials);
+      $("#network-proxy-url").value = savedProxyAddress || "http://127.0.0.1:7890";
       const address = result.proxy_address || "未设置";
       $("#network-proxy-current").textContent = `当前模式：${mode === "custom" ? "自定义代理" : mode === "direct" ? "直接连接" : "继承环境"}${mode === "custom" ? ` · 地址 ${address}${result.has_credentials ? "（凭据已保存）" : ""}` : ""}`;
       $("#network-status").textContent = "";
@@ -534,9 +538,11 @@
     const mode = $('input[name="network-mode"]:checked')?.value || "system";
     const input = $("#network-proxy-url"), status = $("#network-status"); status.textContent = "正在保存…";
     try {
-      const result = await api("/admin/api/settings/network", { method: "PUT", body: JSON.stringify({ mode, proxy_url: mode === "custom" ? input.value.trim() : "" }) });
-      input.value = ""; await loadNetwork(); status.textContent = "代理设置已保存，影响后续服务端请求。";
-      if (result.has_credentials) input.value = "";
+      const address = input.value.trim();
+      // An unchanged redacted address must retain the saved proxy credentials.
+      const keepCredentials = proxyHasCredentials && address === savedProxyAddress;
+      await api("/admin/api/settings/network", { method: "PUT", body: JSON.stringify({ mode, proxy_url: mode === "custom" && !keepCredentials ? address : "" }) });
+      await loadNetwork(); status.textContent = "代理设置已保存，影响后续服务端请求。";
     } catch (error) { status.textContent = "保存失败"; report(error, "保存代理设置"); }
     finally { submit.disabled = false; }
   });

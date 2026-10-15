@@ -32,7 +32,7 @@ type Manager struct {
 }
 
 func Open(path string) (*Manager, error) {
-	m := &Manager{path: path, settings: Settings{Mode: "system"}}
+	m := &Manager{path: path, settings: Settings{Mode: "custom", ProxyURL: "http://127.0.0.1:7890"}}
 	if _, err := os.Lstat(path); os.IsNotExist(err) {
 		return m, nil
 	} else if err != nil {

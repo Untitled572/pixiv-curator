@@ -99,3 +99,28 @@ func TestConcurrentNetworkSettings(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestDefaultProxyAndExplicitModesSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "network.json")
+	m, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("GET", "https://app-api.pixiv.net/", nil)
+	proxy, err := m.Proxy(req)
+	if err != nil || proxy == nil || proxy.String() != "http://127.0.0.1:7890" {
+		t.Fatal("incorrect default proxy")
+	}
+	for _, mode := range []string{"system", "direct"} {
+		if err := m.Save(Settings{Mode: mode}); err != nil {
+			t.Fatal(err)
+		}
+		restored, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if restored.Status().Mode != mode || restored.Status().Address != "" {
+			t.Fatal("saved mode replaced by default")
+		}
+	}
+}
