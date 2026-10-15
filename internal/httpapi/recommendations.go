@@ -7,6 +7,14 @@ import (
 )
 
 func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth) {
+	mux.Handle("GET /admin/api/recommendation-runs/latest", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		run, items, err := s.Latest(r.Context())
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"run": run, "items": items})
+	})))
 	mux.Handle("POST /admin/api/recommendations", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		runID, jobID, err := s.Start(r.Context())
 		if err != nil {

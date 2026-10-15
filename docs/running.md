@@ -1,95 +1,87 @@
-# 运行与 PicHub 接入
+# 运行、账号与 PicHub 接入
 
-本轮已通过离线/mock 测试、本机二进制 HTTP 冒烟与跨平台编译；真实 Pixiv 账号、CDN 出口、PicHub 下载/显示/收藏和新版本容器尚未验收。以下是接入步骤，不能作为实网通过记录。
+全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过。真实 Pixiv、CDN、PicHub 验收尚未完成。本文描述当前契约，不把配置存在或 mock 通过说成实网可用。
 
-## 一键本机联调
-
-运行 `./scripts/dev.sh` 自动准备可选 gppt 登录依赖和私密配置，并启动管理页面/API。在管理页点击「打开 Pixiv 登录」使用普通浏览器授权；Linux 同机桌面支持自动回调，跨设备可导入 refresh token。说明见 [pixiv-login.md](pixiv-login.md)。没有桌面或只做离线检查时使用 `./scripts/dev.sh --no-login-helper`。下文保留手动部署方式。
-
-## 本机首次启动
-
-需要 Go 1.26+。先执行 `make check build`。在仓库外建立私密目录（POSIX 0700），生成随机管理 token 文件（0600），勿把真实内容写进命令行历史。设置以下环境变量后运行 `./bin/pixiv-curator`：
+## 本机启动
 
 ```sh
-export PIXIV_CURATOR_ADMIN_TOKEN_FILE=/absolute/private/admin-token
-export PIXIV_CURATOR_PIXIV_TOKEN_FILE=/absolute/private/pixiv-refresh-token
-export PIXIV_CURATOR_OAUTH_CONFIG_FILE=/absolute/private/oauth.json
-export PIXIV_CURATOR_DATABASE_PATH=/absolute/data/curator.db
-export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
-```
-
-管理 token 和 refresh token 是纯文本，允许末尾换行。OAuth 文件为 JSON，字段 `client_id`、`client_secret` 必填，`hash_secret` 按应用协议提供；全部采用私密文件权限。Go 程序不内置 OAuth 应用凭据；一键脚本从已安装 gppt 的客户端配置生成匹配私密文件。refresh token 文件可先不存在，在 `/admin/login` 登录后的账号页面写入；其父目录必须可写，更新会原子替换文件。OAuth 配置变更后重启服务。
-
-1. 打开 `/admin/login`，使用管理 token 建立短期会话。
-2. 在账号页保存 refresh token；显示“已配置，等待认证”仅代表保存完成。点击“开始同步”，首次后台请求才进行令牌刷新验证，在“后台任务”查看完成或失败状态。
-3. 在画师页勾选确认，或输入 UID 后明确批准。关注不会自动变成采集许可。
-4. 查看作品预览和任务完成状态；首次采集、补全均在后台进行。
-5. 启动推荐，记录返回的 run_id，刷新候选并预览，明确批准后才加入供图范围。
-6. 保存全局筛选规则，按作品设置喜欢/排除。默认 safe、non_ai；未知分类始终排除。
-
-`paused_auth` 表示账号未配置或认证需要修复；保存凭据后显式恢复任务。429/网络错误有限重试，永久失败可手动重新排队。周期采集每 6 小时扫描已批准且允许采集的画师；暂停采集保留现有供图，屏蔽立即停止新供图。取消关注不删除目录。
-
-## 管理页网络设置
-
-在“网络设置”选择：
-
-- 继承环境变量（默认）：使用服务进程的 HTTP_PROXY/HTTPS_PROXY/NO_PROXY。
-- 直连：忽略这些代理变量。
-- 自定义：填写 HTTP/HTTPS 代理地址，例如 `http://127.0.0.1:7890`；保存后对后续 Pixiv API、刷新与图片请求生效。新启动的登录辅助进程同样继承新配置，正在进行的请求或登录流程不会中途切换。
-
-自定义代理不使用 NO_PROXY 绕过规则。允许代理 URL 携带用户名/密码，但页面只返回去掉凭据的地址。自定义模式中输入框留空表示保留已有地址；切换到继承或直连会清除保存的代理地址。保存成功不代表代理已连通，可重新排队失败任务验证。当前不支持在表单配置 SOCKS/PAC 或镜像域名。
-
-配置默认存于数据库父目录的 `private/network.json`，目录 0700、文件 0600，独立于数据库设置表；可用 `PIXIV_CURATOR_NETWORK_CONFIG_FILE` 指定路径。Docker 默认 `/data/private/network.json`，需要对应父目录可写并持久挂载。备份时应将该私密文件一起备份。保存失败不会改变当前出口。
-
-## 后台任务进度
-
-任务页每 2 秒刷新，按运行、等待和已结束分组，并提供活动/全部/失败筛选。计数是本次加载的任务数，不是全库总数。分页任务展示**已提交页数和已处理记录数**，包括更新已有记录，不表示新增数量；进度与分页结果同事务提交，自动重试保留。上游未提供总量时不显示百分比。新迁移前已完成的历史任务无法补算进度。
-
-运行中的错误提示是上次失败原因；等待重试时显示下一次可执行时间。取消中不重复展示过期错误，已取消任务不显示历史错误码。
-
-## 容器与网络
-
-构建流程见 [发布文档](releasing.md)。容器使用 UID 65532；挂载 `/data` 持久保存数据库，单实例运行，确保可写。管理 token/OAuth 文件可只读挂载；refresh token 的**整个私密父目录**需可写挂载以支持原子轮换，不能只读挂载这个单文件。主机权限与容器 UID 对应，勿将凭据放进镜像。
-
-`PUBLIC_BASE_URL` 必须同时满足管理页面访问 Origin 和 PicHub 返回图片 URL 可达的要求，监听地址由 `ADDR` 单独设置。反向代理可提供共同可达的域名；HTTPS 下 Cookie 启用 Secure。供图接口当前无独立服务鉴权，只部署到受控本机/内网，公网接入需要单独设计。
-
-Pixiv OAuth、App API 和图片请求默认继承进程的 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`（也支持对应小写变量）。未配置代理或命中 NO_PROXY 时直连；直连图片继续校验并固定 CDN 公网 IP，使用代理时由管理员配置的代理建立连接。图片目标仍限 `i.pximg.net`，不转发账号 token、Cookie 或 Range，不建立原图缓存。
-
-本机启动示例（替换为实际代理端口）：
-
-```sh
-HTTPS_PROXY=http://127.0.0.1:7890 \
-HTTP_PROXY=http://127.0.0.1:7890 \
-NO_PROXY=localhost,127.0.0.1,::1 \
 ./scripts/dev.sh
 ```
 
-Go 不自动读取 GNOME/KDE 的代理设置或 PAC，也不使用 ALL_PROXY；请明确导出上述变量。浏览器采用自己的代理设置，与服务器出口独立。修改代理后重启进程。
+默认监听 `127.0.0.1:5722`，数据存于 `data/dev`，可用 `PIXIV_CURATOR_DEV_DIR` 指定目录。脚本创建私密管理 token，并启动 API、后台 Worker 和 Go 模板管理页。当前主应用只使用 Refresh Token 导入，不提供浏览器 PKCE 登录。
 
-Docker 必须显式传入代理环境变量；容器内的 127.0.0.1 指容器自身，宿主代理请使用容器可达地址（例如配置 host-gateway 后的 host.docker.internal）和实际监听端口。本机登录后导入远端 token 不会替远端配置网络。
+开发脚本会准备 OAuth 应用参数文件。缺少该文件时才准备锁定的 gppt 依赖并生成文件；文件已经存在时正常启动不再安装登录依赖，但脚本仍使用 Python 3 标准库。避免手工覆盖已有 OAuth 参数。无须自动打开浏览器时设置 `PIXIV_CURATOR_OPEN_BROWSER=0`。旧 Python 浏览器授权流程见[历史登录说明](pixiv-login.md)，不属于当前运行步骤。
 
-不提供任意第三方 Pixiv 镜像域名替换。账号与刷新请求始终指向官方 HTTPS 地址，镜像通常只覆盖图片且不能代替 OAuth/App API 出口。
+生产部署可直接运行构建的 Go 二进制。至少设置：
 
-## PicHub 图源配置
+```sh
+export PIXIV_CURATOR_ADDR=127.0.0.1:5722
+export PIXIV_CURATOR_DATABASE_PATH=/srv/pixiv-curator/curator.db
+export PIXIV_CURATOR_ADMIN_TOKEN_FILE=/srv/pixiv-curator/private/admin-token
+export PIXIV_CURATOR_OAUTH_CONFIG_FILE=/srv/pixiv-curator/private/oauth.json
+export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
+./pixiv-curator
+```
 
-在 PicHub 中新增 JSON 图源，按其实际配置界面的字段填写：
+管理 token 与 OAuth 文件应处于私密目录，POSIX 目录权限 0700、文件权限 0600。管理 token 文件不配置或为空时管理操作拒绝。`PUBLIC_BASE_URL` 只用于管理 Origin 校验，不用于拼装 `/random` 图片 URL。
 
-| 字段 | 值 |
-| --- | --- |
-| URL | `http://实际可达主机:5722/random?format=json&collection=preferred` |
-| 响应类型 | JSON |
-| 图片路径 | `url` |
-| proxy_mode | 开启 |
-| Headers | 不放 Pixiv 或 Curator 管理凭据 |
+## 添加、迁移和管理 Pixiv 账号
 
-如果 PicHub 在容器中，`127.0.0.1` 指向它自己，不能指向主机 Curator；使用共同网络内的服务地址或共同域名，并同步设置 Curator 的 `PUBLIC_BASE_URL`。不要把这里的示例当作已经发布的图源配置文件格式。
+在管理页登录后进入“设置 → Pixiv 账号”，输入显示名称和 Refresh Token 并保存。服务端会尝试 OAuth 刷新并验证返回的 Pixiv 用户 ID；只有身份验证成功才新增账号并入队首次关注同步。账号 ID 和 Refresh Token 绑定，更新凭据必须仍属于同一 Pixiv 身份。相同 Pixiv 用户 ID 不能重复添加。Token 只写入独立私密文件，响应和账号列表不回显 token 或文件路径。
 
-验收时使用独立测试目录：请求 JSON，重复访问同一 `/i/{id}/{page}` 确认身份不变，检查 PicHub 下载、显示和收藏；再验证预取和重复请求不会写入作品喜欢。空目录返回 503 `CATALOG_EMPTY`，过滤后无结果返回 404 `NO_MATCH`，非法参数返回 422。小图库可能返回 `repeated=true`，内容排除规则不会放宽。
+首次同步成功后，账号关注关系写入 `account_artists`，发现的关注画师自动批准、启用采集并入队，`blocked` 和 `rejected` 状态保留。同一画师由多个账号关注时关系去重，作品目录共用。服务在运行期间每 6 小时为活动账号安排关注同步，并为启用采集的画师安排增量扫描。周期从本进程启动时开始，重启后重新计时；下次触发时间没有持久化。账号加入后首次关注同步独立入队，不必等 6 小时。缺省手动同步和发现使用首个已配置账号，不会因限速自动换号。
 
-本轮未改动 PicHub 仓库或配置，也未执行真实收藏、关注等账号写操作。
+取消关注或删除账号不会删除已采集画师、作品、图片 URL、偏好或账号来源历史。删除账号会从活动账号列表和筛选项移除，并删除对应 token 文件；由于账号已软删除，不能再用该账号 ID 过滤。默认供图仍可使用其他条件合格的历史作品。画师屏蔽始终优先：被屏蔽画师不能供图，未完成任务会停止或取消。
 
-## 备份与恢复
+旧版单账号安装可继续配置 `PIXIV_CURATOR_PIXIV_TOKEN_FILE`。启动时会将其导入为 UID 0 的 `legacy` 账号，并把旧的关注标记转换为账号来源关系。首次成功同步后才绑定真实 Pixiv UID；在此之前不能添加第二账号，需先修复 legacy 凭据和身份。迁移复用原 SQLite 数据库，旧偏好、画师、作品和图片分页都保留；迁移前仍应备份数据库和凭据。多账号凭据位于数据库旁的 `private/accounts` 目录，不要只备份数据库。
 
-最简方式：停止服务，备份数据库及私密凭据目录，再恢复到独立路径，用相同版本启动检查 `/readyz`、画师、作品与任务。运行中的数据库应使用 SQLite `.backup`；代码中的 `Store.Backup` 使用 `VACUUM INTO` 一致性快照（目标必须不存在），该行为及恢复已由临时 SQLite 测试覆盖，目前无独立备份 HTTP/CLI 入口。
+## 管理页面与任务观察
 
-不要运行中仅复制 `.db`，不要多实例写同库。迁移前备份；新版本迁移只前进，旧版本遇到未知 schema 拒绝启动。恢复凭据时重设 0700/0600（Windows 使用受限 ACL），会话不恢复，重新登录；未完成任务待租约过期后恢复，数据与游标保持事务一致。
+管理页面包含三个标签页：
+
+- **画师图库**：按标签和 Pixiv 账号来源筛选已批准/已屏蔽画师，浏览作品；可编辑本地画师标签。自动标签由近期 100 件作品的标签频次取前 8。保存 `[]` 会明确清空覆盖；删除覆盖后恢复自动标签。
+- **发现画师**：查看有限代表作预览与推荐理由。确认后才批准并安排采集；推荐不会自动批准。
+- **设置**：管理 Pixiv 账号、服务端 API 网络设置和选图偏好。
+
+当前没有独立任务 UI。任务开始、结束、状态、稳定错误码和重试时间通过服务结构化日志观察。任务/游标保存在数据库中，重启后由 Worker 恢复；6 小时周期计时器本身不持久化。`/healthz` 仅表示 HTTP 进程存活；`/readyz` 检查本地数据库和 Worker，不检查 Pixiv 连通性。
+
+## 选图 API
+
+默认 JSON 返回数据库中经过校验的 Pixiv 原图 URL：
+
+```sh
+curl 'http://127.0.0.1:5722/random?collection=preferred'
+```
+
+可显式请求 JSON，或选择 302 跳转：
+
+```sh
+curl -i 'http://127.0.0.1:5722/random?format=json&account_id=legacy&included_tags=猫|风景'
+curl -i 'http://127.0.0.1:5722/random?format=redirect&account_id=legacy'
+```
+
+重复 `included_tags` 参数表示多组必须同时匹配；同一参数值用 `|` 表示任选。可组合 `excluded_tags`、`user_id`、`account_id`、方向、最小尺寸、`r18`、`ai_type` 与策略。每次改变条件时，仍执行硬过滤。默认只允许 `safe` 与 `non_ai`；分类未知的作品保持未知并排除。作品 dislike、画师屏蔽、不可见作品不会通过小库降级放行。近期去重不足时只允许重复一张合格旧图并标记 `repeated`。
+
+`format=redirect` 返回 HTTP 302，Curator 不下载、代理或缓存图片。消费方须自行访问返回的 Pixiv 图片 URL；浏览器、PicHub 的代理和 DNS 设置独立于 Curator 服务端。图片端点 `/i/{illust_id}/{page_index}` 固定相同作品页身份，可返回 URL 或按 `format=redirect` 跳转。
+
+PicHub 可设置 JSON 响应，图片字段路径为 `url`。按需把 `account_id` 和标签条件配置在图源 URL 查询参数。不要在 PicHub Headers 中放 Curator 管理令牌或 Pixiv 凭据。由于 Curator 不代理图片，部署前要从 PicHub 所在网络确认 Pixiv 图片 URL 可达，并核实 PicHub 对 Referer 等请求头的要求。
+
+供图 API 当前没有单独服务鉴权，应仅部署在受控本机或内网。不能因为管理页面有登录就将公开 `/random` 暴露到公网。
+
+## 网络设置边界
+
+设置页中的服务端代理模式影响 Curator 后续发出的 Pixiv OAuth、App API 等服务请求；它不控制浏览器预览或 PicHub 下载原图时使用的网络。浏览器按本机代理设置访问预览，PicHub 按其运行环境访问返回的图片 URL。保存代理只影响新建请求，不切换正在运行的请求。
+
+服务端支持继承环境变量、直连或配置 HTTP/HTTPS 代理。环境变量包括 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及小写对应项；不自动读取桌面 PAC，也不支持 SOCKS。自定义代理凭据只写入私密配置，管理 GET 不回显密码。Docker 中的 `127.0.0.1` 指容器自身，代理必须从容器网络可达。
+
+网络设置文件默认是数据库父目录下的 `private/network.json`，可由 `PIXIV_CURATOR_NETWORK_CONFIG_FILE` 指定。更换部署位置时要一并迁移此文件。
+
+## 数据、迁移与备份
+
+迁移按版本 001–007 前进：006 增加账号与账号/画师关联；007 增加手动画师标签覆盖。程序在启动时事务应用迁移并拒绝未知 schema 版本。更新前备份数据库和私密凭据；旧的 SQLite 偏好与作品数据不会因增加账号关系而删除。
+
+停机后可完整备份数据库；运行中请使用 SQLite `.backup` 或程序的 `Store.Backup` 一致性快照，不要只复制活跃 WAL 数据库的主 `.db` 文件。分别保存 OAuth 配置、管理 token、多账号 Refresh Token 目录和网络设置文件。恢复后检查 `/readyz` 并重新登录管理页；管理会话不从备份恢复。不要把多实例指向同一 SQLite 文件。
+
+## 尚未验收
+
+离线/mock 测试不代表 Pixiv 实网认证、真实账号关注同步、CDN 原图访问或 PicHub 下载/显示/收藏已经通过。本轮全仓 race 测试、四个平台构建、Docker、浏览器 UI 与真实网络联调的状态以[开发计划](development-plan.md)为准。

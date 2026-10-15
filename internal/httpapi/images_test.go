@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,6 +38,11 @@ func TestSelectionQueryStrictValidationAndMappings(t *testing.T) {
 		"?min_height=abc",
 		"?user_id=0",
 		"?user_id=9223372036854775808",
+		"?account_id=",
+		"?account_id=has.dot",
+		"?account_id=bad%20id",
+		"?account_id=" + strings.Repeat("a", 65),
+		"?account_id=one&account_id=two",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "/random"+raw, nil)
@@ -48,14 +52,14 @@ func TestSelectionQueryStrictValidationAndMappings(t *testing.T) {
 		})
 	}
 
-	parsed, err := selectionQuery(httptest.NewRequest(http.MethodGet, "/random?format=json&collection=preferred&r18=2&ai_type=any&min_width=640&min_height=480&user_id=9007199254740993&orientation=landscape&strategy=random", nil))
+	parsed, err := selectionQuery(httptest.NewRequest(http.MethodGet, "/random?format=json&collection=preferred&r18=2&ai_type=any&min_width=640&min_height=480&user_id=9007199254740993&account_id=legacy_01-X&orientation=landscape&strategy=random", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(parsed.AllowedRatings, []string{"safe", "r18", "r18g"}) || !reflect.DeepEqual(parsed.AllowedAI, []string{"non_ai", "ai"}) {
 		t.Fatalf("enum mapping: ratings=%v ai=%v", parsed.AllowedRatings, parsed.AllowedAI)
 	}
-	if parsed.MinWidth != 640 || parsed.MinHeight != 480 || parsed.ArtistID != 9007199254740993 || parsed.Orientation != "landscape" || parsed.Strategy != "random" {
+	if parsed.MinWidth != 640 || parsed.MinHeight != 480 || parsed.ArtistID != 9007199254740993 || parsed.AccountID != "legacy_01-X" || parsed.Orientation != "landscape" || parsed.Strategy != "random" {
 		t.Fatalf("parsed selection query=%+v", parsed)
 	}
 
@@ -111,33 +115,38 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var targets []string
-	proxy := media.NewProxy(imageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
-		targets = append(targets, r.URL.String())
-		h := make(http.Header)
-		h.Set("Content-Type", "image/jpeg")
-		h.Add("Set-Cookie", "upstream=secret")
-		return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader("pixels")), ContentLength: 6}, nil
+	proxyCalls := 0
+	proxy := media.NewProxy(imageRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		proxyCalls++
+		return nil, fmt.Errorf("image proxy should not be called")
 	}))
 	auth := NewAuth([]byte(adminTestToken), AuthOptions{})
 	mux := http.NewServeMux()
 	RegisterImages(mux, app.NewImages(store, "https://curator.test"), proxy, auth)
 
-	for i := 0; i < 2; i++ {
+	for _, path := range []string{fmt.Sprintf("/i/%d/0", illustID), fmt.Sprintf("/i/%d/0?format=json", illustID)} {
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/i/%d/0", illustID), nil))
-		if rec.Code != http.StatusOK || rec.Body.String() != "pixels" {
-			t.Fatalf("image request %d status=%d body=%q", i, rec.Code, rec.Body.String())
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("fixed JSON status=%d body=%s", rec.Code, rec.Body.String())
 		}
-		if rec.Header().Get("Cache-Control") != "no-store" {
-			t.Errorf("image Cache-Control=%q", rec.Header().Get("Cache-Control"))
+		var fixed map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &fixed); err != nil {
+			t.Fatal(err)
 		}
-		if rec.Header().Get("Set-Cookie") != "" {
-			t.Errorf("proxy leaked upstream Set-Cookie: %q", rec.Header().Get("Set-Cookie"))
+		if fixed["url"] != original || fixed["illust_id"] != fmt.Sprint(illustID) || fixed["page_index"] != float64(0) {
+			t.Fatalf("fixed page JSON did not preserve identity and URL: %#v", fixed)
 		}
 	}
-	if !reflect.DeepEqual(targets, []string{original, original}) {
-		t.Fatalf("fixed image identity targets=%v", targets)
+	redirectRec := httptest.NewRecorder()
+	mux.ServeHTTP(redirectRec, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/i/%d/0?format=redirect", illustID), nil))
+	if redirectRec.Code != http.StatusFound || redirectRec.Header().Get("Location") != original {
+		t.Fatalf("fixed redirect status=%d location=%q", redirectRec.Code, redirectRec.Header().Get("Location"))
+	}
+	invalidFormat := httptest.NewRecorder()
+	mux.ServeHTTP(invalidFormat, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/i/%d/0?format=xml", illustID), nil))
+	if invalidFormat.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid fixed format status=%d body=%s", invalidFormat.Code, invalidFormat.Body.String())
 	}
 
 	randomRec := httptest.NewRecorder()
@@ -154,6 +163,14 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 	}
 	if randomRec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("random Cache-Control=%q", randomRec.Header().Get("Cache-Control"))
+	}
+	if selected["url"] != original {
+		t.Fatalf("random URL=%v; want %q", selected["url"], original)
+	}
+	randomRedirect := httptest.NewRecorder()
+	mux.ServeHTTP(randomRedirect, httptest.NewRequest(http.MethodGet, "/random?format=redirect", nil))
+	if randomRedirect.Code != http.StatusFound || randomRedirect.Header().Get("Location") != original {
+		t.Fatalf("random redirect status=%d location=%q", randomRedirect.Code, randomRedirect.Header().Get("Location"))
 	}
 
 	// An omitted request width leaves the global preference in force.
@@ -185,21 +202,31 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 	if previewRec.Code != http.StatusOK {
 		t.Fatalf("authenticated preview status=%d body=%s", previewRec.Code, previewRec.Body.String())
 	}
-	if targets[len(targets)-1] != preview {
-		t.Fatalf("preview used target %q; want %q", targets[len(targets)-1], preview)
+	var previewJSON map[string]any
+	if err := json.Unmarshal(previewRec.Body.Bytes(), &previewJSON); err != nil {
+		t.Fatal(err)
+	}
+	if previewJSON["url"] != preview {
+		t.Fatalf("preview URL=%v; want %q", previewJSON["url"], preview)
+	}
+	previewRedirectReq := httptest.NewRequest(http.MethodGet, previewPath+"?format=redirect", nil)
+	previewRedirectReq.Header.Set("Authorization", "Bearer "+adminTestToken)
+	previewRedirect := httptest.NewRecorder()
+	mux.ServeHTTP(previewRedirect, previewRedirectReq)
+	if previewRedirect.Code != http.StatusFound || previewRedirect.Header().Get("Location") != preview {
+		t.Fatalf("preview redirect status=%d location=%q", previewRedirect.Code, previewRedirect.Header().Get("Location"))
 	}
 
 	if _, err := catalog.DecideArtist(ctx, artistID, "block"); err != nil {
 		t.Fatal(err)
 	}
-	before := len(targets)
 	blocked := httptest.NewRecorder()
 	mux.ServeHTTP(blocked, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/i/%d/0", illustID), nil))
 	if blocked.Code != http.StatusNotFound {
 		t.Fatalf("blocked old image status=%d body=%s", blocked.Code, blocked.Body.String())
 	}
-	if len(targets) != before {
-		t.Fatalf("blocked artist old URL reached upstream: targets=%v", targets)
+	if proxyCalls != 0 {
+		t.Fatalf("image proxy was called %d times", proxyCalls)
 	}
 }
 

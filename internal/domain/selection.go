@@ -22,7 +22,8 @@ func DefaultRules() SelectionRules {
 
 type SelectionRequest struct {
 	SelectionRules
-	ArtistID int64
+	ArtistID  int64
+	AccountID string
 }
 type SelectedPage struct {
 	IllustID    int64  `json:"illust_id,string"`

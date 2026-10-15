@@ -106,6 +106,61 @@ func TestSelectCatalogEmptyAndNoMatch(t *testing.T) {
 	}
 }
 
+func TestSelectAccountScopeIntersectsTagsAndSurvivesRepeatFallback(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1250, "approved")
+	seedEligibleArtist(t, s, 1251, "approved")
+	seedEligibleArtist(t, s, 1252, "approved")
+	seedSelectionArtwork(t, s, 1260, 1250, "safe", "non_ai", []string{"in-scope"}, 1)
+	seedSelectionArtwork(t, s, 1261, 1250, "safe", "non_ai", []string{"in-scope"}, 1)
+	seedSelectionArtwork(t, s, 1262, 1251, "safe", "non_ai", []string{"needle"}, 1)
+	seedSelectionArtwork(t, s, 1263, 1252, "safe", "non_ai", []string{"needle"}, 1)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO accounts(id,name,token_file,created_at,updated_at,deleted) VALUES
+		('one','One','/unused',1,1,0),('two','Two','/unused',1,1,0),('deleted','Deleted','/unused',1,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	// The account scope is membership based; followed=0 still represents a linked artist.
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed) VALUES
+		('one',1250,1),('one',1251,0),('two',1252,1),('deleted',1251,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	intersection, err := s.Select(ctx, domain.SelectionRequest{AccountID: "one", SelectionRules: domain.SelectionRules{IncludeTags: [][]string{{"needle"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intersection.IllustID != 1262 {
+		t.Fatalf("account and tag intersection selected %d, want linked needle work 1262", intersection.IllustID)
+	}
+	if _, err = s.Select(ctx, domain.SelectionRequest{AccountID: "deleted"}); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("deleted account selection error = %v, want ErrNoMatch", err)
+	}
+	if _, err = s.db.ExecContext(ctx, `DELETE FROM selection_history`); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[int64]bool{}
+	fallbackSeen := false
+	for i := 0; i < 10; i++ {
+		got, selectErr := s.Select(ctx, domain.SelectionRequest{AccountID: "one", SelectionRules: domain.SelectionRules{Strategy: "random"}})
+		if selectErr != nil {
+			t.Fatal(selectErr)
+		}
+		if got.IllustID != 1260 && got.IllustID != 1261 && got.IllustID != 1262 {
+			t.Fatalf("account selection escaped scope: %+v", got)
+		}
+		if got.Repeated {
+			fallbackSeen = true
+		} else {
+			seen[got.IllustID] = true
+		}
+	}
+	if len(seen) != 3 || !fallbackSeen {
+		t.Fatalf("expected all scoped works then scoped repeat fallback; distinct=%v fallback=%v", seen, fallbackSeen)
+	}
+}
+
 func TestSelectConcurrentDedupFallbackAndBoundedHistory(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

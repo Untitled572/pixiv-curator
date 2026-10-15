@@ -68,7 +68,7 @@ func rawArtwork(id, artistID int64) pixiv.RawArtwork {
 	return a
 }
 
-func TestFollowingSnapshotOnlyUnfollowsAfterFinalPageAndNeverApproves(t *testing.T) {
+func TestFollowingSnapshotEnrollsArtistsAndOnlyUnfollowsAfterFinalPage(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openIngestTestStore(t)
 	var calls []string
@@ -126,8 +126,8 @@ func TestFollowingSnapshotOnlyUnfollowsAfterFinalPageAndNeverApproves(t *testing
 	}
 	for _, id := range []int64{101, 102, 103} {
 		a := byID[id]
-		if a.ReviewStatus != "pending" || a.CollectionEnabled {
-			t.Errorf("following import auto-approved artist %d: %+v", id, a)
+		if a.ReviewStatus != "approved" || !a.CollectionEnabled {
+			t.Errorf("following import did not enroll artist %d: %+v", id, a)
 		}
 	}
 	if byID[101].RemoteFollowed != true || byID[103].RemoteFollowed != true || byID[102].RemoteFollowed {

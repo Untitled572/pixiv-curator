@@ -67,12 +67,12 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 		if e != nil {
 			return domain.SelectedPage{}, e
 		}
-		selected, err = choosePage(ctx, tx, rules, req.ArtistID, recentIDs, false)
+		selected, err = choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, recentIDs, false)
 		if err != nil {
 			return domain.SelectedPage{}, err
 		}
 		if selected.page.IllustID == 0 {
-			selected, err = choosePage(ctx, tx, rules, req.ArtistID, nil, true)
+			selected, err = choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, nil, true)
 			if err != nil {
 				return domain.SelectedPage{}, err
 			}
@@ -134,7 +134,7 @@ func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview b
 	if err := domain.ValidateRules(rules); err != nil {
 		return domain.SelectedPage{}, err
 	}
-	where, args, err := selectionWhere(rules, 0, nil)
+	where, args, err := selectionWhere(rules, 0, "", nil)
 	if err != nil {
 		return domain.SelectedPage{}, err
 	}
@@ -322,8 +322,8 @@ func recentArtworkIDs(ctx context.Context, tx *sql.Tx, since int64) ([]int64, er
 	return ids, rows.Err()
 }
 
-func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, artistID int64, recentIDs []int64, fallback bool) (selectionPage, error) {
-	where, args, err := selectionWhere(rules, artistID, recentIDs)
+func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64, fallback bool) (selectionPage, error) {
+	where, args, err := selectionWhere(rules, artistID, accountID, recentIDs)
 	if err != nil {
 		return selectionPage{}, err
 	}
@@ -371,12 +371,16 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 	return selectionPage{}, nil
 }
 
-func selectionWhere(rules domain.SelectionRules, artistID int64, recentIDs []int64) (string, []any, error) {
+func selectionWhere(rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64) (string, []any, error) {
 	where := `ar.review_status='approved' AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g') AND a.ai_status IN ('non_ai','ai') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
 	var args []any
 	if artistID > 0 {
 		where = appendAnd(where, `a.artist_id=?`)
 		args = append(args, artistID)
+	}
+	if accountID != "" {
+		where = appendAnd(where, `EXISTS (SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.account_id=? AND aa.artist_id=a.artist_id AND ac.deleted=0)`)
+		args = append(args, accountID)
 	}
 	if len(recentIDs) > 0 {
 		where = appendAnd(where, `a.id NOT IN (`+placeholders(len(recentIDs))+`)`)

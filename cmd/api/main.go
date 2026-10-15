@@ -9,14 +9,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
-	"github.com/Untitled572/pixiv-curator/internal/accountlogin"
+	"github.com/Untitled572/pixiv-curator/internal/accounts"
 	"github.com/Untitled572/pixiv-curator/internal/admin"
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
-	"github.com/Untitled572/pixiv-curator/internal/media"
 	"github.com/Untitled572/pixiv-curator/internal/network"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/secret"
@@ -85,6 +85,10 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	apiTransport := http.DefaultTransport.(*http.Transport).Clone()
 	apiTransport.Proxy = networkSettings.Proxy
 	defer apiTransport.CloseIdleConnections()
+	client, err := accounts.Open(ctx, store, filepath.Join(filepath.Dir(cfg.DatabasePath), "private", "accounts"), cfg.PixivTokenFile, oauth, apiTransport)
+	if err != nil {
+		return fmt.Errorf("load accounts: %w", err)
+	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan struct{})
 	maintenanceDone := make(chan struct{})
@@ -92,9 +96,6 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		defer close(maintenanceDone)
 		app.RunMaintenance(workerCtx, store, func(error) { logger.Warn("local maintenance failed") })
 	}()
-	client := pixiv.NewClient(cfg.PixivTokenFile, oauth, apiTransport)
-	accountLogin := app.NewAccountLogin(workerCtx, accountlogin.Process{Python: cfg.LoginPython, Helper: cfg.LoginHelper, Environment: networkSettings.Environment}, client)
-	defer accountLogin.Close()
 	ingestion := app.NewIngest(store, client)
 	recommender := app.NewRecommender(store, client)
 	handlers := ingestion.Handlers()
@@ -110,13 +111,14 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	server := &http.Server{
 		Handler: httpapi.NewHandlerWithRoutes(version, func(mux *http.ServeMux) {
 			auth.Register(mux)
-			httpapi.RegisterAccountLogin(mux, accountLogin, auth)
+			httpapi.RegisterAccounts(mux, client, auth)
+			httpapi.RegisterLibrary(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.Middleware(http.HandlerFunc(admin.Home)))
-			httpapi.RegisterImages(mux, images, media.NewProxyWithResolver(networkSettings.Proxy), auth)
+			httpapi.RegisterImages(mux, images, nil, auth)
 			httpapi.RegisterRecommendations(mux, recommender, auth)
-			mux.Handle("/admin/", auth.Middleware(httpapi.NewAdminHandler(service, ingestion)))
+			mux.Handle("/admin/", auth.Middleware(httpapi.NewAdminHandler(service)))
 			mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 				checkCtx, cancel := context.WithTimeout(r.Context(), time.Second)
 				defer cancel()
@@ -138,7 +140,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}

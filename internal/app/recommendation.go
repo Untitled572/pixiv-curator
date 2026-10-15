@@ -262,3 +262,17 @@ func normalizeSamples(raw []pixiv.RawArtwork, id int64, max int) ([]domain.Artwo
 	}
 	return result, nil
 }
+
+func (s *Recommender) Latest(ctx context.Context) (domain.RecommendationRun, []domain.Recommendation, error) {
+	repository, ok := s.store.(interface {
+		LatestRecommendation(context.Context) (string, error)
+	})
+	if !ok {
+		return domain.RecommendationRun{}, nil, domain.ErrNotFound
+	}
+	id, err := repository.LatestRecommendation(ctx)
+	if err != nil {
+		return domain.RecommendationRun{}, nil, err
+	}
+	return s.Candidates(ctx, id)
+}

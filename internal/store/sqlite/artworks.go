@@ -66,3 +66,20 @@ func (s *Store) Artworks(ctx context.Context, after int64, limit int, artistID i
 	}
 	return result, nil
 }
+
+// KnownArtworkPage allows incremental scans to stop after a fully indexed page.
+func (s *Store) KnownArtworkPage(ctx context.Context, artistID int64, ids []int64) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	for _, id := range ids {
+		var known bool
+		if err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM artworks WHERE id=? AND artist_id=? AND metadata_state='complete')`, id, artistID).Scan(&known); err != nil {
+			return false, err
+		}
+		if !known {
+			return false, nil
+		}
+	}
+	return true, nil
+}

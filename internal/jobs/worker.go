@@ -4,6 +4,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
@@ -113,6 +114,7 @@ func (w *Worker) Run(ctx context.Context) error {
 }
 
 func (w *Worker) runJob(parent context.Context, job domain.Job) {
+	slog.Info("task started", "job_id", job.ID, "kind", job.Kind, "attempt", job.Attempt)
 	handler, ok := w.handlers[job.Kind]
 	if !ok {
 		_ = w.repo.Finish(parent, job, "failed", "UNSUPPORTED_JOB", w.config.Now())
@@ -159,11 +161,20 @@ func (w *Worker) runJob(parent context.Context, job domain.Job) {
 	// Shutdown leaves the lease to expire so another process can safely recover
 	// it; explicit cancellation is persisted when the store reports it on claim.
 	if parent.Err() != nil || isLeaseLost(leaseLost) {
+		slog.Info("task interrupted", "job_id", job.ID, "kind", job.Kind)
 		return
 	}
 
 	state, code, available := w.outcome(job, handlerErr)
-	_ = w.repo.Finish(parent, job, state, code, available)
+	if state == "retry_wait" && job.Attempt >= 5 {
+		state = "failed"
+	}
+	err := w.repo.Finish(parent, job, state, code, available)
+	// Some handlers atomically finish along with their final catalog transaction.
+	if err != nil && !errors.Is(err, domain.ErrLease) {
+		slog.Warn("task status persistence failed", "job_id", job.ID)
+	}
+	slog.Info("task finished", "job_id", job.ID, "kind", job.Kind, "state", state, "error_code", code, "next_attempt_at", available)
 }
 
 func isLeaseLost(ch <-chan struct{}) bool {

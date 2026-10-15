@@ -1,135 +1,58 @@
 # Pixiv Curator
 
-以 Go 为主的个人 Pixiv 图库目录与选图服务，向 PicHub-Aggregator 提供图片来源。
-
-目标流程：同步关注画师 → 推荐候选 → 预览并手动确认 → 自动增量采集作品目录 → 按偏好选图 → PicHub 下载、缓存、收藏和分发。
+用 Go 构建的本地 Pixiv 目录和选图服务，可向 PicHub-Aggregator 提供图片 URL。Curator 保存画师、作品、分页元数据和 URL；图片下载、磁盘缓存、收藏与分发由调用方（例如 PicHub）负责。
 
 ## 当前状态
 
-已实现单进程 Go 服务与管理页面：SQLite 目录、管理鉴权、持久任务、Pixiv OAuth 刷新与关注/作品分页采集、元数据补全、候选推荐与人工审核、偏好选图、固定图片页转发。
+核心目录、任务、推荐、管理鉴权、选图接口和管理页面已经实现。多 Pixiv 账号、账号来源筛选、画师标签修正和新的出图方式已完成本轮实现。全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过；真实 Pixiv、图片出口和 PicHub 联调仍待验证。请以[开发计划](docs/development-plan.md)中的本轮状态为准。
 
-以上通过离线/mock 测试及本机 HTTP 验证，**尚未完成真实 Pixiv/PicHub 联调与本轮 Docker 构建验收**。未配置账号时任务暂停为 `paused_auth`，不会把推荐候选自动批准。原图仅流式转发，不写磁盘。
+添加账号时验证 Refresh Token 对应的 Pixiv 身份并安排首次关注同步；同步发现的关注画师自动批准、加入采集并入队，`blocked` 和 `rejected` 状态保留。推荐画师仍需预览后由用户明确加入。默认每 6 小时安排关注与采集增量扫描，周期从进程启动后计时。旧单账号迁移先以 UID 0 导入，首次成功同步绑定真实身份；绑定前需修复该账号，不能再添加其他账号。取关或删除账号保留已采集历史，屏蔽始终优先。
 
-## 技术栈
-
-- Go 1.26+；HTTP 使用标准库 net/http。
-- SQLite 使用纯 Go `modernc.org/sqlite v1.60.1`，WAL、外键检查、单写连接；迁移嵌入二进制，拒绝未知版本。
-- 同一二进制提供 API、后台 Worker、定时维护与内嵌 Go 模板页面。
-- 原图下载、磁盘缓存和收藏由 PicHub 承担。
-- 管理页面使用 Go 模板和原生 JavaScript，无额外前端构建。
-
-## 一键启动与 Pixiv 账号登录
+## 启动
 
 ```sh
 ./scripts/dev.sh
 ```
 
-脚本准备 Python OAuth 依赖与私密配置，构建并启动同端口的管理页面与 Go API。终端显示管理 token 的文件路径；登录管理页后进入「Pixiv 账号」，点击「打开 Pixiv 登录」，在普通浏览器中完成 Pixiv 登录，再从浏览器 Network 请求中复制授权 code 回管理页提交。
+本机默认地址为 <http://127.0.0.1:5722>，开发数据默认保存在 `data/dev`。需要 Go 1.26+。启动脚本生成管理令牌；缺少 OAuth 应用配置时，脚本使用锁定版本的 gppt 准备配置。OAuth 配置已存在时，日常启动不再安装登录依赖，但脚本仍使用 Python 3 标准库。可设置 `PIXIV_CURATOR_OPEN_BROWSER=0` 关闭自动打开页面。生产部署、首次配置和凭据迁移见[运行与接入](docs/running.md)。
 
-需要 Go 1.26+、Python 3.10+（含 venv/pip）；登录不需要 Chromium 或服务端桌面。默认私密开发目录为 `data/dev`。仅离线查看页面/API 可运行 `./scripts/dev.sh --no-login-helper`。Linux 同机桌面可自动接收回调；无 GUI/Docker 使用凭据导入，跨设备不依赖服务器窗口。登录步骤与限制见 [账号登录与本机联调](docs/pixiv-login.md)。
+主应用使用 Pixiv Refresh Token，不提供浏览器 PKCE 登录流程。`docs/pixiv-login.md` 保留此前 Python 浏览器登录方式的历史说明，不属于当前主流程。
 
-## 开始开发
+登录管理页后有三个页面：画师图库、发现画师、设置。图库可按账号和标签筛选，并编辑本地画师标签；设置包含 Pixiv 账号、服务端 API 代理和选图偏好。当前没有独立任务页面，后台任务通过服务结构化日志记录状态和错误码。
+
+## 图片 API
+
+```text
+GET /random                         # JSON，url 为 Pixiv 原图 URL
+GET /random?format=redirect         # HTTP 302 到原图 URL
+GET /random?account_id=<id>&included_tags=猫|风景
+GET /i/{illust_id}/{page_index}     # 返回固定作品页的 URL，或 format=redirect 直接跳转
+```
+
+`/random` 默认 JSON，不下载或代理图片字节。调用方自行访问返回的原图 URL；因此浏览器、PicHub 等客户端必须能访问 Pixiv 图片域名。`account_id`、标签、内容分级、AI 标记、尺寸和画幅筛选可以组合。默认规则只允许 safe、non-AI；分类未知的作品始终排除。屏蔽、作品显式排除和其它硬规则不能因图库过小而放宽。
+
+`/healthz` 只表示进程存活；`/readyz` 检查本地数据库与 Worker，不代表 Pixiv 或 CDN 可达。
+
+## 配置与安全
+
+程序通过环境变量读取配置，不自动读取 `.env`。完整列表见 [.env.example](.env.example) 与[详细设计](docs/detailed-design.md)。管理 API 的读写请求都需要 Bearer token 或管理会话；Cookie 写请求还校验 Origin 和 CSRF。凭据只接受写入，管理响应不回显 Refresh Token。
+
+Pixiv Refresh Token、OAuth 配置、管理令牌和带代理凭据的网络设置必须放在受限私密目录；不得提交真实凭据、数据库或运行日志。旧单账号配置可迁移为 `legacy` 账号，原 SQLite 数据库中的偏好和采集历史继续保留。备份与恢复见[运行与接入](docs/running.md)。
+
+## 开发检查
 
 ```sh
 go test ./...
-go run ./cmd/api
+go vet ./...
 ```
 
-默认地址：http://127.0.0.1:5722
+任务、数据库、令牌刷新或并发变更还应按 [AGENTS.md](AGENTS.md) 运行 race 检查。没有真实网络验收时，不能把 mock 或编译通过称为 Pixiv/PicHub 联调通过。
 
-```sh
-curl http://127.0.0.1:5722/healthz
-# {"status":"ok"}
+## 文档
 
-curl http://127.0.0.1:5722/version
-# {"name":"pixiv-curator","version":"dev"}
-```
-
-healthz 当前只表示 HTTP 进程存活，不代表 Pixiv 连通、数据库就绪或作品可用。
-
-## 配置
-
-通过环境变量配置，程序不会自动读取 .env。示例见 .env.example。
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| PIXIV_CURATOR_ADDR | 127.0.0.1:5722 | HTTP 监听地址 |
-| PIXIV_CURATOR_LOG_LEVEL | info | debug / info / warn / error |
-| PIXIV_CURATOR_DATABASE_PATH | data/curator.db | 本地 SQLite 文件，启动时执行版本迁移 |
-| PIXIV_CURATOR_PUBLIC_BASE_URL | http://127.0.0.1:5722 | HTTP(S) origin；浏览器管理写操作校验此 Origin |
-| PIXIV_CURATOR_ADMIN_TOKEN_FILE | 未配置 | 私密管理 token 文件；不配置时所有管理操作拒绝 |
-| PIXIV_CURATOR_PIXIV_TOKEN_FILE | 未配置 | refresh token 私密文件，轮换后原子写回；所在目录必须可写 |
-| PIXIV_CURATOR_OAUTH_CONFIG_FILE | 未配置 | OAuth 应用参数私密 JSON 文件；一键脚本自动生成匹配配置 |
-| PIXIV_CURATOR_NETWORK_CONFIG_FILE | 数据库父目录/private/network.json | 管理页代理设置的私密持久化文件 |
-| PIXIV_CURATOR_LOGIN_PYTHON | 未配置 | 保留配置项：旧版本机登录 helper 的 Python 绝对路径 |
-| PIXIV_CURATOR_LOGIN_HELPER | 未配置 | 保留配置项：旧版 `scripts/pixiv-login.py` 绝对路径 |
-
-```sh
-PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
-```
-
-运行时数据预留在 data/，已忽略 Git 跟踪。真实 token、代理凭据和 .env 不得提交。
-
-管理 token 文件应位于权限 0700 的目录，文件权限 0600；Windows 使用受限 ACL（应用不校验 POSIX 权限位）。管理 API 接受 `Authorization: Bearer ...`，浏览器通过 `POST /admin/login` 提交 JSON token 建立短期会话，Cookie 写操作同时要求匹配 Origin 和 `X-CSRF-Token`。登录可提交 `remember: true` 记住 30 天；未勾选时为最长 12 小时的浏览器会话。会话重启失效，`POST /admin/logout` 撤销会话。勿将 token 放入 URL、日志或 localStorage。
-
-打开 `/admin/login` 登录，然后在账号页使用普通浏览器完成 Pixiv 登录，或手动保存 refresh token，再同步关注；在画师页明确勾选并批准采集，在推荐页启动推荐批次、查看预览并确认。任务入队并不表示采集完成；缺失或失效凭据需修复后显式恢复暂停任务。
-
-供图：`GET /random?format=json&collection=preferred` 返回 `url`、作品/页身份、尺寸与 `repeated`；`GET/HEAD /i/{illust_id}/{page_index}` 固定该页身份。默认只选择已批准、已知安全、非 AI 的静态作品；请求只能收紧全局规则。`balanced` 先均衡画师，再在画师内优先喜欢作品；`random` 保持随机。近期去重不足时只放宽去重，不放宽排除。
-
-管理 API、筛选参数和错误码见 [详细设计](docs/detailed-design.md)。`GET /readyz` 检查本地数据库与 Worker，不表示 Pixiv 连通或目录有图。首次账号、容器、备份恢复和 PicHub 图源配置见 [运行与接入](docs/running.md)。
-
-备份应停机后完整保存数据库，或使用 SQLite `.backup`；不要在运行期间只复制主 `.db`。库内 `Store.Backup` 使用 `VACUUM INTO` 生成包含 WAL 已提交数据的一致性快照，目标必须不存在。凭据独立备份。
-
-管理页“网络设置”可选择继承环境、直连或填写自定义 HTTP/HTTPS 代理，保存后影响后续请求，无需重启。后台任务展示已提交页数、处理数量、重试时间与中文错误说明；详情见 [运行与接入](docs/running.md)。
-
-## 常用命令
-
-```sh
-make fmt
-make check
-make build
-./bin/pixiv-curator
-```
-
-make check 运行 go vet 与 go test -race，需要支持 race detector 的本地 C 工具链；基础测试可独立运行 go test ./...。
-
-发布时可以注入版本：
-
-```sh
-go build -trimpath -ldflags "-X main.version=v0.1.0" -o bin/pixiv-curator ./cmd/api
-```
-
-## 目录
-
-```text
-cmd/api/              API 进程入口
-internal/config/      环境变量与配置校验
-internal/httpapi/     HTTP 路由与响应
-docs/architecture.md     架构概要与文档导航
-docs/detailed-design.md  数据、任务、状态与接口详细设计
-docs/development-plan.md 开发任务、依赖、状态与验收
-docs/roadmap.md          里程碑导航
-```
-
-## 开发文档
-
-- [AGENTS.md](AGENTS.md)：仓库开发规范。
-- [详细设计](docs/detailed-design.md)：数据模型、任务状态机、推荐流程、HTTP 契约与 PicHub 边界。
-- [开发计划](docs/development-plan.md)：任务编号、依赖、当前状态与验收标准。
-- [架构概要](docs/architecture.md)：快速了解项目结构。
-
-## 构建与发布
-
-GitHub Actions 在普通提交/PR 时执行测试、Linux/Windows 构建和 Docker 验证；推送版本标签后生成完整 Release 和 GHCR 双架构镜像。
-
-发布约定与操作见 [构建与完整发布](docs/releasing.md)。实网接入与本轮容器验证仍待完成。
-
-## Git
-
-使用 main 分支进行版本管理。
-
-- origin：git@github.com:Untitled572/pixiv-curator.git
-- Go module：github.com/Untitled572/pixiv-curator
-- 本地提交完成后，仅在用户要求时推送到远端。
-
-未列入当前状态的设计接口仍为计划；实际验收与限制见开发计划。
+- [详细设计](docs/detailed-design.md)：状态、数据、同步、标签、供图和接口契约。
+- [开发计划](docs/development-plan.md)：工作状态、验收记录与剩余事项。
+- [架构概要](docs/architecture.md)：模块与数据流。
+- [运行与 PicHub 接入](docs/running.md)：配置、账号迁移、网络边界、备份与部署。
+- [历史 Pixiv 浏览器登录流程](docs/pixiv-login.md)：此前流程的存档说明。
+- [开发规范](AGENTS.md)：实现、安全、验证和发布边界。

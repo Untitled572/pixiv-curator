@@ -8,6 +8,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
+	"log/slog"
 	"time"
 )
 
@@ -34,7 +35,19 @@ type Ingest struct {
 
 func NewIngest(s IngestRepository, c PixivClient) *Ingest { return &Ingest{store: s, client: c} }
 func (s *Ingest) Handlers() map[string]jobs.Handler {
-	return map[string]jobs.Handler{"sync_following": s.following, "sync_artist": s.artist, "hydrate_artwork": s.hydrate, "repair_media": s.hydrate}
+	handlers := map[string]jobs.Handler{"sync_following": s.following, "sync_artist": s.artist, "hydrate_artwork": s.hydrate, "repair_media": s.hydrate}
+	for kind, handler := range handlers {
+		handlers[kind] = func(ctx context.Context, j domain.Job) error {
+			var routing struct {
+				AccountID string `json:"account_id"`
+			}
+			if json.Unmarshal(j.Payload, &routing) != nil {
+				return taskInvalid()
+			}
+			return handler(domain.WithAccount(ctx, routing.AccountID), j)
+		}
+	}
+	return handlers
 }
 func (s *Ingest) SyncFollowing(ctx context.Context) (string, error) {
 	return s.store.Enqueue(ctx, "sync_following", "following:account", json.RawMessage(`{"cursor":""}`))
@@ -78,10 +91,11 @@ func (s *Ingest) following(ctx context.Context, j domain.Job) error {
 			}
 			artists = append(artists, a)
 		}
-		nextPayload, _ := json.Marshal(map[string]string{"cursor": page.Next})
+		nextPayload, _ := json.Marshal(map[string]string{"cursor": page.Next, "account_id": domain.ContextAccount(ctx)})
 		if err = s.store.CommitFollowingBatch(ctx, j, j.ID, artists, nextPayload, page.Next == ""); err != nil {
 			return classify(err)
 		}
+		slog.Info("following page indexed", "job_id", j.ID, "account_id", domain.ContextAccount(ctx), "items", len(artists), "complete", page.Next == "")
 		if page.Next == "" {
 			return nil
 		}
@@ -93,18 +107,23 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 	var payload struct {
 		ArtistID int64  `json:"artist_id"`
 		Phase    string `json:"phase"`
+		Cursor   string `json:"cursor"`
 	}
 	if json.Unmarshal(j.Payload, &payload) != nil || payload.ArtistID <= 0 {
 		return taskInvalid()
 	}
 	phase := payload.Phase
-	if phase != "full" && phase != "incremental" {
+	if phase != "full" && phase != "incremental" && phase != "recent" && phase != "history" {
 		return taskInvalid()
 	}
 	cursor, err := s.store.ArtistCursor(ctx, payload.ArtistID, j.ID)
 	if err != nil {
 		return classify(err)
 	}
+	if cursor == "" {
+		cursor = payload.Cursor
+	}
+	processed := j.ProgressItems
 	for pages := 0; pages < 10000; pages++ {
 		if err = ctx.Err(); err != nil {
 			return err
@@ -127,10 +146,32 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 			}
 			works = append(works, a)
 		}
+		if phase == "incremental" {
+			if indexed, ok := s.store.(interface {
+				KnownArtworkPage(context.Context, int64, []int64) (bool, error)
+			}); ok {
+				ids := make([]int64, 0, len(works))
+				for _, work := range works {
+					ids = append(ids, work.ID)
+				}
+				known, err := indexed.KnownArtworkPage(ctx, payload.ArtistID, ids)
+				if err != nil {
+					return classify(err)
+				}
+				if known {
+					page.Next, err = pixiv.NextArtworkSection(cursor, page.Next)
+					if err != nil {
+						return classify(err)
+					}
+				}
+			}
+		}
 		if err = s.store.CommitArtistBatch(ctx, j, payload.ArtistID, j.ID, phase, page.Next, works); err != nil {
 			return classify(err)
 		}
-		if page.Next == "" {
+		slog.Info("artwork page indexed", "job_id", j.ID, "artist_id", payload.ArtistID, "phase", phase, "items", len(works))
+		processed += int64(len(works))
+		if page.Next == "" || ((phase == "recent" || phase == "incremental") && processed >= 100) {
 			return nil
 		}
 		cursor = page.Next

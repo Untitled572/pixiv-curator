@@ -14,7 +14,7 @@ func TestPagesRenderEmbeddedHTMLWithoutCredentialValues(t *testing.T) {
 		marker  string
 	}{
 		{name: "login", handler: Login, marker: `id="login-form"`},
-		{name: "home", handler: Home, marker: `data-tab="artists"`},
+		{name: "home", handler: Home, marker: `data-tab="library"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
@@ -37,6 +37,18 @@ func TestPagesRenderEmbeddedHTMLWithoutCredentialValues(t *testing.T) {
 			}
 			if strings.Contains(body, "localStorage") || strings.Contains(body, ".innerHTML") {
 				t.Fatal("page includes unsafe credential storage or HTML injection API")
+			}
+			if tc.name == "home" {
+				for _, marker := range []string{`data-tab="discover"`, `data-tab="settings"`, `id="artist-list"`, `id="account-create-form"`, `id="preferences-form"`} {
+					if !strings.Contains(body, marker) {
+						t.Errorf("management page missing %q", marker)
+					}
+				}
+				for _, removed := range []string{`data-tab="jobs"`, `id="recommendation-run-id"`, `id="pixiv-login-start"`, `id="approve-selected"`} {
+					if strings.Contains(body, removed) {
+						t.Errorf("management page still includes retired UI %q", removed)
+					}
+				}
 			}
 		})
 	}

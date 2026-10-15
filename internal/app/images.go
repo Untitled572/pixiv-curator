@@ -30,13 +30,27 @@ type ImageResult struct {
 
 func (s *Images) Select(ctx context.Context, r domain.SelectionRequest) (ImageResult, error) {
 	p, err := s.store.Select(ctx, r)
-	return ImageResult{SelectedPage: p, URL: fmt.Sprintf("%s/i/%d/%d", s.base, p.IllustID, p.PageIndex)}, err
+	if err == nil && !domain.ValidImageURL(p.OriginalURL) {
+		return ImageResult{}, domain.ErrNotFound
+	}
+	return ImageResult{SelectedPage: p, URL: p.OriginalURL}, err
 }
 func (s *Images) Page(ctx context.Context, id int64, index int, preview bool) (domain.SelectedPage, error) {
 	if id <= 0 || index < 0 {
 		return domain.SelectedPage{}, domain.ErrInvalid
 	}
-	return s.store.EligiblePage(ctx, id, index, preview)
+	p, err := s.store.EligiblePage(ctx, id, index, preview)
+	if err != nil {
+		return domain.SelectedPage{}, err
+	}
+	url := p.OriginalURL
+	if preview {
+		url = p.PreviewURL
+	}
+	if !domain.ValidImageURL(url) {
+		return domain.SelectedPage{}, domain.ErrNotFound
+	}
+	return p, nil
 }
 func (s *Images) Repair(ctx context.Context, id int64) error {
 	p, _ := json.Marshal(map[string]any{"illust_id": id})

@@ -23,9 +23,13 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			imageError(w, err)
 			return
 		}
+		if wantsRedirect(r) {
+			http.Redirect(w, r, out.URL, http.StatusFound)
+			return
+		}
 		writeJSON(w, 200, out)
 	})
-	forward := func(preview bool) http.HandlerFunc {
+	resolve := func(preview bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 			if err != nil {
@@ -42,28 +46,30 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				imageError(w, err)
 				return
 			}
+			if _, present := r.URL.Query()["format"]; present {
+				values := r.URL.Query()["format"]
+				if len(values) != 1 || (values[0] != "json" && values[0] != "redirect") {
+					apiError(w, domain.ErrInvalid)
+					return
+				}
+			}
 			target := page.OriginalURL
 			if preview {
 				target = page.PreviewURL
 			}
-			if err = p.Forward(w, r, target); err != nil {
-				var e *media.Error
-				if errors.As(err, &e) {
-					if r.Context().Err() == nil {
-						_ = s.Repair(r.Context(), id)
-					}
-					if e.Started {
-						panic(http.ErrAbortHandler)
-					}
-					writeAPIError(w, 502, e.Code)
-					return
-				}
-				writeAPIError(w, 502, "UPSTREAM_UNAVAILABLE")
+			if wantsRedirect(r) {
+				http.Redirect(w, r, target, http.StatusFound)
+				return
 			}
+			writeJSON(w, http.StatusOK, struct {
+				domain.SelectedPage
+				URL string `json:"url"`
+			}{SelectedPage: page, URL: target})
 		}
 	}
-	mux.HandleFunc("GET /i/{id}/{page}", forward(false))
-	mux.Handle("GET /admin/api/previews/{id}/{page}", auth.Middleware(forward(true)))
+	_ = p // retained in the registration signature for existing application wiring
+	mux.HandleFunc("GET /i/{id}/{page}", resolve(false))
+	mux.Handle("GET /admin/api/previews/{id}/{page}", auth.Middleware(resolve(true)))
 	mux.Handle("GET /admin/api/settings/preferences", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rules, v, err := s.Preferences(r.Context())
 		if err != nil {
@@ -106,6 +112,10 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 	})))
 }
 
+func wantsRedirect(r *http.Request) bool {
+	return r.URL.Query().Get("format") == "redirect"
+}
+
 func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	q, err := url.ParseQuery(r.URL.RawQuery)
 	out := domain.SelectionRequest{}
@@ -115,7 +125,7 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	for k, v := range q {
 		switch k {
 		case "included_tags", "excluded_tags":
-		case "format", "collection", "orientation", "r18", "ai_type", "min_width", "min_height", "user_id", "strategy":
+		case "format", "collection", "orientation", "r18", "ai_type", "min_width", "min_height", "user_id", "strategy", "account_id":
 			if len(v) != 1 {
 				return out, domain.ErrInvalid
 			}
@@ -123,7 +133,7 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			return out, domain.ErrInvalid
 		}
 	}
-	if v, ok := q["format"]; ok && v[0] != "json" {
+	if v, ok := q["format"]; ok && v[0] != "json" && v[0] != "redirect" {
 		return out, domain.ErrInvalid
 	}
 	if v, ok := q["collection"]; ok && v[0] != "preferred" {
@@ -174,6 +184,12 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			return out, domain.ErrInvalid
 		}
 	}
+	if v, ok := q["account_id"]; ok {
+		if len(v[0]) == 0 || len(v[0]) > 64 || !safeAccountID(v[0]) {
+			return out, domain.ErrInvalid
+		}
+		out.AccountID = v[0]
+	}
 	for _, group := range q["included_tags"] {
 		tags := strings.Split(group, "|")
 		for i := range tags {
@@ -186,6 +202,17 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	}
 	return out, domain.ValidateRules(out.SelectionRules)
 }
+
+func safeAccountID(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func imageError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrCatalogEmpty):

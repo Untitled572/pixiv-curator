@@ -445,3 +445,47 @@ func (c *Client) RelatedArtworks(ctx context.Context, id int64) ([]RawArtwork, e
 	}
 	return raw.Artworks, nil
 }
+
+// Authenticate validates credentials and returns the upstream account identity.
+func (c *Client) Authenticate(ctx context.Context) (int64, error) {
+	select {
+	case c.gate <- struct{}{}:
+		defer func() { <-c.gate }()
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+	if _, err := c.accessToken(ctx, ""); err != nil {
+		return 0, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.accountID, nil
+}
+
+// NextArtworkSection skips already indexed older pages while still checking manga.
+func NextArtworkSection(current, next string) (string, error) {
+	if next == "" {
+		return "", nil
+	}
+	if err := validateAPIURL(next); err != nil {
+		return "", err
+	}
+	if current != "" {
+		if err := validateAPIURL(current); err != nil {
+			return "", err
+		}
+		u, _ := url.Parse(current)
+		if u.Query().Get("type") == "manga" {
+			return "", nil
+		}
+	}
+	u, _ := url.Parse(next)
+	if u.Query().Get("type") == "manga" {
+		return next, nil
+	}
+	q := u.Query()
+	q.Set("type", "manga")
+	q.Del("offset")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}

@@ -371,3 +371,12 @@ func (s *Store) CompleteRecommendation(ctx context.Context, j domain.Job, runID 
 	}
 	return tx.Commit()
 }
+
+func (s *Store) LatestRecommendation(ctx context.Context) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM recommendation_runs ORDER BY started_at DESC,rowid DESC LIMIT 1`).Scan(&id)
+	if err == sql.ErrNoRows {
+		return "", domain.ErrNotFound
+	}
+	return id, err
+}

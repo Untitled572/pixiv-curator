@@ -30,6 +30,21 @@ func RunMaintenance(ctx context.Context, s MaintenanceRepository, onError func(e
 				onError(err)
 			}
 		case <-syncTick.C:
+			if accounts, ok := s.(interface {
+				Accounts(context.Context) ([]domain.Account, error)
+				SyncAccount(context.Context, string) (string, error)
+			}); ok {
+				list, err := accounts.Accounts(ctx)
+				if err != nil {
+					onError(err)
+				} else {
+					for _, a := range list {
+						if _, err = accounts.SyncAccount(ctx, a.ID); err != nil {
+							onError(err)
+						}
+					}
+				}
+			}
 			if err := scheduleArtists(ctx, s); err != nil {
 				onError(err)
 			}

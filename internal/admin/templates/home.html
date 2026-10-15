@@ -4,100 +4,65 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="light dark">
   <title>Pixiv Curator · 管理</title>
   <style>{{.CSS}}</style>
 </head>
 <body class="app-page">
   <header class="topbar">
     <a class="brand" href="/admin/" aria-label="Pixiv Curator 管理首页"><span class="brand-mark">PC</span><span>Pixiv Curator</span></a>
-    <div class="topbar-right"><span class="local-badge"><span class="status-dot"></span>本地目录</span><button id="logout-button" class="button button-quiet" type="button">退出登录</button></div>
+    <div class="topbar-right"><span class="local-badge"><span class="status-dot"></span>私人图库</span><button id="logout-button" class="button button-quiet" type="button">退出</button></div>
   </header>
   <main class="workspace">
     <section class="page-heading">
-      <div><p class="eyebrow">个人图源 · 控制台</p><h1>管理你的作品目录</h1><p class="muted">关注关系、采集许可与供图状态分别管理。所有批准都需要你明确操作。</p></div>
-      <div class="heading-note"><span class="note-icon" aria-hidden="true">i</span><span>任务创建成功只表示已排队，不代表采集已完成。</span></div>
+      <div><p class="eyebrow">你的 Pixiv 图库</p><h1>把喜欢的画师，<br class="mobile-break">慢慢收进来。</h1><p class="muted">你决定关注哪些画师、怎样选图。这里的操作不会替你在 Pixiv 关注或收藏作品。</p></div>
+      <div class="heading-note"><span class="note-icon" aria-hidden="true">✳</span><span>关注画师自动收录；发现的推荐画师由你选择加入。</span></div>
     </section>
-    <nav class="tabs" aria-label="管理页面">
-      <button class="tab is-active" data-tab="artists" type="button">画师 <span class="tab-count" id="artist-count">—</span></button>
-      <button class="tab" data-tab="recommendations" type="button">推荐候选</button>
-      <button class="tab" data-tab="jobs" type="button">后台任务</button>
-      <button class="tab" data-tab="preferences" type="button">选图偏好</button>
-      <button class="tab" data-tab="network" type="button">网络设置</button>
-      <button class="tab" data-tab="account" type="button">Pixiv 账号</button>
+    <nav class="tabs" aria-label="管理页面" role="tablist">
+      <button class="tab is-active" id="tab-library" data-tab="library" role="tab" aria-selected="true" aria-controls="panel-library" type="button"><span class="tab-index">01</span>画师图库 <span class="tab-count" id="artist-count">—</span></button>
+      <button class="tab" id="tab-discover" data-tab="discover" role="tab" aria-selected="false" aria-controls="panel-discover" type="button"><span class="tab-index">02</span>发现画师</button>
+      <button class="tab" id="tab-settings" data-tab="settings" role="tab" aria-selected="false" aria-controls="panel-settings" type="button"><span class="tab-index">03</span>设置</button>
     </nav>
     <div id="global-message" class="notice" role="status" aria-live="polite" hidden></div>
 
-    <section class="panel tab-panel is-visible" id="panel-artists" data-panel="artists">
-      <div class="panel-heading"><div><p class="eyebrow">本地采集名单</p><h2>画师</h2><p class="muted">导入关注不会自动批准。只有批准的画师才会进入采集流程。</p></div><button id="reload-artists" class="button button-secondary" type="button">刷新列表</button></div>
-      <form id="import-form" class="inline-form"><label for="artist-id">手动导入 Pixiv UID</label><input id="artist-id" name="id" inputmode="numeric" pattern="[0-9]+" placeholder="例如 12345678" required><button class="button button-primary" type="submit">加入待审核</button></form>
-      <div class="bulk-bar"><span class="muted">仅勾选后才会批量批准待审核画师</span><button id="approve-selected" class="button button-primary button-small" type="button" disabled>批准选中（0）</button></div>
-      <div class="status-legend"><span><i class="legend-dot dot-following"></i>Pixiv 仍在关注</span><span><i class="legend-dot dot-collection"></i>允许后续采集</span><span><i class="legend-dot dot-serving"></i>具备供图资格</span></div>
-      <div class="table-wrap"><table><thead><tr><th>选择</th><th>画师</th><th>Pixiv 关注</th><th>本地审核</th><th>采集许可</th><th>供图资格</th><th>操作</th></tr></thead><tbody id="artist-rows"><tr><td colspan="7" class="empty-cell">正在读取画师…</td></tr></tbody></table></div>
-      <div class="list-footer"><span id="artist-summary" class="muted"></span><button id="more-artists" class="button button-quiet" type="button" hidden>加载更多</button></div>
-      <p class="boundary-note"><strong>状态说明</strong> 暂停采集会保留已入库内容并继续供图；屏蔽会立即停止该画师供图，并取消未执行任务。</p>
+    <section class="panel tab-panel is-visible" id="panel-library" data-panel="library" role="tabpanel" aria-labelledby="tab-library">
+      <div class="panel-heading"><div><p class="eyebrow">本地采集名单</p><h2>画师图库</h2><p class="muted">代表作和标签来自已收录目录。标签修正只更新本地画师标签。</p></div><button id="reload-library" class="button button-secondary" type="button">刷新图库</button></div>
+      <form id="manual-artist-form" class="manual-add"><label for="manual-artist-id">手动添加 Pixiv UID</label><div class="manual-add-row"><input id="manual-artist-id" name="id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="输入数字 UID" required><button class="button button-primary" type="submit">加入图库</button></div><p class="field-help">点击后会将画师加入图库并安排后台采集。</p></form>
+      <div class="library-tools"><label>按标签筛选<select id="library-tag"><option value="">所有标签</option></select></label><label>账号<select id="library-account"><option value="">所有账号</option></select></label><span id="library-summary" class="muted" aria-live="polite"></span></div>
+      <div id="artist-list" class="artist-grid" aria-live="polite"><p class="empty-cell">正在读取图库…</p></div>
+      <div class="list-footer"><span id="artist-page-status" class="muted"></span><button id="more-artists" class="button button-quiet" type="button" hidden>继续加载</button></div>
     </section>
 
-    <section class="panel tab-panel" id="panel-recommendations" data-panel="recommendations" hidden>
-      <div class="panel-heading"><div><p class="eyebrow">人工预览与审核</p><h2>推荐候选</h2><p class="muted">推荐只提供待审核候选。分数用于启发式排序，不代表概率；置信度偏低，请查看样本后自行决定。</p></div><button id="start-recommendations" class="button button-primary" type="button">生成推荐候选</button></div>
-      <div class="budget-note"><strong>本次计算上限</strong><span>30 位种子画师 · 每位 8 个样本 · 最多 60 位候选 · 每位最多 4 个样本 · 最多 300 次上游请求</span></div>
-      <form id="recommendation-query" class="inline-form recommendation-query"><label for="recommendation-run-id">查询推荐批次</label><input id="recommendation-run-id" name="run_id" autocomplete="off" placeholder="粘贴 run ID" required><button class="button button-secondary" type="submit">查询结果</button></form>
-      <div id="recommendation-run" class="run-summary" aria-live="polite"></div>
-      <div id="recommendation-list" class="recommendation-list"><p class="empty-cell">启动推荐任务后，粘贴或使用生成的 run ID 查询候选。</p></div>
-      <p class="boundary-note"><strong>审核边界</strong> 预览候选不会自动进入采集名单。批准会创建采集任务；拒绝或屏蔽需要你逐项明确操作。</p>
+    <section class="panel tab-panel" id="panel-discover" data-panel="discover" role="tabpanel" aria-labelledby="tab-discover" hidden>
+      <div class="panel-heading"><div><p class="eyebrow">灵感候选</p><h2>发现画师</h2><p class="muted">看看代表作和推荐理由，再决定是否加入你的图库。</p></div><button id="start-recommendations" class="button button-primary" type="button">开始发现</button></div>
+      <div id="recommendation-status" class="run-summary" aria-live="polite"><span>正在查找最近一次推荐…</span></div>
+      <div id="recommendation-list" class="recommendation-list"><p class="empty-cell">推荐结果会显示在这里。</p></div>
+      <p class="boundary-note"><strong>由你决定</strong> 只有点击“加入图库”后才会开始采集；不感兴趣会结束本轮对该画师的推荐。</p>
     </section>
 
-    <section class="panel tab-panel" id="panel-jobs" data-panel="jobs" hidden>
-      <div class="panel-heading"><div><p class="eyebrow">可恢复的后台工作</p><h2>后台任务</h2><p class="muted">任务状态反映处理进度，不代表远端关注、收藏或用户喜欢。</p><p id="job-refresh-status" class="muted" aria-live="polite">尚未刷新</p></div><button id="reload-jobs" class="button button-secondary" type="button">刷新任务</button></div>
-      <div class="job-toolbar"><span id="job-counts" class="muted">本次加载 0 项</span><div class="job-filters" role="group" aria-label="任务筛选"><button class="button button-quiet button-small is-active" data-job-filter="active" type="button">活动</button><button class="button button-quiet button-small" data-job-filter="all" type="button">全部</button><button class="button button-quiet button-small" data-job-filter="failed" type="button">失败</button></div></div>
-      <div id="job-list" class="job-list"><p class="empty-cell">正在读取任务…</p></div>
+    <section class="panel tab-panel" id="panel-settings" data-panel="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <div class="panel-heading"><div><p class="eyebrow">连接与选图</p><h2>设置</h2><p class="muted">账号凭据仅写入；保存后不会再次显示。选图规则只影响本服务的图片 API，不影响 Pixiv 预览。</p></div></div>
+      <section class="settings-section" aria-labelledby="accounts-title"><div class="section-heading"><div><h3 id="accounts-title">Pixiv 账号</h3><p class="muted">账号用于自动同步关注与采集。定时运行由服务管理。</p></div><button id="reload-accounts" class="button button-secondary" type="button">刷新账号</button></div>
+        <div id="account-list" class="account-list"><p class="empty-cell">正在读取账号…</p></div>
+        <form id="account-create-form" class="account-create"><div><h4>添加账号</h4><p class="muted">添加后由服务自动刷新凭据；你也可以手动触发一次关注同步。</p></div><div class="account-form-grid"><label>显示名称<input name="name" maxlength="80" autocomplete="off" placeholder="例如：主账号" required></label><label>Refresh Token<input name="refresh_token" type="password" autocomplete="new-password" spellcheck="false" required></label></div><button class="button button-primary" type="submit">安全保存账号</button></form>
+      </section>
+      <section class="settings-section" aria-labelledby="network-title"><div class="section-heading"><div><h3 id="network-title">服务端代理</h3><p class="muted">仅影响服务端后续发出的 Pixiv API 请求。图片预览不使用此代理设置。</p></div><button id="reload-network" class="button button-quiet" type="button">重新读取</button></div>
+        <form id="network-form" class="network-form"><fieldset><legend>连接方式</legend><div class="network-mode-list">
+          <label class="network-mode"><input type="radio" name="network-mode" value="system"><span><strong>继承环境</strong><small>使用运行环境的代理变量。</small></span></label>
+          <label class="network-mode"><input type="radio" name="network-mode" value="direct"><span><strong>直接连接</strong><small>不经过代理访问服务端上游。</small></span></label>
+          <label class="network-mode"><input type="radio" name="network-mode" value="custom"><span><strong>自定义代理</strong><small>使用你填写的 HTTP/HTTPS 代理。</small></span></label>
+        </div></fieldset><label for="network-proxy-url">代理 URL</label><input id="network-proxy-url" type="password" autocomplete="new-password" spellcheck="false" placeholder="http://host:port；可含代理凭据"><p id="network-proxy-current" class="field-help" aria-live="polite">当前设置：读取中…</p><p class="field-help">地址与凭据不会回显。Docker 中的 localhost 指容器自身；保存后只影响新的服务端请求。</p><div class="form-actions"><span id="network-status" class="muted" aria-live="polite"></span><button class="button button-primary" type="submit">保存代理设置</button></div></form>
+      </section>
+      <section class="settings-section" aria-labelledby="preferences-title"><div class="section-heading"><div><h3 id="preferences-title">选图偏好</h3><p class="muted">这些规则仅影响选图 API；请求参数仍只能进一步收紧规则。</p></div></div>
+        <form id="preferences-form" class="preferences-form"><fieldset><legend>内容分级</legend><div class="choice-row"><label class="check-option"><input type="checkbox" name="rating" value="safe">全年龄</label><label class="check-option"><input type="checkbox" name="rating" value="r18">R-18</label><label class="check-option"><input type="checkbox" name="rating" value="r18g">R-18G</label></div></fieldset><fieldset><legend>AI 标记</legend><div class="choice-row"><label class="check-option"><input type="checkbox" name="ai" value="non_ai">非 AI</label><label class="check-option"><input type="checkbox" name="ai" value="ai">AI</label></div></fieldset>
+          <div class="form-grid"><label>最小宽度<input id="min-width" type="number" min="0" max="100000" value="0"></label><label>最小高度<input id="min-height" type="number" min="0" max="100000" value="0"></label><label>图片方向<select id="orientation"><option value="any">不限</option><option value="portrait">竖图</option><option value="landscape">横图</option><option value="square">方图</option></select></label><label>选图策略<select id="strategy"><option value="balanced">画师均衡</option><option value="random">随机</option></select></label></div>
+          <label for="include-tags">优先包含标签 <span class="muted">每行一组，逗号表示任选</span></label><textarea id="include-tags" rows="3" placeholder="风景,天空&#10;猫"></textarea><label for="exclude-tags">排除标签 <span class="muted">显式排除优先</span></label><textarea id="exclude-tags" rows="2" placeholder="旧图,不喜欢"></textarea><div class="form-actions"><span id="preference-version" class="muted">版本读取中…</span><button class="button button-primary" type="submit">保存选图偏好</button></div>
+        </form>
+      </section>
     </section>
-
-    <section class="panel tab-panel" id="panel-preferences" data-panel="preferences" hidden>
-      <div class="panel-heading"><div><p class="eyebrow">只影响本地选图</p><h2>选图偏好</h2><p class="muted">请求条件会与这里的全局规则取交集，不能放宽全局限制。</p></div></div>
-      <form id="preferences-form" class="preferences-form">
-        <fieldset><legend>内容分级</legend><div class="choice-row"><label class="check-option"><input type="checkbox" name="rating" value="safe">全年龄</label><label class="check-option"><input type="checkbox" name="rating" value="r18">R-18</label><label class="check-option"><input type="checkbox" name="rating" value="r18g">R-18G</label></div></fieldset>
-        <fieldset><legend>AI 标记</legend><div class="choice-row"><label class="check-option"><input type="checkbox" name="ai" value="non_ai">非 AI</label><label class="check-option"><input type="checkbox" name="ai" value="ai">AI</label></div></fieldset>
-        <div class="form-grid"><label>最小宽度<input id="min-width" type="number" min="0" max="100000" value="0"></label><label>最小高度<input id="min-height" type="number" min="0" max="100000" value="0"></label><label>方向<select id="orientation"><option value="any">不限</option><option value="portrait">竖图</option><option value="landscape">横图</option><option value="square">方图</option></select></label><label>选图策略<select id="strategy"><option value="balanced">画师均衡</option><option value="random">随机</option></select></label></div>
-        <label for="include-tags">必须包含的标签组 <span class="muted">每行一个组，逗号分隔表示组内任选</span></label><textarea id="include-tags" rows="3" placeholder="例如：风景,天空&#10;猫"></textarea>
-        <label for="exclude-tags">排除标签 <span class="muted">逗号分隔；显式排除优先</span></label><textarea id="exclude-tags" rows="2" placeholder="例如：旧图,不喜欢"></textarea>
-        <div class="form-actions"><span id="preference-version" class="muted">版本读取中…</span><button class="button button-primary" type="submit">保存偏好</button></div>
-      </form>
-    </section>
-
-    <section class="panel tab-panel" id="panel-network" data-panel="network" hidden>
-      <div class="panel-heading"><div><p class="eyebrow">服务端网络出口</p><h2>网络设置</h2><p class="muted">仅影响服务端后续发起的 API 与图片请求。管理页面使用浏览器自己的网络代理。</p></div><button id="reload-network" class="button button-secondary" type="button">读取设置</button></div>
-      <form id="network-form" class="network-form">
-        <fieldset><legend>代理模式</legend><div class="network-mode-list">
-          <label class="network-mode"><input type="radio" name="network-mode" value="system"><span><strong>系统代理</strong><small>使用服务运行环境配置的代理。</small></span></label>
-          <label class="network-mode"><input type="radio" name="network-mode" value="direct"><span><strong>直连</strong><small>不通过代理访问上游。</small></span></label>
-          <label class="network-mode"><input type="radio" name="network-mode" value="custom"><span><strong>自定义代理</strong><small>使用下方 HTTP/HTTPS 代理地址。</small></span></label>
-        </div></fieldset>
-        <label for="network-proxy-url">自定义代理 URL</label><input id="network-proxy-url" type="password" autocomplete="off" spellcheck="false" placeholder="http://host:port 或含凭据的代理 URL">
-        <p id="network-proxy-current" class="field-help" aria-live="polite">当前代理地址：读取中…</p>
-        <p class="field-help">保存后立即影响服务端后续 API 和图片请求；不会改变浏览器自身代理。Docker 中的 localhost 指容器自身，如代理运行在宿主机，请填写容器可访问的宿主机地址。保存后输入框会清空；自定义模式留空会保留已保存地址。</p>
-        <div class="form-actions"><span id="network-status" class="muted" aria-live="polite"></span><button class="button button-primary" type="submit">保存网络设置</button></div>
-      </form>
-    </section>
-
-    <section class="panel tab-panel" id="panel-account" data-panel="account" hidden>
-      <div class="panel-heading"><div><p class="eyebrow">Pixiv 连接状态</p><h2>账号与关注</h2><p class="muted">凭据只写入，不会回显。管理页面不会替你关注、取关或收藏作品。</p></div><button id="reload-account" class="button button-secondary" type="button">检查状态</button></div>
-      <div class="account-status-card"><span class="account-glyph" aria-hidden="true">P</span><div><span class="muted">认证状态</span><strong id="account-status">读取中…</strong></div></div>
-      <div class="account-grid">
-        <section class="account-section account-login-section">
-          <div class="account-section-copy"><p class="eyebrow">浏览器登录</p><h3>使用 Pixiv 账号登录</h3><p class="muted">点击后会在新标签打开 Pixiv。请在普通浏览器页面中登录并完成验证；本机启用自动回调后，登录完成时允许打开 Pixiv Curator Login，授权即会自动保存。</p><p id="pixiv-login-status" class="account-live-status" role="status" aria-live="polite">正在检查登录功能…</p></div>
-          <div class="account-actions"><button id="pixiv-login-start" class="button button-primary" type="button" disabled>打开 Pixiv 登录</button><button id="pixiv-login-cancel" class="button button-secondary" type="button" hidden>取消登录</button><a id="pixiv-login-open-link" class="button button-secondary" href="#" target="_blank" rel="noopener noreferrer" hidden>手动打开 Pixiv 登录链接</a></div>
-          <details><summary>手动回填授权码（自动接收不可用时）</summary><form id="pixiv-login-code-form" class="stack-form"><label for="pixiv-login-code">授权 code 或回调 URL</label><input id="pixiv-login-code" type="password" autocomplete="off" required placeholder="粘贴 code 或 pixiv://account/login?code=…"><p class="field-help">登录前可在浏览器按 F12 打开 Network，勾选 Preserve log 并筛选 callback 或 pixiv。完成登录后，在请求中找到 pixiv://account/login?code=…，复制 code 或完整 URL 到此处立即提交，授权码很快会失效。</p><button class="button button-secondary" type="submit">提交授权 code</button></form></details>
-          <p class="account-note">此流程使用普通浏览器，不会自动化浏览器操作。验证码或其他验证是否通过由 Pixiv 决定；如无法完成，可使用下方 Refresh Token 方式。</p>
-        </section>
-        <form id="credential-form" class="stack-form account-section"><div><p class="eyebrow">远程或手动授权</p><h3>保存 Refresh Token</h3><p class="muted">适用于远程服务，凭据仅写入，不会回显。</p></div><label for="refresh-token">Pixiv refresh token</label><input id="refresh-token" type="password" autocomplete="off" required><p class="field-help">提交后仅显示保存状态，令牌不会存入页面存储。</p><button class="button button-secondary" type="submit">安全保存凭据</button></form>
-        <section class="sync-card account-section"><div><p class="eyebrow">关注关系</p><h3>同步 Pixiv 关注</h3><p class="muted">导入关注状态，不会自动加入本地采集名单。</p></div><div class="account-actions"><button id="sync-following" class="button button-primary" type="button">开始同步</button></div></section>
-      </div>
-      <p class="boundary-note">同步关注与本地采集名单彼此独立。首次导入后，请在“画师”页逐个审核。</p>
-    </section>
-    <footer class="app-footer"><span>Pixiv Curator</span><span>本地目录 · 人工确认后采集</span></footer>
+    <footer class="app-footer"><span>Pixiv Curator</span><span>由你决定 · 本地管理</span></footer>
   </main>
-  <dialog id="artwork-dialog" class="artwork-dialog"><div class="dialog-heading"><div><p class="eyebrow">固定作品身份</p><h2 id="artwork-heading">作品预览</h2></div><button id="close-artworks" class="button button-quiet" type="button" aria-label="关闭">关闭</button></div><div id="artwork-list" class="artwork-list"></div></dialog>
+  <dialog id="artwork-dialog" class="artwork-dialog"><div class="dialog-heading"><div><p class="eyebrow">画师代表作</p><h2 id="artwork-heading">作品预览</h2></div><button id="close-artworks" class="button button-quiet" type="button" aria-label="关闭作品预览">关闭</button></div><div id="artwork-list" class="artwork-list"></div></dialog>
   <script>{{.JS}}</script>
 </body>
 </html>

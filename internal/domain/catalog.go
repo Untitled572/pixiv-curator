@@ -10,13 +10,14 @@ var (
 )
 
 type Artist struct {
-	ID                int64  `json:"id,string"`
-	Name              string `json:"name"`
-	Account           string `json:"account"`
-	AvatarURL         string `json:"avatar_url"`
-	ReviewStatus      string `json:"review_status"`
-	CollectionEnabled bool   `json:"collection_enabled"`
-	RemoteFollowed    bool   `json:"remote_followed"`
+	ID                int64    `json:"id,string"`
+	Name              string   `json:"name"`
+	Account           string   `json:"account"`
+	AvatarURL         string   `json:"avatar_url"`
+	ReviewStatus      string   `json:"review_status"`
+	CollectionEnabled bool     `json:"collection_enabled"`
+	RemoteFollowed    bool     `json:"remote_followed"`
+	Tags              []string `json:"tags"`
 }
 
 type Page struct {

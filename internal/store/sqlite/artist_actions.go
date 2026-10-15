@@ -29,14 +29,14 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 	next := state
 	jobID := ""
 	switch action {
-	case "approve":
-		if state != "pending" && state != "approved" {
+	case "approve", "unblock":
+		if action != "unblock" && state != "pending" && state != "approved" {
 			return "", domain.ErrConflict
 		}
 		next = "approved"
 		if state != "approved" || !enabled {
 			enabled = true
-			payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "full"})
+			payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "recent"})
 			jobID, err = enqueue(ctx, tx, "sync_artist", fmt.Sprintf("artist:%d", id), payload)
 			if err != nil {
 				return "", err
@@ -73,7 +73,7 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 }
 
 func cancelArtistJobs(ctx context.Context, tx *sql.Tx, id int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='sync_artist' AND dedupe_key=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), fmt.Sprintf("artist:%d", id))
+	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -97,7 +97,7 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 	if !enabled {
 		err = cancelArtistJobs(ctx, tx, id)
 	} else {
-		payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "full"})
+		payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "recent"})
 		_, err = enqueue(ctx, tx, "sync_artist", fmt.Sprintf("artist:%d", id), payload)
 	}
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 			return err
 		}
 		if a.MetadataState != "complete" || a.Rating == "unknown" || a.AIStatus == "unknown" {
-			payload, _ := json.Marshal(map[string]any{"illust_id": a.ID})
+			payload, _ := json.Marshal(map[string]any{"illust_id": a.ID, "account_id": domain.ContextAccount(ctx)})
 			if _, err = enqueue(ctx, tx, "hydrate_artwork", fmt.Sprintf("hydrate:%d", a.ID), payload); err != nil {
 				return err
 			}
@@ -151,11 +151,25 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 	if err = incrementJobProgress(ctx, tx, j, len(artworks)); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO artist_sync_state(artist_id,phase,cursor,run_id,last_full_sync_at,last_incremental_at) VALUES(?,?,?,?,?,?) ON CONFLICT(artist_id) DO UPDATE SET phase=excluded.phase,cursor=excluded.cursor,run_id=excluded.run_id,last_full_sync_at=COALESCE(excluded.last_full_sync_at,artist_sync_state.last_full_sync_at),last_incremental_at=COALESCE(excluded.last_incremental_at,artist_sync_state.last_incremental_at)`, artistID, phase, cursor, runID, finishedAt(cursor, phase == "full"), finishedAt(cursor, phase == "incremental"))
+	_, err = tx.ExecContext(ctx, `INSERT INTO artist_sync_state(artist_id,phase,cursor,run_id,last_full_sync_at,last_incremental_at) VALUES(?,?,?,?,?,?) ON CONFLICT(artist_id) DO UPDATE SET phase=excluded.phase,cursor=excluded.cursor,run_id=excluded.run_id,last_full_sync_at=COALESCE(excluded.last_full_sync_at,artist_sync_state.last_full_sync_at),last_incremental_at=COALESCE(excluded.last_incremental_at,artist_sync_state.last_incremental_at)`, artistID, phase, cursor, runID, finishedAt(cursor, phase == "full" || phase == "history" || phase == "recent"), finishedAt(cursor, phase == "incremental"))
 	if err != nil {
 		return err
 	}
-	if cursor == "" {
+	var progress int64
+	if err = tx.QueryRowContext(ctx, `SELECT progress_items FROM jobs WHERE id=?`, j.ID).Scan(&progress); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE jobs SET payload_json=json_set(payload_json,'$.cursor',?) WHERE id=?`, cursor, j.ID); err != nil {
+		return err
+	}
+	stopRecent := (phase == "recent" || phase == "incremental") && progress >= 100
+	if stopRecent && cursor != "" {
+		payload, _ := json.Marshal(map[string]any{"artist_id": artistID, "phase": "history", "cursor": cursor, "account_id": domain.ContextAccount(ctx)})
+		if _, err = enqueue(ctx, tx, "sync_artist", fmt.Sprintf("artist-history:%d", artistID), payload); err != nil {
+			return err
+		}
+	}
+	if cursor == "" || stopRecent {
 		_, err = tx.ExecContext(ctx, `UPDATE artists SET last_synced_at=?,updated_at=? WHERE id=?`, time.Now().UnixMilli(), time.Now().UnixMilli(), artistID)
 		if err != nil {
 			return err
@@ -186,7 +200,7 @@ func checkLease(ctx context.Context, tx *sql.Tx, j domain.Job) error {
 }
 
 // CommitFollowingBatch marks unfollowed artists only on a successfully completed
-// snapshot. Local review and collection state are never changed by following.
+// snapshot. Following enrolls artists automatically, preserving explicit exclusions.
 func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID string, artists []domain.Artist, nextPayload json.RawMessage, complete bool) error {
 	if runID == "" || !json.Valid(nextPayload) {
 		return domain.ErrInvalid
@@ -208,19 +222,62 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 	if savedPages > 0 && savedPayload == string(nextPayload) {
 		return tx.Commit()
 	}
+	accountID := domain.ContextAccount(ctx)
+	if accountID == "" {
+		var routing struct {
+			ID string `json:"account_id"`
+		}
+		_ = json.Unmarshal(nextPayload, &routing)
+		accountID = routing.ID
+	}
 	for _, a := range artists {
 		if a.ID <= 0 {
 			return domain.ErrInvalid
 		}
-		if err = upsertArtist(ctx, tx, a, "following", "account"); err != nil {
+		if err = upsertArtist(ctx, tx, a, "following", accountID); err != nil {
 			return err
+		}
+		if accountID != "" {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run) VALUES(?,?,1,?) ON CONFLICT(account_id,artist_id) DO UPDATE SET followed=1,last_seen_run=excluded.last_seen_run`, accountID, a.ID, runID); err != nil {
+				return err
+			}
+		}
+		// The revised workflow treats following as enrollment, but never overrides
+		// an explicit rejection, block, or paused collection.
+		if _, err = tx.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1 WHERE id=? AND review_status='pending'`, a.ID); err != nil {
+			return err
+		}
+		var enabled bool
+		if err = tx.QueryRowContext(ctx, `SELECT review_status='approved' AND collection_enabled=1 FROM artists WHERE id=?`, a.ID).Scan(&enabled); err != nil {
+			return err
+		}
+		if enabled {
+			phase := "recent"
+			var indexed bool
+			if err = tx.QueryRowContext(ctx, `SELECT last_synced_at IS NOT NULL FROM artists WHERE id=?`, a.ID).Scan(&indexed); err != nil {
+				return err
+			}
+			if indexed {
+				phase = "incremental"
+			}
+			payload, _ := json.Marshal(map[string]any{"artist_id": a.ID, "phase": phase, "account_id": accountID})
+			if _, err = enqueue(ctx, tx, "sync_artist", fmt.Sprintf("artist:%d", a.ID), payload); err != nil {
+				return err
+			}
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=1,last_seen_follow_run=? WHERE id=?`, runID, a.ID); err != nil {
 			return err
 		}
 	}
 	if complete {
-		if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=0,updated_at=? WHERE remote_followed=1 AND last_seen_follow_run<>?`, time.Now().UnixMilli(), runID); err != nil {
+		if accountID != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE account_artists SET followed=0 WHERE account_id=? AND last_seen_run<>?`, accountID, runID); err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=artists.id AND aa.followed=1 AND ac.deleted=0),updated_at=?`, time.Now().UnixMilli()); err != nil {
+				return err
+			}
+		} else if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=0,updated_at=? WHERE remote_followed=1 AND last_seen_follow_run<>?`, time.Now().UnixMilli(), runID); err != nil {
 			return err
 		}
 	}

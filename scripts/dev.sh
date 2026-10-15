@@ -7,7 +7,8 @@ usage() {
 用法: scripts/dev.sh [--no-login-helper] [--help]
 
 启动本机 Pixiv Curator（默认 http://127.0.0.1:5722）。私密数据位于 data/dev，
-可用 PIXIV_CURATOR_DEV_DIR 覆盖。启动前确保本地 Go 可用；默认会准备 Python 登录依赖。
+可用 PIXIV_CURATOR_DEV_DIR 覆盖。首次缺少 OAuth 参数时准备锁定的 Python 依赖生成参数，
+后续启动直接复用配置。进入设置后使用 Refresh Token 添加多个账号，不需要桌面登录窗口。
 PIXIV_CURATOR_OPEN_BROWSER=0 可关闭自动打开登录页。
 USAGE
 }
@@ -87,7 +88,7 @@ os.chmod(path, 0o600, follow_symlinks=False)
 PYTOKEN
 fi
 
-if [ "$no_helper" -eq 0 ]; then
+if [ "$no_helper" -eq 0 ] && [ ! -s "$oauth_file" ]; then
   req="$repo/scripts/requirements-login.txt"
   helper="$repo/scripts/pixiv-login.py"
   [ -f "$req" ] || { echo "缺少锁定依赖文件: $req" >&2; exit 1; }
@@ -117,29 +118,16 @@ PY
     mv -f "$marker_tmp" "$marker"
   fi
   "$venv/bin/python" "$helper" configure "$oauth_file"
-  unset PIXIV_CURATOR_CALLBACK_DIR
-  if [ "${PIXIV_CURATOR_LOCAL_CALLBACK:-1}" = 1 ] && [ "$(uname -s)" = Linux ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-mime >/dev/null 2>&1; then
-    if "$venv/bin/python" "$repo/scripts/pixiv-callback.py" install "$dev_dir/callback"; then
-      export PIXIV_CURATOR_CALLBACK_DIR="$dev_dir/callback"
-      echo "已启用本机自动回调：登录后允许浏览器打开 Pixiv Curator Login。"
-    else
-      echo "本机回调未启用，仍可使用手动授权码方式。" >&2
-    fi
-  fi
-  export PIXIV_CURATOR_LOGIN_PYTHON="$venv/bin/python"
-  export PIXIV_CURATOR_LOGIN_HELPER="$helper"
 fi
+unset PIXIV_CURATOR_CALLBACK_DIR PIXIV_CURATOR_LOGIN_PYTHON PIXIV_CURATOR_LOGIN_HELPER
 
 export PIXIV_CURATOR_ADDR="$addr"
 export PIXIV_CURATOR_PUBLIC_BASE_URL="$base"
 export PIXIV_CURATOR_DATABASE_PATH="$db_file"
 export PIXIV_CURATOR_ADMIN_TOKEN_FILE="$token_file"
 export PIXIV_CURATOR_PIXIV_TOKEN_FILE="$refresh_file"
-if [ "$no_helper" -eq 0 ]; then
+if [ -s "$oauth_file" ]; then
   export PIXIV_CURATOR_OAUTH_CONFIG_FILE="$oauth_file"
-else
-  unset PIXIV_CURATOR_OAUTH_CONFIG_FILE
-  unset PIXIV_CURATOR_LOGIN_PYTHON PIXIV_CURATOR_LOGIN_HELPER
 fi
 
 mkdir -p "$repo/bin"
