@@ -136,3 +136,55 @@ func TestLoginRateLimitAndBadInput(t *testing.T) {
 		t.Fatalf("rate limit status = %d; want 429", rec.Code)
 	}
 }
+
+func TestRememberSessionLifetime(t *testing.T) {
+	for _, remember := range []bool{false, true} {
+		t.Run(map[bool]string{false: "temporary", true: "remembered"}[remember], func(t *testing.T) {
+			auth := NewAuth([]byte("test-secret"), AuthOptions{SecureCookies: true})
+			body, _ := json.Marshal(map[string]any{"token": "test-secret", "remember": remember})
+			rec := httptest.NewRecorder()
+			auth.login(rec, httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(string(body))))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("login status %d", rec.Code)
+			}
+			cookies := rec.Result().Cookies()
+			if len(cookies) != 2 {
+				t.Fatal("missing cookies")
+			}
+			for _, c := range cookies {
+				if remember && (c.MaxAge != 30*24*3600 || c.Expires.IsZero()) {
+					t.Fatal("missing persistent expiry")
+				}
+				if !remember && (c.MaxAge != 0 || !c.Expires.IsZero()) {
+					t.Fatal("temporary cookie persisted")
+				}
+				if c.Value == "test-secret" {
+					t.Fatal("raw token persisted")
+				}
+			}
+			want := 12 * time.Hour
+			if remember {
+				want = 30 * 24 * time.Hour
+			}
+			for key, session := range auth.sessions {
+				remaining := time.Until(session.expiresAt)
+				if remaining > want || remaining < want-time.Minute {
+					t.Fatal("incorrect server expiry")
+				}
+				session.expiresAt = time.Now().Add(-time.Second)
+				auth.sessions[key] = session
+			}
+			req := httptest.NewRequest(http.MethodGet, "/admin/api/account", nil)
+			for _, c := range cookies {
+				req.AddCookie(c)
+			}
+			if _, ok := auth.sessionFromRequest(req); ok {
+				t.Fatal("expired session accepted")
+			}
+			fresh := NewAuth([]byte("test-secret"), AuthOptions{})
+			if _, ok := fresh.sessionFromRequest(req); ok {
+				t.Fatal("session survived service restart")
+			}
+		})
+	}
+}

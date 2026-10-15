@@ -380,7 +380,7 @@ url 从配置的 PUBLIC_BASE_URL 构造，必须让实际消费方可达；不�
 
 候选卡片至少有画师名、UID、有限预览、推荐理由及确认/拒绝/屏蔽按钮。禁用不能执行的动作，后端仍独立校验；任务入队成功不显示为“采集完成”。
 
-管理 API 支持私密文件配置的 Bearer token；POST /admin/login 是唯一允许未持有会话访问的管理写入口，仍验证提交的 token 并对失败尝试限流。浏览器页面通过此入口建立短期会话，HttpOnly、SameSite=Strict，HTTPS 时 Secure。会话保存在内存，重启失效；POST /admin/logout 撤销会话。页面 Cookie 写操作校验 Origin/CSRF，不将长期 token 放入 URL 或 localStorage。
+管理 API 支持私密文件配置的 Bearer token；POST /admin/login 是唯一允许未持有会话访问的管理写入口，仍验证提交的 token 并对失败尝试限流。浏览器页面通过此入口建立短期会话，HttpOnly、SameSite=Strict，HTTPS 时 Secure。登录 JSON 可选 `remember` 布尔值：默认 false，Cookie 不设持久有效期，服务端最长 12 小时；true 时 Cookie 与服务端有效期均为 30 天。会话保存在内存，重启失效；POST /admin/logout 撤销会话。页面 Cookie 写操作校验 Origin/CSRF，不将长期 token 放入 URL 或 localStorage。
 
 默认只监听本机。供图 API 第一阶段运行在受控本机/容器内网，不依赖 PicHub 明文图源 Headers 保存秘密。公网暴露需单独完成服务鉴权与部署方案，不能仅把监听改为 0.0.0.0 就视为已具备公网保护。
 

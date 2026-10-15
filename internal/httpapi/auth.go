@@ -17,11 +17,12 @@ import (
 )
 
 const (
-	sessionCookieName = "curator_session"
-	csrfCookieName    = "curator_csrf"
-	maxLoginBody      = 4096
-	loginWindow       = time.Minute
-	loginMaxFailures  = 5
+	sessionCookieName  = "curator_session"
+	csrfCookieName     = "curator_csrf"
+	maxLoginBody       = 4096
+	loginWindow        = time.Minute
+	loginMaxFailures   = 5
+	rememberSessionTTL = 30 * 24 * time.Hour
 )
 
 // AuthOptions controls browser session behavior. SecureCookies should be true
@@ -111,7 +112,8 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxLoginBody)
 	var input struct {
-		Token string `json:"token"`
+		Token    string `json:"token"`
+		Remember bool   `json:"remember"`
 	}
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
@@ -139,6 +141,10 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
+	ttl := a.options.SessionTTL
+	if input.Remember {
+		ttl = rememberSessionTTL
+	}
 	digest := sha256.Sum256([]byte(sessionRaw))
 	now := time.Now()
 	a.mu.Lock()
@@ -152,10 +158,14 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 		writeAuthError(w, http.StatusTooManyRequests, "SESSION_LIMIT")
 		return
 	}
-	a.sessions[digest] = authSession{csrf: csrf, expiresAt: now.Add(a.options.SessionTTL)}
+	a.sessions[digest] = authSession{csrf: csrf, expiresAt: now.Add(ttl)}
 	a.mu.Unlock()
-	setAuthCookie(w, sessionCookieName, sessionRaw, a.options, a.options.SessionTTL, true)
-	setAuthCookie(w, csrfCookieName, csrf, a.options, a.options.SessionTTL, false)
+	cookieTTL := time.Duration(0)
+	if input.Remember {
+		cookieTTL = ttl
+	}
+	setAuthCookie(w, sessionCookieName, sessionRaw, a.options, cookieTTL, true)
+	setAuthCookie(w, csrfCookieName, csrf, a.options, cookieTTL, false)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "authenticated"})
 }
 
@@ -279,8 +289,13 @@ func randomToken() (string, error) {
 }
 
 func setAuthCookie(w http.ResponseWriter, name, value string, options AuthOptions, ttl time.Duration, httpOnly bool) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: value, Path: "/admin", HttpOnly: httpOnly,
-		Secure: options.SecureCookies, SameSite: http.SameSiteStrictMode, MaxAge: int(ttl.Seconds()), Expires: time.Now().Add(ttl)})
+	cookie := &http.Cookie{Name: name, Value: value, Path: "/admin", HttpOnly: httpOnly,
+		Secure: options.SecureCookies, SameSite: http.SameSiteStrictMode}
+	if ttl > 0 {
+		cookie.MaxAge = int(ttl.Seconds())
+		cookie.Expires = time.Now().Add(ttl)
+	}
+	http.SetCookie(w, cookie)
 }
 
 func clearAuthCookie(w http.ResponseWriter, name string, options AuthOptions, httpOnly bool) {

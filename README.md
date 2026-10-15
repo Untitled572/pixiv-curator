@@ -69,7 +69,7 @@ PIXIV_CURATOR_ADDR=127.0.0.1:8080 PIXIV_CURATOR_LOG_LEVEL=debug go run ./cmd/api
 
 运行时数据预留在 data/，已忽略 Git 跟踪。真实 token、代理凭据和 .env 不得提交。
 
-管理 token 文件应位于权限 0700 的目录，文件权限 0600；Windows 使用受限 ACL（应用不校验 POSIX 权限位）。管理 API 接受 `Authorization: Bearer ...`，浏览器通过 `POST /admin/login` 提交 JSON token 建立短期会话，Cookie 写操作同时要求匹配 Origin 和 `X-CSRF-Token`。会话重启失效，`POST /admin/logout` 撤销会话。勿将 token 放入 URL、日志或 localStorage。
+管理 token 文件应位于权限 0700 的目录，文件权限 0600；Windows 使用受限 ACL（应用不校验 POSIX 权限位）。管理 API 接受 `Authorization: Bearer ...`，浏览器通过 `POST /admin/login` 提交 JSON token 建立短期会话，Cookie 写操作同时要求匹配 Origin 和 `X-CSRF-Token`。登录可提交 `remember: true` 记住 30 天；未勾选时为最长 12 小时的浏览器会话。会话重启失效，`POST /admin/logout` 撤销会话。勿将 token 放入 URL、日志或 localStorage。
 
 打开 `/admin/login` 登录，然后在账号页使用 Pixiv 浏览器登录或保存 refresh token、同步关注，在画师页明确勾选并批准采集，在推荐页启动推荐批次、查看预览并确认。任务入队并不表示采集完成；缺失或失效凭据需修复后显式恢复暂停任务。
 

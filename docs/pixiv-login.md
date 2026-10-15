@@ -66,3 +66,11 @@ sh -n scripts/dev.sh
 ```
 
 测试覆盖并发登录、取消/超时、保存失败、鉴权/CSRF、错误脱敏和 OAuth 重定向，均不访问 Pixiv。真实账号验收需用户在 Pixiv 窗口完成登录，再验证同步和出图；不要把模拟测试当作实网通过。
+
+## Google 登录提示“浏览器可能不安全”
+
+辅助窗口由 Playwright 控制，Google 会限制自动化浏览器登录，见 [Google 支持说明](https://support.google.com/accounts/answer/7675428)。当前集成不支持在辅助窗口中使用 Google 登录，不通过隐藏自动化标记或关闭浏览器安全功能绕过限制。
+
+可在辅助窗口选择 Pixiv 自身的“通过邮箱登录”并完成验证。如果不确定绑定邮箱，可在日常浏览器通过 Google 登录 [Pixiv 账号门户](https://accounts.pixiv.net/)，确认邮箱或管理登录方式，再回辅助窗口重试。参考 [Pixiv 官方登录说明](https://www.pixiv.help/hc/en-us/articles/235583008-I-ve-lost-my-password)。日常浏览器的登录不会自动传回本项目；不要将 Google 密码填入 Pixiv 密码栏。真实账号验证仍需用户操作。
+
+管理登录页的“记住登录（30 天）”只保存会话 Cookie，不保存管理令牌。未勾选时为浏览器会话 Cookie，服务端最长 12 小时；退出登录或服务重启均使会话失效。

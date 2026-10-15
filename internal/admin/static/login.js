@@ -6,21 +6,26 @@
     event.preventDefault();
     message.textContent = "";
     const token = input.value;
-    input.value = "";
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    message.textContent = "正在验证…";
     try {
       const response = await fetch("/admin/login", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token })
+        body: JSON.stringify({ token, remember: document.getElementById("remember-login").checked })
       });
       if (!response.ok) {
         message.textContent = "登录失败，请检查令牌并稍后重试。";
         return;
       }
+      input.value = "";
       window.location.assign("/admin/");
     } catch (_) {
       message.textContent = "暂时无法连接服务，请确认本机服务仍在运行。";
+    } finally {
+      button.disabled = false;
     }
   });
 })();

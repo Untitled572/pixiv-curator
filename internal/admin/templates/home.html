@@ -66,10 +66,16 @@
     <section class="panel tab-panel" id="panel-account" data-panel="account" hidden>
       <div class="panel-heading"><div><p class="eyebrow">Pixiv 连接状态</p><h2>账号与关注</h2><p class="muted">凭据只写入，不会回显。管理页面不会替你关注、取关或收藏作品。</p></div><button id="reload-account" class="button button-secondary" type="button">检查状态</button></div>
       <div class="account-status-card"><span class="account-glyph" aria-hidden="true">P</span><div><span class="muted">认证状态</span><strong id="account-status">读取中…</strong></div></div>
-      <div class="sync-card"><div><h3>使用 Pixiv 账号登录</h3><p class="muted">打开运行服务这台电脑上的 Pixiv 登录窗口，在 Pixiv 页面完成账号、密码和验证码验证。成功后自动保存授权。</p><p id="pixiv-login-status" role="status" aria-live="polite">正在检查登录功能…</p></div><div><button id="pixiv-login-start" class="button button-primary" type="button" disabled>打开 Pixiv 登录窗口</button><button id="pixiv-login-cancel" class="button button-secondary" type="button" hidden>取消登录</button></div></div>
-      <p class="field-help">首次使用请通过 scripts/dev.sh 启动。登录窗口出现在服务所在电脑；远程服务器可使用下方令牌方式。关闭窗口或登录失败后可以重试。</p>
-      <form id="credential-form" class="stack-form"><label for="refresh-token">Pixiv refresh token</label><input id="refresh-token" type="password" autocomplete="off" required><p class="field-help">提交后仅显示保存状态，令牌不会存入页面存储。</p><button class="button button-secondary" type="submit">安全保存凭据</button></form>
-      <div class="sync-card"><div><h3>同步 Pixiv 关注</h3><p class="muted">导入关注状态，不会自动加入本地采集名单。</p></div><button id="sync-following" class="button button-primary" type="button">开始同步</button></div>
+      <div class="account-grid">
+        <section class="account-section account-login-section">
+          <div class="account-section-copy"><p class="eyebrow">交互式登录</p><h3>使用 Pixiv 账号登录</h3><p class="muted">登录窗口会在运行服务的电脑上打开。请在 Pixiv 页面完成账号、密码和验证码验证，成功后会自动保存授权。</p><p id="pixiv-login-status" class="account-live-status" role="status" aria-live="polite">正在检查登录功能…</p></div>
+          <div class="account-actions"><button id="pixiv-login-start" class="button button-primary" type="button" disabled>打开 Pixiv 登录窗口</button><button id="pixiv-login-cancel" class="button button-secondary" type="button" hidden>取消登录</button></div>
+          <p class="account-note">当前辅助窗口不支持 Google 登录。请优先在辅助窗口选择 Pixiv 邮箱登录并按提示完成验证。Google 用户可先在<a href="https://accounts.pixiv.net/" target="_blank" rel="noopener noreferrer">Pixiv 账号门户</a>确认绑定邮箱或管理登录方式；在日常浏览器登录 Pixiv 不会自动把授权传回此辅助窗口。</p>
+          <p class="field-help">首次使用请通过 scripts/dev.sh 启动。登录窗口出现在服务所在电脑；远程服务器可使用下方令牌方式。关闭窗口或登录失败后可以重试。</p>
+        </section>
+        <form id="credential-form" class="stack-form account-section"><div><p class="eyebrow">远程或手动授权</p><h3>保存 Refresh Token</h3><p class="muted">适用于远程服务，凭据仅写入，不会回显。</p></div><label for="refresh-token">Pixiv refresh token</label><input id="refresh-token" type="password" autocomplete="off" required><p class="field-help">提交后仅显示保存状态，令牌不会存入页面存储。</p><button class="button button-secondary" type="submit">安全保存凭据</button></form>
+        <section class="sync-card account-section"><div><p class="eyebrow">关注关系</p><h3>同步 Pixiv 关注</h3><p class="muted">导入关注状态，不会自动加入本地采集名单。</p></div><div class="account-actions"><button id="sync-following" class="button button-primary" type="button">开始同步</button></div></section>
+      </div>
       <p class="boundary-note">同步关注与本地采集名单彼此独立。首次导入后，请在“画师”页逐个审核。</p>
     </section>
     <footer class="app-footer"><span>Pixiv Curator</span><span>本地目录 · 人工确认后采集</span></footer>
