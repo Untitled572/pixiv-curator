@@ -24,27 +24,54 @@ Pixiv 账号添加时，服务端刷新 Refresh Token 并验证用户身份。�
 
 SQLite 单进程运行，迁移按 001–007 顺序事务应用；006 增加 `accounts` 与 `account_artists`，007 增加画师标签覆盖。画师以 Pixiv UID 为键；作品身份为 `illust_id`，分页身份为 `(illust_id, page_index)`。数据库保留账号来源、画师、作品、标签、图片 URL、偏好、任务和选图历史。凭据只存在权限受限文件，不进入普通设置、任务载荷、日志或 API 响应。
 
-上游缺失或不认识的作品分类保持 `unknown`。默认仅选择 `safe`、`non_ai` 静态图片；未知分级或 AI 状态排除。画师屏蔽、作品不可见和用户显式排除不可因图库过小而放宽。
+上游缺失或不认识的作品分类保持 `unknown`。默认仅选择 `safe`、`non_ai` 静态图片；未知分级或 AI 状态默认排除；用户可在全局偏好中显式允许 unknown，请求参数仍只能与全局允许集合取交集。画师屏蔽、作品不可见和用户显式排除不可因图库过小而放宽。
 
 ## 选图与图片网络
 
-`GET /random` 默认返回 JSON 原图 URL；`format=redirect` 返回 HTTP 302。可用 `account_id` 限制来源，并与 `included_tags`、`excluded_tags`、内容分级、AI、方向和尺寸条件组合。账号来源筛选不删除或改变历史关系。
+GET /random 默认 JSON，包含固定作品身份、url 与 original_url。url 默认指向配置的 PUBLIC_BASE_URL + /i/{illust_id}/{page_index}?format=image，由 Curator 带 Pixiv Referer 转发，消费方无需处理防盗链；original_url 始终保留已校验的 Pixiv 原图地址。format=image 直接流式输出本次选中的原图，format=redirect 返回 302 到相同的本服务固定页端点。JSON/302 不访问 CDN，不代表图片可用；固定页重新检查当前全局偏好、屏蔽及排除条件，不会重新随机。
 
-公开供图不下载、缓存或代理原图字节。消费端（例如 PicHub）自行访问 Pixiv 图片 URL，需具备可达网络并设置 Pixiv Referer；服务端代理设置不改变消费端网络。仅已鉴权的管理预览由 Curator 带 Referer 流式转发，使用服务端网络设置，不落盘、不向图片域发送管理或 Pixiv 凭据。固定作品页端点 `/i/{illust_id}/{page_index}` 保持该作品页身份，可返回 URL 或 302；它不接受任意目标 URL，且出图前重新检查画师及作品资格。
+/i/{illust_id}/{page_index} 默认 JSON，也支持 format=json/image/redirect。delivery=original 显式保留旧 JSON/302 原图模式；默认或 delivery=proxy 使用本服务地址。delivery=original 与 format=image 互斥。管理预览不接受 delivery 参数。
 
-头像 URL 与原图 URL 分别校验：原图/预览只允许 HTTPS i.pximg.net；头像额外接受 HTTPS s.pximg.net/common/images/no_profile.png，不扩展原图白名单。
+所有出站目标均从数据库按固定图片身份解析并校验，只允许 HTTPS i.pximg.net；不接受客户端任意 URL、代理或镜像参数，跳转继续校验。原图流式转发最大 64 MiB、总超时 20 秒（含最多 4 路原图转发的排队），不保存原图；客户端取消传播至上游。请求只携带固定 Referer/User-Agent/Accept，不发送管理或 Pixiv 凭据，不透传上游 Cookie；浏览器 no-store 保证之后的屏蔽、排除仍需重新检查。403/404 去重入队修复，传输开始后失败中断响应，不混入 JSON 或换图。
+
+管理预览使用独立鉴权端点，优先同页缩略图；缩略图可有界落盘，缺失时同页原图回退仅流式转发。服务端网络设置影响 API/OAuth、管理预览和公开图片转发。消费方只需访问 Curator；显式原图模式仍需消费方自己处理图片网络与 Referer。
+
+r18=0 为 safe，1 为 r18/r18g，2 为全部已知分级，unknown 为未知；ai_type=0 为 non_ai，1 为 ai，any 为全部已知标记，unknown 为未知。不传参继承全局偏好，“全部已知”不会自动包含未知值。全局 allowed_ratings / allowed_ai 可显式包含 unknown；默认保持 safe / non_ai。显式 dislike、屏蔽、不可见与其它硬排除不因允许未知而放宽。
+
+头像额外接受 HTTPS s.pximg.net/common/images/no_profile.png，不扩展图片字节白名单。
 
 ## 管理 API 与界面
 
-所有 `/admin/api` 请求（包括 GET）均须管理鉴权；Cookie 写请求校验 Origin/CSRF。凭据字段仅用于写入，响应只返回状态。当前管理界面为三个标签页：画师图库、发现画师、设置；没有任务页面，任务状态通过结构化日志观察。
+所有 `/admin/api` 请求（包括 GET）均须管理鉴权；Cookie 写请求校验 Origin/CSRF。凭据字段仅用于写入，响应只返回状态。当前管理界面为四个标签页：画师图库、发现画师、统计与接口、设置；没有任务页面，任务状态通过结构化日志观察。
 
-管理预览 `GET/HEAD /admin/api/previews/{illust_id}/{page_index}` 默认流式返回图片（也可 `format=stream`），支持显式 `format=json` 或 `format=redirect` 获取地址；页面使用默认流式模式。只解析已知作品页，所有请求均需管理鉴权，拒绝额外目标 URL 参数。优先使用该页缩略图，缺失时回退同一页原图；绝不换成其他页。每请求超时 20 秒、最大 64 MiB、禁止缓存，客户端断开取消上游。403/404 去重安排同作品修复，已经开始的失败图片响应直接中断，不混入 JSON 错误。公开 `/random` 和 `/i` 仍只支持 JSON/302，不提供流式模式。
+管理预览 `GET/HEAD /admin/api/previews/{illust_id}/{page_index}` 默认流式返回图片（也可 `format=stream`），支持显式 `format=json` 或 `format=redirect` 获取地址；页面使用默认流式模式。只解析已知作品页，所有请求均需管理鉴权，拒绝额外目标 URL 参数。优先使用该页缩略图，缺失时回退同一页原图；绝不换成其他页。每请求超时 20 秒、最大 64 MiB，浏览器响应仍为 no-store，客户端断开取消上游。缩略图缓存位于数据库同级 preview-cache，单项最大 8 MiB、总量最大 256 MiB、绝对有效期 7 天；仅完整 JPEG/PNG/WebP/GIF 可缓存，原图回退不落盘。缓存原子写入、按最近使用淘汰，启动恢复并清理中断临时文件，初始化失败降级为流式预览。每次命中仍需鉴权及目录资格查询；URL 更新后使用新缓存键。相同 URL 合并下载，最多 4 个缓存未命中请求并发，排队与请求共用 20 秒截止时间。403/404 去重安排同作品修复，已经开始的失败图片响应直接中断，不混入 JSON 错误。公开 /random 和 /i 另支持 format=image，使用原图流式转发，不使用缩略图缓存。
 
 图库接口：
 
 - `GET /admin/api/library/artists?tag=&account_id=&after=&limit=` 返回 `{items,next_cursor}`，默认只列已批准或已屏蔽画师。游标为稳定的数字 ID，`next_cursor` 可直接用于下一页；空值表示结束。
 - `GET /admin/api/library/tags` 返回 `{items:[]}`。
 - `PUT /admin/api/library/artists/{id}/tags` 设置手动标签覆盖；`DELETE` 恢复自动标签。
+
+图库首页使用 page 模式：每页 24 / 48 / 96 位，上一页、下一页或输入页码跳转；切换筛选回到第 1 页。导航数字显示全部图库画师数（approved/blocked），筛选结果数单独显示。首页不请求头像、作品列表或预览图片。点击画师名称或“查看详情”才打开元数据与作品预览，作品按 8 件分页；关闭详情取消请求并移除图片。
+
+- GET /admin/api/library/artists?page=1&limit=24&tag=&account_id= 返回 {items,total,library_total,page,page_size,total_pages,next_cursor}。page 从 1 开始，与 after 互斥；旧游标模式继续兼容。空目录 total_pages=0，total 为筛选后数量，library_total 为完整图库数量。默认分页先选本页画师再批量计算近期标签，带标签时批量计算后保留 Unicode 大小写匹配。
+- GET /admin/api/stats 只读本地数据库并要求管理鉴权，不接受查询参数；返回账号、全部画师、图库/屏蔽/采集画师、作品、图片分页、已索引/不可用图片、分级/AI 未知作品数量。历史与屏蔽记录仍在总数内；已索引数量不等于符合所有偏好规则的供图数量。
+- “统计与接口”的参数表单只生成请求地址，不新增 API Key 或更改公开鉴权。测试始终调用 JSON，避免跟随 302 下载原图；成功测试会写入正常选图历史。全局供图偏好仍在设置中保存。
+
+## 发现画师筛选
+
+GET /admin/api/recommendation-runs/latest 与 GET /admin/api/recommendations?run_id=... 可组合 content_rating=all/adult/safe/unknown、ai_type=all/ai/non_ai/unknown，均默认 all。严格拒绝重复、未知、非法查询参数。筛选只读取当前候选，不创建新任务、不批准画师，不受供图偏好影响。
+
+Recommendation 返回 content_rating、ai_status 及各类样本计数，依据该候选明确列出的 sample_illust_ids（最多 4 件）对应作品：
+- 任一 R18/R18G 样本即为 adult，任一 AI 样本即为 ai。
+- 至少一个有效样本且全部 safe 才为 safe，全部 non_ai 才为 non_ai。
+- 无样本、未知标记、缺失作品或非本画师作品不能计为 safe/non_ai；样本 ID 严格规范化、去重，异常数据保留未知。
+- 类别表示本轮样本，不是画师全集结论。切换筛选会取消旧查询，先筛候选再创建预览；缩略图直接使用所列样本的固定第 0 页，不为每张图重复查作品列表。
+- 卡片上方为身份、匹配度、理由和类别，下方为缩略图网格；无样本显示短提示，不保留大封面空区。
+
+## 本机开发启动
+
+Linux 使用 scripts/dev.sh；Windows 使用根 start.cmd 或 scripts/dev.ps1（PowerShell 5.1/7）。两者默认 data/dev、127.0.0.1:5722。Windows 启动器管理自身子进程树、保护 NTFS 私密文件、先检查端口再构建与启动，并通过本机 readyz 检查就绪；已有 OAuth 配置时不运行 Python/pip，缺配置时才准备现有锁定依赖。主应用仍使用 Refresh Token 导入，启动脚本不自动登录 Pixiv 账号。
 
 ## 验证边界
 

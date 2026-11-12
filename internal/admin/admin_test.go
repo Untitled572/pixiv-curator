@@ -39,7 +39,7 @@ func TestPagesRenderEmbeddedHTMLWithoutCredentialValues(t *testing.T) {
 				t.Fatal("page includes unsafe credential storage or HTML injection API")
 			}
 			if tc.name == "home" {
-				for _, marker := range []string{`data-tab="discover"`, `data-tab="settings"`, `id="artist-list"`, `id="account-create-form"`, `id="preferences-form"`} {
+				for _, marker := range []string{`data-tab="discover"`, `data-tab="settings"`, `data-tab="stats"`, `id="stats-grid"`, `id="api-builder"`, `id="library-page-jump"`, `id="artist-detail-info"`, `id="artist-list"`, `id="account-create-form"`, `id="preferences-form"`} {
 					if !strings.Contains(body, marker) {
 						t.Errorf("management page missing %q", marker)
 					}

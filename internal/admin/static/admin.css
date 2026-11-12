@@ -234,3 +234,40 @@ input[type=radio]{min-height:0;padding:0;border:0;box-shadow:none}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important}
 }
+
+/* Metadata-only library and on-demand artist details. */
+.artist-detail-link{padding:0;border:0;background:transparent;color:var(--ink);font:inherit;text-align:left;overflow-wrap:anywhere}
+.artist-detail-link:hover{text-decoration:underline;color:var(--primary-dark)}
+.artist-detail-link:focus-visible{outline:3px solid #98b6cc;outline-offset:3px;border-radius:3px}
+.library-pagination,.page-buttons,.page-size,.page-jump{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.library-pagination{margin-top:16px;gap:16px}
+.page-size,.page-jump{font-size:12px;color:var(--muted)}
+.page-size select{width:90px}
+.page-jump input{width:72px}
+.artist-detail-info{display:grid;gap:10px;padding-top:16px}
+.artist-detail-info>.button{justify-self:start}
+.artwork-list{max-height:48vh}
+.artwork-card .artist-cover{min-height:170px}
+.stats-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:16px 0 28px}
+.stat-card{padding:18px;border:1px solid var(--line);border-radius:12px;background:#f8fafc;min-width:0}
+.stat-value{display:block;margin:9px 0;font-size:30px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.api-builder{display:grid;gap:14px}
+.api-builder>label{display:grid;gap:7px;font-size:13px;color:#455c6e;font-weight:700}
+.api-actions{display:flex;gap:10px;flex-wrap:wrap}
+.api-result{margin:0;max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:#344e61;background:#f4f6f8;border-radius:10px;padding:14px}
+.api-result:empty{display:none}
+@media(max-width:1150px){.stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:767px){.tab{min-width:0;flex:1;font-size:12px;padding:9px 4px;gap:5px}.tab .nav-icon{display:none}.stats-grid{gap:8px}.stat-card{padding:14px}.stat-value{font-size:26px}.library-pagination{justify-content:center}.page-buttons{justify-content:center;order:-1;width:100%}}
+
+/* Recommendations use inline sample grids instead of an empty hero column. */
+.recommendation-list{grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
+.recommendation-card{display:block}
+.candidate-samples{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;overflow:visible}
+.sample-tile{display:grid;place-items:center;min-width:0;height:auto;aspect-ratio:1/1;position:relative}
+.sample-tile .cover-image{object-fit:contain}
+.sample-classification{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0 0}
+.no-samples{margin-top:14px}
+.discover-tools{display:grid;grid-template-columns:repeat(2,minmax(140px,220px)) minmax(0,1fr);align-items:end;gap:12px;margin-bottom:18px}
+.discover-tools label{display:grid;gap:7px;font-size:12px;font-weight:700;color:#455c6e}
+@media(max-width:1150px){.recommendation-list{grid-template-columns:1fr}.discover-tools{grid-template-columns:1fr 1fr}.discover-tools>.field-help{grid-column:1/-1}}
+@media(max-width:480px){.candidate-samples{grid-template-columns:repeat(2,minmax(0,1fr))}}

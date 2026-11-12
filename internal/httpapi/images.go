@@ -2,16 +2,51 @@ package httpapi
 
 import (
 	"errors"
-	"github.com/Untitled572/pixiv-curator/internal/app"
-	"github.com/Untitled572/pixiv-curator/internal/domain"
-	"github.com/Untitled572/pixiv-curator/internal/media"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/Untitled572/pixiv-curator/internal/app"
+	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"github.com/Untitled572/pixiv-curator/internal/media"
 )
 
 func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Auth) {
+	forward := func(w http.ResponseWriter, r *http.Request, page domain.SelectedPage, preview bool) {
+		if p == nil {
+			writeAPIError(w, http.StatusServiceUnavailable, "NOT_READY")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+		var err error
+		if preview && page.PreviewIsThumbnail {
+			err = p.ForwardPreview(w, r, page.PreviewURL)
+		} else {
+			target := page.OriginalURL
+			if preview {
+				target = page.PreviewURL
+			}
+			err = p.Forward(w, r, target)
+		}
+		if err == nil {
+			return
+		}
+		var upstream *media.Error
+		if errors.As(err, &upstream) {
+			if upstream.Started {
+				panic(http.ErrAbortHandler)
+			}
+			if upstream.Code == "MEDIA_UNAVAILABLE" {
+				_ = s.Repair(r.Context(), page.IllustID)
+			}
+			writeAPIError(w, http.StatusBadGateway, upstream.Code)
+			return
+		}
+		writeAPIError(w, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
+	}
 	mux.HandleFunc("GET /random", func(w http.ResponseWriter, r *http.Request) {
 		req, err := selectionQuery(r)
 		if err != nil {
@@ -23,11 +58,17 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			imageError(w, err)
 			return
 		}
-		if wantsRedirect(r) {
-			http.Redirect(w, r, out.URL, http.StatusFound)
-			return
+		if r.URL.Query().Get("delivery") == "original" {
+			out.URL = out.OriginalURL
 		}
-		writeJSON(w, 200, out)
+		switch r.URL.Query().Get("format") {
+		case "image":
+			forward(w, r, out.SelectedPage, false)
+		case "redirect":
+			http.Redirect(w, r, out.URL, http.StatusFound)
+		default:
+			writeJSON(w, http.StatusOK, out)
+		}
 	})
 	resolve := func(preview bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -41,13 +82,20 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				format = "stream"
 			}
 			for key, values := range query {
-				if key != "format" || len(values) != 1 {
+				if len(values) != 1 || (key != "format" && (preview || key != "delivery")) {
 					apiError(w, domain.ErrInvalid)
 					return
 				}
+			}
+			if values, present := query["format"]; present {
 				format = values[0]
 			}
-			if format != "json" && format != "redirect" && !(preview && format == "stream") {
+			delivery := query.Get("delivery")
+			if format != "json" && format != "redirect" && !(preview && format == "stream") && !(!preview && format == "image") {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			if !validDelivery(query, format) {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
@@ -66,42 +114,30 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				imageError(w, err)
 				return
 			}
-			target := page.OriginalURL
-			if preview {
-				target = page.PreviewURL
+			if format == "stream" || format == "image" {
+				forward(w, r, page, preview)
+				return
 			}
-			if format == "stream" {
-				if p == nil {
-					writeAPIError(w, http.StatusServiceUnavailable, "NOT_READY")
+			if preview {
+				if format == "redirect" {
+					http.Redirect(w, r, page.PreviewURL, http.StatusFound)
 					return
 				}
-				w.Header().Set("Cache-Control", "no-store")
-				w.Header().Set("X-Content-Type-Options", "nosniff")
-				w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
-				if err := p.Forward(w, r, target); err != nil {
-					var upstream *media.Error
-					if errors.As(err, &upstream) {
-						if upstream.Started {
-							panic(http.ErrAbortHandler)
-						}
-						if upstream.Code == "MEDIA_UNAVAILABLE" {
-							_ = s.Repair(r.Context(), id)
-						}
-						writeAPIError(w, http.StatusBadGateway, upstream.Code)
-						return
-					}
-					writeAPIError(w, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
-				}
+				writeJSON(w, http.StatusOK, struct {
+					domain.SelectedPage
+					URL string `json:"url"`
+				}{SelectedPage: page, URL: page.PreviewURL})
 				return
+			}
+			out := s.Result(page)
+			if delivery == "original" {
+				out.URL = out.OriginalURL
 			}
 			if format == "redirect" {
-				http.Redirect(w, r, target, http.StatusFound)
+				http.Redirect(w, r, out.URL, http.StatusFound)
 				return
 			}
-			writeJSON(w, http.StatusOK, struct {
-				domain.SelectedPage
-				URL string `json:"url"`
-			}{SelectedPage: page, URL: target})
+			writeJSON(w, http.StatusOK, out)
 		}
 	}
 	mux.HandleFunc("GET /i/{id}/{page}", resolve(false))
@@ -148,8 +184,16 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 	})))
 }
 
-func wantsRedirect(r *http.Request) bool {
-	return r.URL.Query().Get("format") == "redirect"
+// validDelivery keeps direct-origin URLs available only as an explicit opt-in.
+func validDelivery(q url.Values, format string) bool {
+	values, present := q["delivery"]
+	if !present {
+		return true
+	}
+	if len(values) != 1 || (values[0] != "proxy" && values[0] != "original") {
+		return false
+	}
+	return values[0] != "original" || (format != "image" && format != "stream")
 }
 
 func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
@@ -161,7 +205,7 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	for k, v := range q {
 		switch k {
 		case "included_tags", "excluded_tags":
-		case "format", "collection", "orientation", "r18", "ai_type", "min_width", "min_height", "user_id", "strategy", "account_id":
+		case "delivery", "format", "collection", "orientation", "r18", "ai_type", "min_width", "min_height", "user_id", "strategy", "account_id":
 			if len(v) != 1 {
 				return out, domain.ErrInvalid
 			}
@@ -169,10 +213,13 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			return out, domain.ErrInvalid
 		}
 	}
-	if v, ok := q["format"]; ok && v[0] != "json" && v[0] != "redirect" {
+	if v, ok := q["format"]; ok && v[0] != "json" && v[0] != "redirect" && v[0] != "image" {
 		return out, domain.ErrInvalid
 	}
 	if v, ok := q["collection"]; ok && v[0] != "preferred" {
+		return out, domain.ErrInvalid
+	}
+	if !validDelivery(q, q.Get("format")) {
 		return out, domain.ErrInvalid
 	}
 	out.Orientation = q.Get("orientation")
@@ -188,6 +235,8 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			out.AllowedRatings = []string{"safe"}
 		case "1":
 			out.AllowedRatings = []string{"r18", "r18g"}
+		case "unknown":
+			out.AllowedRatings = []string{"unknown"}
 		case "2":
 			out.AllowedRatings = []string{"safe", "r18", "r18g"}
 		default:
@@ -200,6 +249,8 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			out.AllowedAI = []string{"non_ai"}
 		case "1":
 			out.AllowedAI = []string{"ai"}
+		case "unknown":
+			out.AllowedAI = []string{"unknown"}
 		case "any":
 			out.AllowedAI = []string{"non_ai", "ai"}
 		default:

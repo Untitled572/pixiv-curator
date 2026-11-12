@@ -79,6 +79,29 @@ jobs:
             GO_VERSION=${{ steps.meta.outputs.go_version }}
             VERSION=${{ github.ref_name }}
 
+      - name: Verify GHCR manifest and export deployment image
+        env:
+          IMAGE: ${{ steps.meta.outputs.image }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p image-deploy
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > image-deploy/manifest.json
+          python3 -c 'import json; d=json.load(open("image-deploy/manifest.json")); p={(x.get("platform",{}).get("os"),x.get("platform",{}).get("architecture")) for x in d["manifests"]}; assert {("linux","amd64"),("linux","arm64")} <= p, p'
+          docker pull --platform linux/amd64 "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" "$IMAGE:$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:$VERSION")" = "$GITHUB_SHA"
+          export IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE:$VERSION")"
+          docker save "$IMAGE:$VERSION" | gzip -1 > image-deploy/image-linux-amd64.tar.gz
+          (cd image-deploy && sha256sum image-linux-amd64.tar.gz > SHA256SUMS)
+          python3 -c 'import json,os; json.dump({k:os.environ[k] for k in ("IMAGE","DIGEST","VERSION","IMAGE_ID","GITHUB_SHA")},open("image-deploy/image.json","w"),indent=2)'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-deploy-linux-amd64
+          path: image-deploy/*
+          if-no-files-found: error
+          retention-days: 7
+
   publish:
     name: Publish GitHub Release after all builds succeed
     needs: [build, image]

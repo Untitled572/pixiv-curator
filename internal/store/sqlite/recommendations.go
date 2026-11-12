@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
@@ -245,6 +247,8 @@ func (s *Store) RecommendationCandidates(ctx context.Context, runID string, afte
 	}
 	defer rows.Close()
 	out := []domain.Recommendation{}
+	invalidSamples := make(map[int64]bool)
+	unknownSampleCount := make(map[int64]int)
 	for rows.Next() {
 		var r domain.Recommendation
 		var reasons, sources, samples, components string
@@ -253,11 +257,157 @@ func (s *Store) RecommendationCandidates(ctx context.Context, runID string, afte
 		}
 		_ = json.Unmarshal([]byte(reasons), &r.Reasons)
 		_ = json.Unmarshal([]byte(sources), &r.Sources)
-		_ = json.Unmarshal([]byte(samples), &r.SampleIDs)
+		r.SampleIDs, invalidSamples[r.ArtistID], unknownSampleCount[r.ArtistID] = parseRecommendationSampleIDs(samples)
 		r.Components = json.RawMessage(components)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	// Query a normalized, bounded payload rather than re-reading raw JSON IDs.
+	// Missing rows (including samples belonging to another artist) remain unknown.
+	payload := make([]map[string]any, 0, len(out))
+	byArtist := make(map[int64]*domain.Recommendation, len(out))
+	for i := range out {
+		payload = append(payload, map[string]any{"artist_id": out[i].ArtistID, "ids": out[i].SampleIDs})
+		byArtist[out[i].ArtistID] = &out[i]
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	sampleRows, err := s.db.QueryContext(ctx, `SELECT json_extract(c.value,'$.artist_id'),j.value,a.rating,a.ai_status
+ FROM json_each(?) c JOIN json_each(json_extract(c.value,'$.ids')) j
+ JOIN artworks a ON a.id=CAST(j.value AS INTEGER) AND a.artist_id=json_extract(c.value,'$.artist_id')`, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	resolved := make(map[int64]int, len(out))
+	for sampleRows.Next() {
+		var artistID int64
+		var sampleID, rating, aiStatus string
+		if err = sampleRows.Scan(&artistID, &sampleID, &rating, &aiStatus); err != nil {
+			sampleRows.Close()
+			return nil, err
+		}
+		r := byArtist[artistID]
+		resolved[artistID]++
+		switch rating {
+		case "r18", "r18g":
+			r.AdultCount++
+		case "safe":
+			r.SafeCount++
+		default:
+			r.UnknownCount++
+		}
+		switch aiStatus {
+		case "ai":
+			r.AICount++
+		case "non_ai":
+			r.NonAICount++
+		default:
+			r.UnknownAICount++
+		}
+	}
+	if err = sampleRows.Err(); err != nil {
+		sampleRows.Close()
+		return nil, err
+	}
+	if err = sampleRows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		r := &out[i]
+		r.UnknownCount += unknownSampleCount[r.ArtistID]
+		r.UnknownAICount += unknownSampleCount[r.ArtistID]
+		missing := len(r.SampleIDs) - resolved[r.ArtistID]
+		if missing > 0 {
+			r.UnknownCount += missing
+			r.UnknownAICount += missing
+		}
+		switch {
+		case r.AdultCount > 0:
+			r.ContentRating = "adult"
+		case !invalidSamples[r.ArtistID] && len(r.SampleIDs) > 0 && r.SafeCount == len(r.SampleIDs):
+			r.ContentRating = "safe"
+		default:
+			r.ContentRating = "unknown"
+		}
+		switch {
+		case r.AICount > 0:
+			r.AIStatus = "ai"
+		case !invalidSamples[r.ArtistID] && len(r.SampleIDs) > 0 && r.NonAICount == len(r.SampleIDs):
+			r.AIStatus = "non_ai"
+		default:
+			r.AIStatus = "unknown"
+		}
+	}
+	return out, nil
+}
+
+func parseRecommendationSampleIDs(raw string) ([]string, bool, int) {
+	var values []json.RawMessage
+	if err := json.Unmarshal([]byte(raw), &values); err != nil || values == nil {
+		return nil, true, 1
+	}
+	invalid := len(values) > 4
+	unknownCount := 0
+	if len(values) > 4 {
+		unknownCount = len(values) - 4
+	}
+	if len(values) > 4 {
+		values = values[:4]
+	}
+	seen := map[string]bool{}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		var idText string
+		if len(value) > 0 && value[0] == '"' {
+			if err := json.Unmarshal(value, &idText); err != nil {
+				invalid = true
+				unknownCount++
+				continue
+			}
+		} else {
+			idText = string(value)
+		}
+		id, err := parseRecommendationSampleID(idText)
+		if err != nil {
+			invalid = true
+			unknownCount++
+			continue
+		}
+		canonical := strconv.FormatInt(id, 10)
+		if seen[canonical] {
+			continue
+		}
+		seen[canonical] = true
+		ids = append(ids, canonical)
+	}
+	return ids, invalid, unknownCount
+}
+
+func parseRecommendationSampleID(value string) (int64, error) {
+	if value == "" {
+		return 0, fmt.Errorf("empty sample ID")
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, fmt.Errorf("invalid sample ID")
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fmt.Errorf("invalid sample ID")
+	}
+	return id, nil
 }
 
 func (s *Store) CommitRecommendationSamples(ctx context.Context, j domain.Job, runID string, artistID, nextID int64, artworks []domain.Artwork, result domain.Recommendation) error {

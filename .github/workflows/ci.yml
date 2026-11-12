@@ -45,6 +45,11 @@ jobs:
       - name: Check local launcher syntax
         if: runner.os == 'Linux'
         run: sh -n scripts/dev.sh
+      - name: Windows launcher smoke tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python scripts/test-windows-launcher.py WindowsLauncherTests.test_stop_after_ready_stops_child_and_releases_port WindowsLauncherTests.test_cmd_wrapper_from_another_directory WindowsLauncherTests.test_occupied_port_fails_without_changing_token_or_stopping_listener WindowsLauncherTests.test_release_directory_without_go_starts_and_stop_after_ready
       - name: Race detector
         if: runner.os == 'Linux'
         run: go test -race ./...

@@ -23,22 +23,48 @@ export PIXIV_CURATOR_PUBLIC_BASE_URL=http://127.0.0.1:5722
 ./pixiv-curator
 ```
 
-管理 token 与 OAuth 文件应处于私密目录，POSIX 目录权限 0700、文件权限 0600。管理 token 文件不配置或为空时管理操作拒绝。`PUBLIC_BASE_URL` 只用于管理 Origin 校验，不用于拼装 `/random` 图片 URL。
+管理 token 与 OAuth 文件应处于私密目录，POSIX 目录权限 0700、文件权限 0600。管理 token 文件不配置或为空时管理操作拒绝。PIXIV_CURATOR_PUBLIC_BASE_URL 用于管理 Origin 校验和生成 JSON 图片地址；应设置为浏览器/PicHub 均能访问的服务地址。不要使用消费端不可达的 127.0.0.1。
 
 ## Windows 原生启动
 
-Windows 需要 Go 1.26+，原生启动不运行 Linux 的 dev.sh。先在私密位置准备管理 token 文件和 OAuth 应用配置（可复用已有安装的 OAuth 配置，不复制到 Git 跟踪目录），再在项目根目录设置：
+双击仓库根目录 `start.cmd`，或在 PowerShell 中运行：
 
 ```powershell
-$env:PIXIV_CURATOR_ADDR = "127.0.0.1:5722"
-$env:PIXIV_CURATOR_DATABASE_PATH = Join-Path $PWD "data/curator.db"
-$env:PIXIV_CURATOR_ADMIN_TOKEN_FILE = "D:\private\pixiv-curator\admin-token"
-$env:PIXIV_CURATOR_OAUTH_CONFIG_FILE = "D:\private\pixiv-curator\oauth.json"
-$env:PIXIV_CURATOR_PUBLIC_BASE_URL = "http://127.0.0.1:5722"
-go run ./cmd/api
+.\scripts\dev.ps1
 ```
 
-以上私密文件路径为示例，请替换为实际位置。管理 token 应为随机非空单行值，Windows 私密目录通过 NTFS ACL 仅授权当前用户；不要把真实值写进启动脚本。数据库支持含中文、空格、#、% 的本机路径。启动后进入管理页，使用 Refresh Token 添加测试或正式账号；只有添加账号才访问 Pixiv 验证身份。
+需要 Go 1.26+ 和 Windows PowerShell 5.1 / PowerShell 7，凭据目录需支持 NTFS ACL。默认数据目录 `data/dev`，监听 `127.0.0.1:5722`，脚本构建 `bin/pixiv-curator.exe`、生成随机管理令牌、等待本机 `/readyz` 成功后打开登录页。登录令牌保存在窗口显示的文件路径，脚本不会输出令牌内容。`start.cmd` 只为当前子进程设置执行策略，不更改系统执行策略。
+
+首次缺少 OAuth 应用参数时需要 Python 3；脚本在 `venv-windows` 独立环境中安装现有锁定依赖并生成 `oauth.json`，不下载浏览器、不调用 Pixiv 账号认证。配置已存在时保留原文件，日常启动不调用 Python 或 pip。通过设置页输入 Refresh Token 后才验证账号身份。
+
+```powershell
+# 不自动打开浏览器
+.\scripts\dev.ps1 -NoBrowser
+
+# 自定义监听与私密数据目录（相对目录以仓库为基准）
+.\scripts\dev.ps1 -Address 127.0.0.1:8080 -DevDir 'D:\private\pixiv-curator'
+
+# 复用已有 OAuth 应用配置，或指定首次准备时的 Python
+.\scripts\dev.ps1 -OAuthConfigFile 'D:\private\pixiv-curator\oauth.json'
+.\scripts\dev.ps1 -Python 'C:\Python313\python.exe'
+
+# 离线启动诊断：不准备 OAuth，服务就绪后立即结束
+.\scripts\dev.ps1 -NoLoginHelper -NoBrowser -StopAfterReady
+```
+
+`PIXIV_CURATOR_DEV_DIR`、`PIXIV_CURATOR_ADDR`、`PIXIV_CURATOR_OAUTH_CONFIG_FILE`、`PIXIV_CURATOR_PUBLIC_BASE_URL` 及 `PIXIV_CURATOR_OPEN_BROWSER=0` 也可配置，显式参数优先。脚本统一使用数据目录内的 `admin-token`、`curator.db`、可选旧账号 `pixiv-refresh-token`；高级部署可直接运行二进制并按前面的环境变量方式配置。
+
+端口占用时，脚本在修改私密文件和构建前退出，不终止已有监听者。已有管理令牌与 OAuth 配置不覆写；普通凭据文件不接受符号链接或联接，私密目录及凭据通过 DACL 限制访问。路径支持中文和空格。
+
+按 Ctrl+C/Ctrl+Break 或关闭启动窗口会清理脚本创建的进程树，不影响其它服务。Windows 结束子进程与 POSIX SIGTERM 不同，未完成任务由持久租约在重启后恢复。后台结构化日志保留在启动窗口，不另写原图或第二套图片缓存。
+
+PowerShell 7 / Windows PowerShell 5.1 原生离线测试：
+
+```powershell
+python scripts/test-windows-launcher.py
+$env:PIXIV_CURATOR_TEST_POWERSHELL = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+python scripts/test-windows-launcher.py
+```
 
 ## 添加、迁移和管理 Pixiv 账号
 
@@ -52,40 +78,39 @@ go run ./cmd/api
 
 ## 管理页面与任务观察
 
-管理页面包含三个标签页：
+管理页面包含四个标签页：
 
-- **画师图库**：按标签和 Pixiv 账号来源筛选已批准/已屏蔽画师，浏览作品；可编辑本地画师标签。自动标签由近期 100 件作品的标签频次取前 8。保存 `[]` 会明确清空覆盖；删除覆盖后恢复自动标签。
+- **画师图库**：按标签和 Pixiv 账号来源筛选已批准/已屏蔽画师。文字列表每页 24 / 48 / 96 位，可前后翻页或跳转；点击画师名称/详情才加载作品；可编辑本地画师标签。自动标签由近期 100 件作品的标签频次取前 8。保存 `[]` 会明确清空覆盖；删除覆盖后恢复自动标签。
 - **发现画师**：查看有限代表作预览与推荐理由。确认后才批准并安排采集；推荐不会自动批准。
+- **统计与接口**：查看本地作品/图片分页总数、已索引及不可用数量等统计，生成带筛选的供图 URL、复制地址和测试 JSON 结果。
 - **设置**：管理 Pixiv 账号、服务端 API 网络设置和选图偏好。
 
 当前没有独立任务 UI。任务开始、结束、状态、稳定错误码和重试时间通过服务结构化日志观察。任务/游标保存在数据库中，重启后由 Worker 恢复；6 小时周期计时器本身不持久化。`/healthz` 仅表示 HTTP 进程存活；`/readyz` 检查本地数据库和 Worker，不检查 Pixiv 连通性。
 
 ## 选图 API
 
-默认 JSON 返回数据库中经过校验的 Pixiv 原图 URL：
+默认返回 JSON，url 为本服务图片转发地址，original_url 为 Pixiv 原图。调用方使用 url 即可避免直接请求 Pixiv 的 Referer 403：
 
-```sh
-curl 'http://127.0.0.1:5722/random?collection=preferred'
-```
+~~~sh
+curl 'http://127.0.0.1:5722/random?format=json'
+curl 'http://127.0.0.1:5722/random?format=image'
+curl -i 'http://127.0.0.1:5722/random?format=redirect'
+curl 'http://127.0.0.1:5722/random?format=json&account_id=legacy&included_tags=猫|风景'
+# 原图地址兼容模式，直接获取时仍需 Pixiv Referer：
+curl 'http://127.0.0.1:5722/random?delivery=original'
+~~~
 
-可显式请求 JSON，或选择 302 跳转：
+固定图片地址为 /i/{illust_id}/{page_index}?format=image；页码从 0 开始，每次解析同一页并重新检查资格。JSON/302 不下载图片字节；图片模式由 Curator 使用服务端网络、带 Referer 流式获取，20 秒 / 64 MiB，不缓存原图。管理预览仍鉴权，只有缩略图允许有界缓存（preview-cache，256 MiB / 单张 8 MiB / 7 天）。
 
-```sh
-curl -i 'http://127.0.0.1:5722/random?format=json&account_id=legacy&included_tags=猫|风景'
-curl -i 'http://127.0.0.1:5722/random?format=redirect&account_id=legacy'
-```
+included_tags 可重复表示多组 AND，同组 | 为 OR。账号、画师、标签、方向、尺寸、R18、AI、策略可组合。默认 safe / non_ai；全局偏好显式勾选相应未知类别后，才可用 r18=unknown 或 ai_type=unknown 进一步筛选。r18=2、ai_type=any 仅包含已知类别；未知不会当作全年龄或非 AI。dislike、屏蔽、不可见及其它硬排除始终优先。
 
-重复 `included_tags` 参数表示多组必须同时匹配；同一参数值用 `|` 表示任选。可组合 `excluded_tags`、`user_id`、`account_id`、方向、最小尺寸、`r18`、`ai_type` 与策略。每次改变条件时，仍执行硬过滤。默认只允许 `safe` 与 `non_ai`；分类未知的作品保持未知并排除。作品 dislike、画师屏蔽、不可见作品不会通过小库降级放行。近期去重不足时只允许重复一张合格旧图并标记 `repeated`。
+PicHub 配置 JSON 响应、字段路径 url，源 URL 使用 /random?format=json。默认转发模式只要求 PicHub 能访问 Curator，Curator 能访问 Pixiv；无需在 PicHub 设置 Pixiv Referer，更不要传管理或 Pixiv 凭据。PUBLIC_BASE_URL 必须设置为 PicHub 可达的 Curator origin；若部署在另一主机，127.0.0.1 将指向另一主机自身。显式 delivery=original 才需要 PicHub 自行访问 Pixiv 并设置 Referer。
 
-`format=redirect` 返回 HTTP 302，公开供图不下载、代理或缓存图片；仅管理预览允许鉴权后的限时、限大小流式转发，不落盘。消费方须自行访问返回的 Pixiv 图片 URL；浏览器、PicHub 的代理和 DNS 设置独立于 Curator 服务端。图片端点 `/i/{illust_id}/{page_index}` 固定相同作品页身份，可返回 URL 或按 `format=redirect` 跳转。
-
-PicHub 可设置 JSON 响应，图片字段路径为 `url`。按需把 `account_id` 和标签条件配置在图源 URL 查询参数。不要在 PicHub Headers 中放 Curator 管理令牌或 Pixiv 凭据。由于公开供图不代理原图，部署前要从 PicHub 所在网络确认图片 URL 可达，并配置 `Referer: https://www.pixiv.net/`。管理预览的代理与请求头不会自动传给 PicHub。
-
-供图 API 当前没有单独服务鉴权，应仅部署在受控本机或内网。不能因为管理页面有登录就将公开 `/random` 暴露到公网。
+发现页的 R18/AI 分类由当前代表作样本推断，可组合选择不指定、是、否或未知；未知或缺失样本不推断为否。每张候选卡片内展示缩略图，不保留大封面占位。设置中保存的供图偏好不改变推荐筛选。
 
 ## 网络设置边界
 
-设置页中的服务端代理模式影响 Curator 后续发出的 Pixiv OAuth、App API 和管理预览请求；它不控制 PicHub 下载原图时使用的网络。浏览器读取已鉴权的 Curator 管理预览端点，服务端带 Pixiv Referer 并使用服务端网络设置拉取该固定页；PicHub 按其运行环境访问返回的原图 URL，并设置 `Referer: https://www.pixiv.net/`。保存代理只影响新建请求，不切换正在运行的请求。
+设置页中的服务端代理模式影响 Curator 的 OAuth、App API、管理预览及公开图片转发。消费者访问默认 url 时使用 Curator 的图片出口；只有选择 delivery=original 时才使用消费者自己的图片出口。保存代理只影响新建请求，不切换正在运行的请求。
 
 未保存网络配置时，服务端默认使用 `http://127.0.0.1:7890` HTTP 代理；已保存的配置保持不变。设置页明文显示代理地址，支持继承环境变量、直连或配置 HTTP/HTTPS 代理。环境变量包括 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 及小写对应项；不自动读取桌面 PAC，也不支持 SOCKS。自定义代理凭据只写入私密配置，管理 GET 不回显密码。Docker 中的 `127.0.0.1` 指容器自身，代理必须从容器网络可达。
 
@@ -100,3 +125,15 @@ PicHub 可设置 JSON 响应，图片字段路径为 `url`。按需把 `account_
 ## 尚未验收
 
 离线/mock 测试不代表 Pixiv 实网认证、真实账号关注同步、CDN 原图访问或 PicHub 下载/显示/收藏已经通过。本轮全仓 race 测试、四个平台构建、Docker、浏览器 UI 与真实网络联调的状态以[开发计划](development-plan.md)为准。
+
+管理缩略图缓存可在服务停止后删除数据库同级 preview-cache，下一次打开详情会重新生成；不影响目录和原图 URL。该目录只供管理预览，不应通过静态网站公开。
+
+前端离线行为回归脚本为 scripts/test-admin-ui.cjs，本轮验证使用 Playwright 1.62.1 与本机 Chrome，运行时需要可用的 Playwright 与 Chromium；可通过 PIXIV_CURATOR_PLAYWRIGHT_MODULE 指定已有模块、PIXIV_CURATOR_BROWSER_EXECUTABLE 指定浏览器。脚本使用本机模拟 API，阻止外部请求，不导入真实账号。
+
+
+Windows 发行包解压后也提供 start.cmd / scripts/dev.ps1，直接运行包内 EXE，不需要 Go 源码或 Go 编译器。源码目录仍按原方式编译。首次没有 OAuth 应用配置时仍需 Python 准备锁定配置；之后日常启动不调用 Python/pip。
+
+
+Linux 同机部署可使用 deploy/compose.yml：host 网络默认只监听 127.0.0.1:5722，供同机 PicHub 调用，并可访问宿主机 127.0.0.1:7890 代理。管理页可经 SSH 本地转发访问；此模板不创建公网反向代理。准备 data/curator.db、data/private/accounts 及 private/admin-token、private/oauth.json，文件给 UID 65532 读取，数据库目录可写。跨系统迁移时 account.token_file 必须改成容器内实际绝对路径；不要直接复制 Windows 路径或运行中的 WAL 文件。
+
+设置 PIXIV_CURATOR_IMAGE 为要部署的版本或 digest。若使用 Actions 的 GHCR 镜像部署归档，先验证 SHA256SUMS / 镜像 ID / revision，再 docker load；相应 Compose 环境可设置 PIXIV_CURATOR_PULL_POLICY=never，避免没有 GHCR 凭据时重复拉取。普通 registry 拉取使用 missing 或 always，并自行配置只读包权限。

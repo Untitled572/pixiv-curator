@@ -57,6 +57,24 @@ func (s *Recommender) Candidates(ctx context.Context, runID string) (domain.Reco
 	return run, items, err
 }
 
+func (s *Recommender) CandidatesFiltered(ctx context.Context, runID, contentRating, aiType string) (domain.RecommendationRun, []domain.Recommendation, error) {
+	if !validRecommendationRating(contentRating) || !validRecommendationAI(aiType) {
+		return domain.RecommendationRun{}, nil, domain.ErrInvalid
+	}
+	run, items, err := s.Candidates(ctx, runID)
+	if err != nil {
+		return run, items, err
+	}
+	return run, filterRecommendationCandidates(items, contentRating, aiType), nil
+}
+
+func validRecommendationRating(value string) bool {
+	return value == "" || value == "all" || value == "adult" || value == "safe" || value == "unknown"
+}
+func validRecommendationAI(value string) bool {
+	return value == "" || value == "all" || value == "ai" || value == "non_ai" || value == "unknown"
+}
+
 func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	var payload struct {
 		RunID string `json:"run_id"`
@@ -275,4 +293,28 @@ func (s *Recommender) Latest(ctx context.Context) (domain.RecommendationRun, []d
 		return domain.RecommendationRun{}, nil, err
 	}
 	return s.Candidates(ctx, id)
+}
+
+func (s *Recommender) LatestFiltered(ctx context.Context, contentRating, aiType string) (domain.RecommendationRun, []domain.Recommendation, error) {
+	if !validRecommendationRating(contentRating) || !validRecommendationAI(aiType) {
+		return domain.RecommendationRun{}, nil, domain.ErrInvalid
+	}
+	run, items, err := s.Latest(ctx)
+	if err != nil {
+		return run, nil, err
+	}
+	return run, filterRecommendationCandidates(items, contentRating, aiType), nil
+}
+
+func filterRecommendationCandidates(items []domain.Recommendation, contentRating, aiType string) []domain.Recommendation {
+	if (contentRating == "" || contentRating == "all") && (aiType == "" || aiType == "all") {
+		return items
+	}
+	filtered := make([]domain.Recommendation, 0, len(items))
+	for _, item := range items {
+		if (contentRating == "" || contentRating == "all" || item.ContentRating == contentRating) && (aiType == "" || aiType == "all" || item.AIStatus == aiType) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }

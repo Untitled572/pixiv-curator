@@ -1,6 +1,6 @@
 # Pixiv Curator
 
-用 Go 构建的本地 Pixiv 目录和选图服务，可向 PicHub-Aggregator 提供图片 URL。Curator 保存画师、作品、分页元数据和 URL；图片下载、磁盘缓存、收藏与分发由调用方（例如 PicHub）负责。
+用 Go 构建的本地 Pixiv 目录和选图服务，可向 PicHub-Aggregator 提供图片 URL。Curator 保存画师、作品、分页元数据和 URL；图片由 Curator 按需流式转发以处理防盗链，不缓存原图；原图归档、收藏与后续分发由调用方（例如 PicHub）负责。
 
 ## 当前状态
 
@@ -16,24 +16,41 @@
 
 本机默认地址为 <http://127.0.0.1:5722>，开发数据默认保存在 `data/dev`。需要 Go 1.26+。启动脚本生成管理令牌；缺少 OAuth 应用配置时，脚本使用锁定版本的 gppt 准备配置。OAuth 配置已存在时，日常启动不再安装登录依赖，但脚本仍使用 Python 3 标准库。可设置 `PIXIV_CURATOR_OPEN_BROWSER=0` 关闭自动打开页面。生产部署、首次配置和凭据迁移见[运行与接入](docs/running.md)。
 
-Windows 可原生使用 Go 二进制或 `go run ./cmd/api`；先配置数据库路径、私密管理令牌和 OAuth 应用配置文件，PowerShell 示例见[运行与接入](docs/running.md#windows-原生启动)。`scripts/dev.sh` 用于 Linux 环境。
+Windows 可双击根目录的 `start.cmd`，或在 PowerShell 中运行：
+
+```powershell
+.\scripts\dev.ps1
+# 不自动打开浏览器：
+.\scripts\dev.ps1 -NoBrowser
+```
+
+Windows 脚本支持 PowerShell 5.1/7：源码目录自动构建，下载的 Windows 发行包直接运行自带 EXE（不需要 Go）；两者均准备管理令牌；首次缺少 OAuth 配置时才用 Python 3 和锁定依赖生成配置，之后日常启动不需要 Python/pip。数据默认位于 `data/dev`，令牌不回显，文件 ACL 限当前用户访问；按 Ctrl+C 或关闭启动窗口时清理其子进程。自定义目录、端口和离线诊断见[运行与接入](docs/running.md#windows-原生启动)。
 
 主应用使用 Pixiv Refresh Token，不提供浏览器 PKCE 登录流程。`docs/pixiv-login.md` 保留此前 Python 浏览器登录方式的历史说明，不属于当前主流程。
 
-登录管理页后有三个页面：画师图库、发现画师、设置。图库可按账号和标签筛选，并编辑本地画师标签；设置包含 Pixiv 账号、服务端 API 代理和选图偏好。当前没有独立任务页面，后台任务通过服务结构化日志记录状态和错误码。
+登录管理页后有四个页面：画师图库、发现画师、统计与接口、设置。图库按页加载文字信息，可按账号和标签筛选；总数由服务端统计，代表作只在打开详情后加载。统计与接口页显示目录数量，并提供供图地址生成、复制和 JSON 调用测试；设置包含 Pixiv 账号、服务端 API 代理和选图偏好。当前没有独立任务页面，后台任务通过服务结构化日志记录状态和错误码。
 
 ## 图片 API
 
-```text
-GET /random                         # JSON，url 为 Pixiv 原图 URL
-GET /random?format=redirect         # HTTP 302 到原图 URL
-GET /random?account_id=<id>&included_tags=猫|风景
-GET /i/{illust_id}/{page_index}     # 返回固定作品页的 URL，或 format=redirect 直接跳转
-```
+默认 JSON 返回可直接访问的本服务图片地址，保留 Pixiv 原图地址字段 original_url：
 
-`/random` 默认 JSON，公开供图不下载或代理图片字节。调用方自行访问返回的原图 URL，并按 Pixiv 防盗链要求设置 `Referer: https://www.pixiv.net/`；因此 PicHub 等客户端必须能访问 Pixiv 图片域名。管理页预览由已鉴权的同源端点带 Referer 流式转发，不写入磁盘，使用服务端网络设置。`account_id`、标签、内容分级、AI 标记、尺寸和画幅筛选可以组合。默认规则只允许 safe、non-AI；分类未知的作品始终排除。屏蔽、作品显式排除和其它硬规则不能因图库过小而放宽。
+~~~text
+GET /random                                  # JSON：url 为固定图片转发地址
+GET /random?format=image                     # 直接返回图片
+GET /random?format=redirect                  # 302 到固定图片转发地址
+GET /random?delivery=original                # JSON：url 为 Pixiv 原图地址
+GET /i/{illust_id}/{page_index}?format=image  # 固定作品页图片，不重新随机
+~~~
 
-`/healthz` 只表示进程存活；`/readyz` 检查本地数据库与 Worker，不代表 Pixiv 或 CDN 可达。
+Curator 使用服务端网络设置并携带 Pixiv Referer 获取图片；浏览器或 PicHub 访问默认 url 无需设置 Referer。原图字节限时、限大小流式转发，不落盘；仅管理缩略图使用 preview-cache（256 MiB / 单张 8 MiB / 7 天）。JSON 和 302 本身不会拉取图片字节。显式 delivery=original 的直接原图模式仍需消费端网络和 Pixiv Referer。
+
+PIXIV_CURATOR_PUBLIC_BASE_URL 用于生成 JSON 图片地址和管理 Origin 校验，必须配置为消费端能访问的服务地址；默认 127.0.0.1 只适合本机使用。
+
+账号、标签、尺寸、分级和 AI 筛选可以组合。默认只允许 safe / non_ai；未知值保持独立分类。设置中显式允许 unknown 后，才可用 r18=unknown / ai_type=unknown 筛选；参数不能放宽全局排除。
+
+发现页可按 R18、AI 的“是、否、未知、不指定”组合筛选；类别依据本轮代表作样本，不能代表画师全部作品。卡片使用信息与缩略图上下布局，没有单独大封面空区。
+
+/healthz 表示进程存活；/readyz 检查本地数据库与 Worker，不代表 Pixiv 或 CDN 可达。
 
 ## 配置与安全
 

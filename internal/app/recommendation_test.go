@@ -483,3 +483,53 @@ func TestRecommendationStartIsIdempotentAndEmptySeedsComplete(t *testing.T) {
 		}
 	}
 }
+
+func TestCandidatesFilteredCombinesSampleClassifications(t *testing.T) {
+	s := openRecommendationAppStore(t)
+	ctx := context.Background()
+	runID, _, err := s.StartRecommendation(ctx, json.RawMessage(`{"max_requests":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.Claim(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := map[int64]domain.Artist{
+		801: {ID: 801, Name: "adult unknown AI"},
+		802: {ID: 802, Name: "safe AI"},
+		803: {ID: 803, Name: "unknown"},
+	}
+	if err = s.CommitRecommendationRecall(ctx, job, runID, 0, candidates, nil, 60); err != nil {
+		t.Fatal(err)
+	}
+	works := []domain.Artwork{
+		{ID: 811, ArtistID: 801, Kind: "illust", Rating: "r18", AIStatus: "non_ai"},
+		{ID: 812, ArtistID: 801, Kind: "illust", Rating: "safe", AIStatus: "unknown"},
+		{ID: 821, ArtistID: 802, Kind: "illust", Rating: "safe", AIStatus: "ai"},
+	}
+	for _, work := range works {
+		if err = s.UpsertArtwork(ctx, work); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for artistID, sampleIDs := range map[int64][]string{801: {"811", "812"}, 802: {"821"}, 803: {"899"}} {
+		result := domain.Recommendation{ArtistID: artistID, SampleIDs: sampleIDs}
+		if err = s.CommitRecommendationSamples(ctx, job, runID, artistID, artistID+1, nil, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	service := NewRecommender(s, newFakeRecommendationClient())
+	_, all, err := service.CandidatesFiltered(ctx, runID, "all", "all")
+	if err != nil || len(all) != 3 {
+		t.Fatalf("all candidates=%d err=%v", len(all), err)
+	}
+	_, adultUnknownAI, err := service.CandidatesFiltered(ctx, runID, "adult", "unknown")
+	if err != nil || len(adultUnknownAI) != 1 || adultUnknownAI[0].ArtistID != 801 {
+		t.Fatalf("adult + unknown AI candidates=%+v err=%v", adultUnknownAI, err)
+	}
+	_, safeAI, err := service.CandidatesFiltered(ctx, runID, "safe", "ai")
+	if err != nil || len(safeAI) != 1 || safeAI[0].ArtistID != 802 {
+		t.Fatalf("safe + AI candidates=%+v err=%v", safeAI, err)
+	}
+}

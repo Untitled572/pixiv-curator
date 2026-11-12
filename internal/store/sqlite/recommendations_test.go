@@ -221,3 +221,91 @@ func TestRecommendationRequestAndCandidateSampleLimits(t *testing.T) {
 		t.Fatalf("five candidate samples error=%v", err)
 	}
 }
+
+func TestRecommendationCandidateContentRatingUsesOnlySamples(t *testing.T) {
+	s := openRecommendationStore(t)
+	ctx, runID, job := runningRecommendation(t, s)
+	ids := []int64{201, 202, 203, 204, 205, 206, 207, 208, 209, 210}
+	candidates := map[int64]domain.Artist{}
+	for _, id := range ids {
+		candidates[id] = domain.Artist{ID: id, Name: "candidate"}
+	}
+	if err := s.CommitRecommendationRecall(ctx, job, runID, 0, candidates, nil, 60); err != nil {
+		t.Fatal(err)
+	}
+	// Persisted sample IDs are normally JSON strings. Cover classification and
+	// malformed/duplicate/overflow values directly in this fixture.
+	samples := map[int64][]string{
+		201: {"301"},
+		202: {"302", "303"},
+		203: {"304", "305"},
+		204: {"306"},
+		205: {"399"},
+		206: {"310junk"},
+		207: {"311"},
+		209: {"313", "313"},
+		210: {"314", "315", "316", "317", "318"},
+	}
+	artworks := []domain.Artwork{
+		{ID: 301, ArtistID: 201, Rating: "r18", AIStatus: "non_ai"},
+		{ID: 302, ArtistID: 202, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 303, ArtistID: 202, Rating: "r18g", AIStatus: "ai"},
+		{ID: 304, ArtistID: 203, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 305, ArtistID: 203, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 306, ArtistID: 204, Rating: "unknown", AIStatus: "unknown"},
+		{ID: 307, ArtistID: 205, Rating: "safe", AIStatus: "non_ai"}, // unrelated to sample 399
+		{ID: 310, ArtistID: 206, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 311, ArtistID: 208, Rating: "safe", AIStatus: "non_ai"}, // another artist's work
+		{ID: 312, ArtistID: 208, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 313, ArtistID: 209, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 314, ArtistID: 210, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 315, ArtistID: 210, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 316, ArtistID: 210, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 317, ArtistID: 210, Rating: "safe", AIStatus: "non_ai"},
+		{ID: 318, ArtistID: 210, Rating: "safe", AIStatus: "non_ai"},
+	}
+	for _, art := range artworks {
+		art.Kind = "illust"
+		art.PageCount = 0
+		if err := s.UpsertArtwork(ctx, art); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for artistID, sampleIDs := range samples {
+		encoded, _ := json.Marshal(sampleIDs)
+		if _, err := s.db.ExecContext(ctx, `UPDATE recommendations SET sample_illust_ids_json=? WHERE run_id=? AND artist_id=?`, string(encoded), runID, artistID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.RecommendationCandidates(ctx, runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[int64]string{201: "adult", 202: "adult", 203: "safe", 204: "unknown", 205: "unknown", 206: "unknown", 207: "unknown", 208: "unknown", 209: "safe", 210: "unknown"}
+	wantAI := map[int64]string{201: "non_ai", 202: "ai", 203: "non_ai", 204: "unknown", 205: "unknown", 206: "unknown", 207: "unknown", 208: "unknown", 209: "non_ai", 210: "unknown"}
+	for _, item := range got {
+		if item.ContentRating != want[item.ArtistID] {
+			t.Errorf("artist %d rating=%q want %q", item.ArtistID, item.ContentRating, want[item.ArtistID])
+		}
+		if item.AIStatus != wantAI[item.ArtistID] {
+			t.Errorf("artist %d ai_status=%q want %q", item.ArtistID, item.AIStatus, wantAI[item.ArtistID])
+		}
+	}
+}
+
+func TestParseRecommendationSampleIDsRejectsMalformedAndNormalizes(t *testing.T) {
+	for _, raw := range []string{`["312"`, `null`, `{"id":"312"}`} {
+		ids, invalid, _ := parseRecommendationSampleIDs(raw)
+		if !invalid || len(ids) != 0 {
+			t.Errorf("parse(%q)=%v invalid=%v, want invalid empty result", raw, ids, invalid)
+		}
+	}
+	ids, invalid, unknown := parseRecommendationSampleIDs(`["301","301","0","301junk"]`)
+	if !invalid || unknown != 2 || len(ids) != 1 || ids[0] != "301" {
+		t.Fatalf("normalized IDs=%v invalid=%v unknown=%d", ids, invalid, unknown)
+	}
+	ids, invalid, unknown = parseRecommendationSampleIDs(`[302]`)
+	if invalid || unknown != 0 || len(ids) != 1 || ids[0] != "302" {
+		t.Fatalf("numeric ID compatibility=%v invalid=%v unknown=%d", ids, invalid, unknown)
+	}
+}

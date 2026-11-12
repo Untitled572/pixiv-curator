@@ -7,7 +7,7 @@
 | 目标 | 架构 | 产物 |
 | --- | --- | --- |
 | Linux | amd64、arm64 | 两个 .tar.gz |
-| Windows | amd64、arm64 | 两个 .zip，内含 .exe |
+| Windows | amd64、arm64 | 两个 .zip，内含 .exe 与 start.cmd / PowerShell 启动器 |
 | Docker | linux/amd64、linux/arm64 | GHCR 多架构镜像 |
 | 校验文件 | 全部二进制包 | SHA256SUMS |
 
@@ -97,4 +97,6 @@ gh run list --workflow release.yml
 
 2026-10-10：本轮工作流经 actionlint 验证，CI 增加 Python 登录桥接离线测试与 Linux 启动脚本语法检查。查看远端最近 [CI 36960400585](https://github.com/Untitled572/pixiv-curator/actions/runs/36960400585)，Linux/Windows 测试、四个平台包与 Docker 构建均成功，但对应旧提交 4837f0e，不代表本轮代码通过远端 CI。未创建或推送版本标签。
 
-可选账号浏览器登录面向本机桌面源码联调。默认 Docker 镜像仍为纯 Go/scratch，不含 Python、Chromium 或桌面；容器使用私密 refresh token 配置。二进制包随附登录 helper、锁定依赖和说明，启用它仍需自行准备 Python/浏览器环境；一键开发脚本需要源码与 Go 工具链。
+可选账号浏览器登录面向本机桌面源码联调。默认 Docker 镜像仍为纯 Go/scratch，不含 Python、Chromium 或桌面；容器使用私密 refresh token 配置。二进制包随附登录 helper、锁定依赖和说明，启用它仍需自行准备 Python/浏览器环境；Windows 启动器会区分源码与发行包：源码模式需要 Go；发行包直接运行 EXE，无需 Go，首次 OAuth 配置仍可通过锁定 Python 辅助脚本准备。
+
+发布镜像后，Actions 会核对 GHCR manifest 的 linux/amd64 和 linux/arm64 描述，按 digest 拉取 amd64 镜像并核验源码 revision；另外生成 image-deploy-linux-amd64 artifact（保留 7 天），包含同一 GHCR 镜像的部署归档、校验和、镜像 ID、registry digest 及源码 revision，可在没有 GHCR 长期凭据的服务器上校验后导入。此 artifact 不包含账号配置或凭据，不替代正式 GHCR 发布。

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the four supported CGO-free release archives and their checksums."""
+"""Build four supported CGO-free release archives and their checksums."""
 
 import argparse
 import hashlib
@@ -47,6 +47,10 @@ def main():
                      (ROOT / "scripts/pixiv-callback.py", "scripts/pixiv-callback.py"),
                      (ROOT / "scripts/requirements-login.txt", "scripts/requirements-login.txt")]
             if goos == "windows":
+                files.extend([
+                    (ROOT / "start.cmd", "start.cmd"),
+                    (ROOT / "scripts/dev.ps1", "scripts/dev.ps1"),
+                ])
                 archive = args.output / f"{basename}.zip"
                 with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
                     for source, name in files:
@@ -55,7 +59,11 @@ def main():
                 archive = args.output / f"{basename}.tar.gz"
                 with tarfile.open(archive, "w:gz") as bundle:
                     for source, name in files:
-                        bundle.add(source, arcname=f"{basename}/{name}", recursive=False)
+                        info = bundle.gettarinfo(source, arcname=f"{basename}/{name}")
+                        if source == binary:
+                            info.mode = 0o755
+                        with source.open("rb") as stream:
+                            bundle.addfile(info, stream)
             archives.append(archive)
             print(f"Built {archive}", flush=True)
 

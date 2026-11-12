@@ -87,6 +87,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	apiTransport.Proxy = networkSettings.Proxy
 	defer apiTransport.CloseIdleConnections()
 	previewProxy := media.NewProxyWithResolver(networkSettings.Proxy)
+	if err := previewProxy.EnablePreviewCache(filepath.Join(filepath.Dir(cfg.DatabasePath), "preview-cache")); err != nil {
+		slog.Warn("preview cache disabled", "error", err)
+	}
 	defer previewProxy.CloseIdleConnections()
 	client, err := accounts.Open(ctx, store, filepath.Join(filepath.Dir(cfg.DatabasePath), "private", "accounts"), cfg.PixivTokenFile, oauth, apiTransport)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"strings"
 )
 
 type ImageRepository interface {
@@ -25,15 +26,24 @@ func NewImages(s ImageRepository, base string) *Images { return &Images{store: s
 
 type ImageResult struct {
 	domain.SelectedPage
-	URL string `json:"url"`
+	URL         string `json:"url"`
+	OriginalURL string `json:"original_url"`
 }
 
 func (s *Images) Select(ctx context.Context, r domain.SelectionRequest) (ImageResult, error) {
 	p, err := s.store.Select(ctx, r)
-	if err == nil && !domain.ValidImageURL(p.OriginalURL) {
+	if err != nil {
+		return ImageResult{}, err
+	}
+	if !domain.ValidImageURL(p.OriginalURL) {
 		return ImageResult{}, domain.ErrNotFound
 	}
-	return ImageResult{SelectedPage: p, URL: p.OriginalURL}, err
+	return s.Result(p), nil
+}
+
+// Result exposes a fixed same-origin image endpoint and the optional direct origin.
+func (s *Images) Result(p domain.SelectedPage) ImageResult {
+	return ImageResult{SelectedPage: p, OriginalURL: p.OriginalURL, URL: strings.TrimRight(s.base, "/") + fmt.Sprintf("/i/%d/%d?format=image", p.IllustID, p.PageIndex)}
 }
 func (s *Images) Page(ctx context.Context, id int64, index int, preview bool) (domain.SelectedPage, error) {
 	if id <= 0 || index < 0 {

@@ -1,0 +1,22 @@
+# Linux host networking lets Curator use the host's loopback proxy.
+# Prepare data/private account credentials and the two private files first.
+services:
+  curator:
+    image: ${PIXIV_CURATOR_IMAGE:-ghcr.io/untitled572/pixiv-curator:latest}
+    pull_policy: ${PIXIV_CURATOR_PULL_POLICY:-missing}
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    user: "65532:65532"
+    stop_grace_period: 30s
+    environment:
+      PIXIV_CURATOR_ADDR: "127.0.0.1:5722"
+      PIXIV_CURATOR_PUBLIC_BASE_URL: "${PIXIV_CURATOR_PUBLIC_BASE_URL:-http://127.0.0.1:5722}"
+      PIXIV_CURATOR_DATABASE_PATH: /data/curator.db
+      PIXIV_CURATOR_ADMIN_TOKEN_FILE: /run/secrets/admin-token
+      PIXIV_CURATOR_OAUTH_CONFIG_FILE: /run/secrets/oauth.json
+      PIXIV_CURATOR_NETWORK_CONFIG_FILE: /data/private/network.json
+    volumes:
+      - ./data:/data
+      - ./private/admin-token:/run/secrets/admin-token:ro
+      - ./private/oauth.json:/run/secrets/oauth.json:ro

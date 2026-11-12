@@ -266,7 +266,7 @@ func TestEligiblePageUsesFixedIdentityAndPreviewIgnoresReviewAndContentRules(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.IllustID != 1101 || first.PageIndex != 1 || first.PreviewURL == "" || first.OriginalURL != "" || second.PageIndex != first.PageIndex || second.PreviewURL != first.PreviewURL {
+	if first.IllustID != 1101 || first.PageIndex != 1 || first.PreviewURL == "" || first.OriginalURL != "" || !first.PreviewIsThumbnail || second.PageIndex != first.PageIndex || second.PreviewURL != first.PreviewURL {
 		t.Fatalf("preview did not preserve fixed page identity or hide original URL: first=%+v second=%+v", first, second)
 	}
 	if _, err := s.EligiblePage(ctx, 1101, 1, false); !errors.Is(err, domain.ErrNotFound) {
@@ -308,5 +308,37 @@ func putSelectionRules(t *testing.T, s *Store, rules domain.SelectionRules) {
 	}
 	if err := s.PutSetting(context.Background(), "preferences", encoded, 0); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSelectUnknownRequiresExplicitGlobalPermissionAndKeepsHardExclusions(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1600, "approved")
+	seedEligibleArtist(t, s, 1601, "blocked")
+	seedSelectionArtwork(t, s, 1610, 1600, "unknown", "non_ai", nil, 1)
+	seedSelectionArtwork(t, s, 1611, 1600, "safe", "unknown", nil, 1)
+	seedSelectionArtwork(t, s, 1612, 1600, "unknown", "unknown", nil, 1)
+	seedSelectionArtwork(t, s, 1613, 1601, "unknown", "unknown", nil, 1)
+	request := domain.SelectionRequest{SelectionRules: domain.SelectionRules{AllowedRatings: []string{"unknown"}, AllowedAI: []string{"unknown"}}}
+	if _, err := s.Select(ctx, request); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("default rules widened to unknown: %v", err)
+	}
+	putSelectionRules(t, s, domain.SelectionRules{AllowedRatings: []string{"safe", "r18", "r18g", "unknown"}, AllowedAI: []string{"non_ai", "ai", "unknown"}})
+	got, err := s.Select(ctx, request)
+	if err != nil || got.IllustID != 1612 {
+		t.Fatalf("explicit unknown pick=%+v err=%v", got, err)
+	}
+	if _, err = s.EligiblePage(ctx, 1612, 0, false); err != nil {
+		t.Fatalf("explicit unknown fixed page: %v", err)
+	}
+	if _, err = s.db.ExecContext(ctx, "INSERT INTO artwork_preferences(illust_id,value,updated_at) VALUES(1612,'dislike',1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Select(ctx, request); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("unknown bypassed dislike/block: %v", err)
+	}
+	if _, err = s.EligiblePage(ctx, 1612, 0, false); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("old URL bypassed dislike: %v", err)
 	}
 }

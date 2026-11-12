@@ -26,15 +26,16 @@ type SelectionRequest struct {
 	AccountID string
 }
 type SelectedPage struct {
-	IllustID    int64  `json:"illust_id,string"`
-	ArtistID    int64  `json:"artist_id,string"`
-	PageIndex   int    `json:"page_index"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	OriginalURL string `json:"-"`
-	PreviewURL  string `json:"-"`
-	SelectionID string `json:"selection_id"`
-	Repeated    bool   `json:"repeated"`
+	IllustID           int64  `json:"illust_id,string"`
+	ArtistID           int64  `json:"artist_id,string"`
+	PageIndex          int    `json:"page_index"`
+	Width              int    `json:"width"`
+	Height             int    `json:"height"`
+	OriginalURL        string `json:"-"`
+	PreviewURL         string `json:"-"`
+	PreviewIsThumbnail bool   `json:"-"`
+	SelectionID        string `json:"selection_id"`
+	Repeated           bool   `json:"repeated"`
 }
 
 func ValidateRules(r SelectionRules) error {
@@ -42,12 +43,12 @@ func ValidateRules(r SelectionRules) error {
 		return ErrInvalid
 	}
 	for _, s := range r.AllowedRatings {
-		if s != "safe" && s != "r18" && s != "r18g" {
+		if s != "safe" && s != "r18" && s != "r18g" && s != "unknown" {
 			return ErrInvalid
 		}
 	}
 	for _, s := range r.AllowedAI {
-		if s != "non_ai" && s != "ai" {
+		if s != "non_ai" && s != "ai" && s != "unknown" {
 			return ErrInvalid
 		}
 	}

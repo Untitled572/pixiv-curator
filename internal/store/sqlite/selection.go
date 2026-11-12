@@ -109,21 +109,25 @@ func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview b
 	}
 	if preview {
 		var result domain.SelectedPage
-		var previewURL string
-		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,COALESCE(NULLIF(p.preview_url,''),p.original_url)
+		var originalURL, previewURL string
+		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
 			FROM artworks a JOIN artists ar ON ar.id=a.artist_id JOIN image_pages p ON p.illust_id=a.id
 			WHERE a.id=? AND p.page_index=? AND p.media_state='indexed'`, id, index).
-			Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &previewURL)
+			Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &originalURL, &previewURL)
 		if err != nil {
 			if err == sql.ErrNoRows {
 				return domain.SelectedPage{}, domain.ErrNotFound
 			}
 			return domain.SelectedPage{}, err
 		}
+		if previewURL == "" {
+			previewURL = originalURL
+		}
 		if !domain.ValidImageURL(previewURL) {
 			return domain.SelectedPage{}, domain.ErrNotFound
 		}
 		result.PreviewURL = previewURL
+		result.PreviewIsThumbnail = previewURL != originalURL
 		return result, nil
 	}
 
@@ -372,7 +376,7 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 }
 
 func selectionWhere(rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64) (string, []any, error) {
-	where := `ar.review_status='approved' AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g') AND a.ai_status IN ('non_ai','ai') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
+	where := `ar.review_status='approved' AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
 	var args []any
 	if artistID > 0 {
 		where = appendAnd(where, `a.artist_id=?`)

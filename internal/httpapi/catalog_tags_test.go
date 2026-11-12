@@ -70,4 +70,28 @@ func TestLibraryTagRoutesAuthenticateAndRestoreOverride(t *testing.T) {
 	if rec = libraryRequest(h, http.MethodGet, "/admin/api/library/artists?limit=1&limit=2", "", true); rec.Code != 422 {
 		t.Fatalf("duplicate query status=%d", rec.Code)
 	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/library/artists?page=1&after=81", "", true); rec.Code != 422 {
+		t.Fatalf("mixed pagination status=%d", rec.Code)
+	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/library/artists?page=1", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"library_total":1`) || !strings.Contains(rec.Body.String(), `"total":1`) {
+		t.Fatalf("page response status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/stats", "", false); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated stats status=%d", rec.Code)
+	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/stats?extra=1", "", true); rec.Code != 422 {
+		t.Fatalf("stats extra parameter status=%d", rec.Code)
+	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/stats", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"unknown_rating_artworks":1`) {
+		t.Fatalf("stats status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLibraryStatsRejectMalformedQuery(t *testing.T) {
+	h, _ := newLibraryHandler(t)
+	for _, path := range []string{"/admin/api/stats?%ZZ", "/admin/api/library/artists?page=1&tag=%ZZ", "/admin/api/library/tags?%ZZ"} {
+		if rec := libraryRequest(h, http.MethodGet, path, "", true); rec.Code != 422 {
+			t.Errorf("%s status=%d, want 422", path, rec.Code)
+		}
+	}
 }

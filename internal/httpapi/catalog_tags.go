@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -11,18 +12,27 @@ import (
 
 type libraryTagStore interface {
 	ArtistTagPage(context.Context, string, string, int64, int) ([]domain.Artist, error)
+	ArtistTagPageStats(context.Context, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
 	ArtistTags(context.Context) ([]string, error)
 	SetArtistTagOverride(context.Context, int64, []string) error
 	ClearArtistTagOverride(context.Context, int64) error
+}
+
+type catalogStatsStore interface {
+	CatalogStats(context.Context) (domain.CatalogStats, error)
 }
 
 // RegisterLibrary adds the authenticated artist tag management routes.
 func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 	protect := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, auth.Middleware(handler)) }
 	protect("GET /admin/api/library/artists", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
+		q, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
 		for key, values := range q {
-			if key != "tag" && key != "account_id" && key != "after" && key != "limit" || len(values) != 1 {
+			if key != "tag" && key != "account_id" && key != "after" && key != "limit" && key != "page" || len(values) != 1 {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
@@ -45,9 +55,29 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			}
 			after = n
 		}
+		_, hasPage := q["page"]
+		_, hasAfter := q["after"]
+		if hasPage && hasAfter {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
 		tag, accountID := q.Get("tag"), q.Get("account_id")
 		if len(tag) > 160 || len(accountID) > 256 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID {
 			apiError(w, domain.ErrInvalid)
+			return
+		}
+		if hasPage {
+			page, err := strconv.Atoi(q.Get("page"))
+			if err != nil || page < 1 {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			items, total, libraryTotal, totalPages, next, err := store.ArtistTagPageStats(r.Context(), tag, accountID, page, limit)
+			if err != nil {
+				apiError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "library_total": libraryTotal, "page": page, "page_size": limit, "total_pages": totalPages, "next_cursor": next})
 			return
 		}
 		items, err := store.ArtistTagPage(r.Context(), tag, accountID, after, limit)
@@ -62,8 +92,27 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": next})
 	})
+	protect("GET /admin/api/stats", func(w http.ResponseWriter, r *http.Request) {
+		q, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil || len(q) != 0 {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		statsStore, ok := store.(catalogStatsStore)
+		if !ok {
+			apiError(w, domain.ErrNotFound)
+			return
+		}
+		stats, err := statsStore.CatalogStats(r.Context())
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
+	})
 	protect("GET /admin/api/library/tags", func(w http.ResponseWriter, r *http.Request) {
-		if len(r.URL.Query()) != 0 {
+		q, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil || len(q) != 0 {
 			apiError(w, domain.ErrInvalid)
 			return
 		}

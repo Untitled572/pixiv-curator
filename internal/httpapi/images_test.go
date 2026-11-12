@@ -115,6 +115,7 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	localURL := fmt.Sprintf("https://curator.test/i/%d/0?format=image", illustID)
 	proxyCalls := 0
 	proxy := media.NewProxy(imageRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		proxyCalls++
@@ -134,13 +135,13 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &fixed); err != nil {
 			t.Fatal(err)
 		}
-		if fixed["url"] != original || fixed["illust_id"] != fmt.Sprint(illustID) || fixed["page_index"] != float64(0) {
+		if fixed["url"] != localURL || fixed["original_url"] != original || fixed["illust_id"] != fmt.Sprint(illustID) || fixed["page_index"] != float64(0) {
 			t.Fatalf("fixed page JSON did not preserve identity and URL: %#v", fixed)
 		}
 	}
 	redirectRec := httptest.NewRecorder()
 	mux.ServeHTTP(redirectRec, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/i/%d/0?format=redirect", illustID), nil))
-	if redirectRec.Code != http.StatusFound || redirectRec.Header().Get("Location") != original {
+	if redirectRec.Code != http.StatusFound || redirectRec.Header().Get("Location") != localURL {
 		t.Fatalf("fixed redirect status=%d location=%q", redirectRec.Code, redirectRec.Header().Get("Location"))
 	}
 	invalidFormat := httptest.NewRecorder()
@@ -164,12 +165,12 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 	if randomRec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("random Cache-Control=%q", randomRec.Header().Get("Cache-Control"))
 	}
-	if selected["url"] != original {
+	if selected["url"] != localURL || selected["original_url"] != original {
 		t.Fatalf("random URL=%v; want %q", selected["url"], original)
 	}
 	randomRedirect := httptest.NewRecorder()
 	mux.ServeHTTP(randomRedirect, httptest.NewRequest(http.MethodGet, "/random?format=redirect", nil))
-	if randomRedirect.Code != http.StatusFound || randomRedirect.Header().Get("Location") != original {
+	if randomRedirect.Code != http.StatusFound || randomRedirect.Header().Get("Location") != localURL {
 		t.Fatalf("random redirect status=%d location=%q", randomRedirect.Code, randomRedirect.Header().Get("Location"))
 	}
 
@@ -251,5 +252,21 @@ func TestRandomEmptyCatalogReturnsCatalogEmptyAndNoStore(t *testing.T) {
 	}
 	if rec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("empty catalog Cache-Control=%q", rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestSelectionQueryUnknownIsDistinctFromAllKnown(t *testing.T) {
+	parsed, err := selectionQuery(httptest.NewRequest("GET", "/random?r18=unknown&ai_type=unknown", nil))
+	if err != nil || !reflect.DeepEqual(parsed.AllowedRatings, []string{"unknown"}) || !reflect.DeepEqual(parsed.AllowedAI, []string{"unknown"}) {
+		t.Fatalf("unknown mapping=%+v err=%v", parsed, err)
+	}
+	known, err := selectionQuery(httptest.NewRequest("GET", "/random?r18=2&ai_type=any", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range append(known.AllowedRatings, known.AllowedAI...) {
+		if value == "unknown" {
+			t.Fatal("all-known silently enabled unknown")
+		}
 	}
 }
