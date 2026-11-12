@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     network_mode: host
     read_only: true
-    user: "65532:65532"
+    user: "${PIXIV_CURATOR_UID:-65532}:${PIXIV_CURATOR_GID:-65532}"
     stop_grace_period: 30s
     environment:
       PIXIV_CURATOR_ADDR: "127.0.0.1:5722"

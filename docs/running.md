@@ -134,6 +134,6 @@ PicHub 配置 JSON 响应、字段路径 url，源 URL 使用 /random?format=jso
 Windows 发行包解压后也提供 start.cmd / scripts/dev.ps1，直接运行包内 EXE，不需要 Go 源码或 Go 编译器。源码目录仍按原方式编译。首次没有 OAuth 应用配置时仍需 Python 准备锁定配置；之后日常启动不调用 Python/pip。
 
 
-Linux 同机部署可使用 deploy/compose.yml：host 网络默认只监听 127.0.0.1:5722，供同机 PicHub 调用，并可访问宿主机 127.0.0.1:7890 代理。管理页可经 SSH 本地转发访问；此模板不创建公网反向代理。准备 data/curator.db、data/private/accounts 及 private/admin-token、private/oauth.json，文件给 UID 65532 读取，数据库目录可写。跨系统迁移时 account.token_file 必须改成容器内实际绝对路径；不要直接复制 Windows 路径或运行中的 WAL 文件。
+Linux 同机部署可使用 deploy/compose.yml：host 网络默认只监听 127.0.0.1:5722，供同机 PicHub 调用，并可访问宿主机 127.0.0.1:7890 代理。管理页可经 SSH 本地转发访问；此模板不创建公网反向代理。准备 data/curator.db、data/private/accounts 及 private/admin-token、private/oauth.json，默认文件给 UID 65532 读取，数据库目录可写；也可设置 PIXIV_CURATOR_UID / PIXIV_CURATOR_GID 为拥有该目录的非 root 宿主机用户，保留 0700/0600 权限而无需将凭据开放给其它用户。跨系统迁移时 account.token_file 必须改成容器内实际绝对路径；不要直接复制 Windows 路径或运行中的 WAL 文件。
 
 设置 PIXIV_CURATOR_IMAGE 为要部署的版本或 digest。若使用 Actions 的 GHCR 镜像部署归档，先验证 SHA256SUMS / 镜像 ID / revision，再 docker load；相应 Compose 环境可设置 PIXIV_CURATOR_PULL_POLICY=never，避免没有 GHCR 凭据时重复拉取。普通 registry 拉取使用 missing 或 always，并自行配置只读包权限。
