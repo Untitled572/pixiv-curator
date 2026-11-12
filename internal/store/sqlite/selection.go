@@ -110,7 +110,7 @@ func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview b
 	if preview {
 		var result domain.SelectedPage
 		var previewURL string
-		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.preview_url
+		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,COALESCE(NULLIF(p.preview_url,''),p.original_url)
 			FROM artworks a JOIN artists ar ON ar.id=a.artist_id JOIN image_pages p ON p.illust_id=a.id
 			WHERE a.id=? AND p.page_index=? AND p.media_state='indexed'`, id, index).
 			Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &previewURL)

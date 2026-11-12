@@ -207,7 +207,7 @@
     const page = pages.find((item) => item.media_state === "indexed") || pages[0];
     if (!page || Number(page.page_index) < 0) { container.append(node("span", "cover-empty", "暂无可用预览")); return; }
     const image = node("img", "cover-image"); image.loading = "lazy"; image.alt = artwork.title || "画师代表作";
-    image.src = `/admin/api/previews/${encodeURIComponent(String(artwork.id))}/${encodeURIComponent(String(page.page_index))}?format=redirect`;
+    image.src = `/admin/api/previews/${encodeURIComponent(String(artwork.id))}/${encodeURIComponent(String(page.page_index))}`;
     image.addEventListener("error", () => { image.remove(); container.append(node("span", "cover-empty", "预览暂不可用")); }, { once: true });
     container.append(image);
   }

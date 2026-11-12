@@ -302,7 +302,7 @@ func incrementJobProgress(ctx context.Context, tx *sql.Tx, j domain.Job, items i
 }
 
 func completeJob(ctx context.Context, tx *sql.Tx, j domain.Job) error {
-	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state='succeeded',lease_token='',lease_until=0,updated_at=? WHERE id=? AND lease_token=? AND lease_until>? AND cancel_requested=0`, time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
+	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state='succeeded',error_code='',lease_token='',lease_until=0,updated_at=? WHERE id=? AND lease_token=? AND lease_until>? AND cancel_requested=0`, time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
 	return leaseResult(r, err)
 }
 

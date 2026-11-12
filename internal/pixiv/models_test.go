@@ -163,3 +163,33 @@ func TestNormalizeRejectsInvalidIDsAndURLs(t *testing.T) {
 		t.Fatalf("original URL error = %v, want ErrInvalid", err)
 	}
 }
+
+func TestNormalizeArtistDefaultAvatar(t *testing.T) {
+	raw := RawArtist{ID: 42, Name: "default avatar"}
+	raw.ProfileImageURLs.Medium = "https://s.pximg.net/common/images/no_profile.png"
+	got, err := NormalizeArtist(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AvatarURL != raw.ProfileImageURLs.Medium || got.ID != raw.ID {
+		t.Fatalf("artist identity or avatar changed: %+v", got)
+	}
+}
+
+func TestNormalizeMultiPageUsesArtworkPreviewForFirstPage(t *testing.T) {
+	raw := RawArtwork{ID: 106, User: RawArtist{ID: 42}, Type: "manga", PageCount: 2}
+	raw.ImageURLs.Medium = "https://i.pximg.net/img-master/106_p0_master1200.jpg"
+	if err := json.Unmarshal([]byte(`{"meta_pages":[{"image_urls":{"original":"https://i.pximg.net/img-original/106_p0.jpg"}},{"image_urls":{"original":"https://i.pximg.net/img-original/106_p1.jpg"}}]}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NormalizeArtwork(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Pages[0].PreviewURL != raw.ImageURLs.Medium {
+		t.Fatal("first-page artwork preview was lost")
+	}
+	if got.Pages[1].PreviewURL != "" || got.Pages[1].OriginalURL == "" {
+		t.Fatal("a preview for a different page must not be invented")
+	}
+}

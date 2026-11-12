@@ -17,6 +17,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/admin"
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
+	"github.com/Untitled572/pixiv-curator/internal/media"
 	"github.com/Untitled572/pixiv-curator/internal/network"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/secret"
@@ -85,6 +86,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	apiTransport := http.DefaultTransport.(*http.Transport).Clone()
 	apiTransport.Proxy = networkSettings.Proxy
 	defer apiTransport.CloseIdleConnections()
+	previewProxy := media.NewProxyWithResolver(networkSettings.Proxy)
+	defer previewProxy.CloseIdleConnections()
 	client, err := accounts.Open(ctx, store, filepath.Join(filepath.Dir(cfg.DatabasePath), "private", "accounts"), cfg.PixivTokenFile, oauth, apiTransport)
 	if err != nil {
 		return fmt.Errorf("load accounts: %w", err)
@@ -116,7 +119,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.Middleware(http.HandlerFunc(admin.Home)))
-			httpapi.RegisterImages(mux, images, nil, auth)
+			httpapi.RegisterImages(mux, images, previewProxy, auth)
 			httpapi.RegisterRecommendations(mux, recommender, auth)
 			mux.Handle("/admin/", auth.Middleware(httpapi.NewAdminHandler(service)))
 			mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {

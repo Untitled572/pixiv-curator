@@ -24,6 +24,8 @@ func (e *Error) Error() string { return "media: " + e.Code }
 
 type Proxy struct{ http *http.Client }
 
+func (p *Proxy) CloseIdleConnections() { p.http.CloseIdleConnections() }
+
 func NewProxy(transport http.RoundTripper) *Proxy {
 	return newProxy(transport, http.ProxyFromEnvironment)
 }

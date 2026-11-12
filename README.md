@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-核心目录、任务、推荐、管理鉴权、选图接口和管理页面已经实现。多 Pixiv 账号、账号来源筛选、画师标签修正和新的出图方式已完成本轮实现。全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过；真实 Pixiv、图片出口和 PicHub 联调仍待验证。请以[开发计划](docs/development-plan.md)中的本轮状态为准。
+核心目录、任务、推荐、管理鉴权、选图接口和管理页面已经实现。多 Pixiv 账号、账号来源筛选、画师标签修正和新的出图方式已完成本轮实现。全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过；此前离线验收与本轮实网检查分开记录；Windows 原生完整关注快照、单画师采集、推荐和管理预览已实测通过，见[本轮修复记录](docs/runtime-fixes-2026-11-12.md)。PicHub 联调仍待验证。请以[开发计划](docs/development-plan.md)中的本轮状态为准。
 
 添加账号时验证 Refresh Token 对应的 Pixiv 身份并安排首次关注同步；同步发现的关注画师自动批准、加入采集并入队，`blocked` 和 `rejected` 状态保留。推荐画师仍需预览后由用户明确加入。默认每 6 小时安排关注与采集增量扫描，周期从进程启动后计时。旧单账号迁移先以 UID 0 导入，首次成功同步绑定真实身份；绑定前需修复该账号，不能再添加其他账号。取关或删除账号保留已采集历史，屏蔽始终优先。
 
@@ -15,6 +15,8 @@
 ```
 
 本机默认地址为 <http://127.0.0.1:5722>，开发数据默认保存在 `data/dev`。需要 Go 1.26+。启动脚本生成管理令牌；缺少 OAuth 应用配置时，脚本使用锁定版本的 gppt 准备配置。OAuth 配置已存在时，日常启动不再安装登录依赖，但脚本仍使用 Python 3 标准库。可设置 `PIXIV_CURATOR_OPEN_BROWSER=0` 关闭自动打开页面。生产部署、首次配置和凭据迁移见[运行与接入](docs/running.md)。
+
+Windows 可原生使用 Go 二进制或 `go run ./cmd/api`；先配置数据库路径、私密管理令牌和 OAuth 应用配置文件，PowerShell 示例见[运行与接入](docs/running.md#windows-原生启动)。`scripts/dev.sh` 用于 Linux 环境。
 
 主应用使用 Pixiv Refresh Token，不提供浏览器 PKCE 登录流程。`docs/pixiv-login.md` 保留此前 Python 浏览器登录方式的历史说明，不属于当前主流程。
 
@@ -29,7 +31,7 @@ GET /random?account_id=<id>&included_tags=猫|风景
 GET /i/{illust_id}/{page_index}     # 返回固定作品页的 URL，或 format=redirect 直接跳转
 ```
 
-`/random` 默认 JSON，不下载或代理图片字节。调用方自行访问返回的原图 URL；因此浏览器、PicHub 等客户端必须能访问 Pixiv 图片域名。`account_id`、标签、内容分级、AI 标记、尺寸和画幅筛选可以组合。默认规则只允许 safe、non-AI；分类未知的作品始终排除。屏蔽、作品显式排除和其它硬规则不能因图库过小而放宽。
+`/random` 默认 JSON，公开供图不下载或代理图片字节。调用方自行访问返回的原图 URL，并按 Pixiv 防盗链要求设置 `Referer: https://www.pixiv.net/`；因此 PicHub 等客户端必须能访问 Pixiv 图片域名。管理页预览由已鉴权的同源端点带 Referer 流式转发，不写入磁盘，使用服务端网络设置。`account_id`、标签、内容分级、AI 标记、尺寸和画幅筛选可以组合。默认规则只允许 safe、non-AI；分类未知的作品始终排除。屏蔽、作品显式排除和其它硬规则不能因图库过小而放宽。
 
 `/healthz` 只表示进程存活；`/readyz` 检查本地数据库与 Worker，不代表 Pixiv 或 CDN 可达。
 

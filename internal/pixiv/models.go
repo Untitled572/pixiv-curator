@@ -59,7 +59,7 @@ func NormalizeArtist(raw RawArtist) (domain.Artist, error) {
 	if raw.ID <= 0 {
 		return domain.Artist{}, domain.ErrInvalid
 	}
-	if raw.ProfileImageURLs.Medium != "" && !domain.ValidImageURL(raw.ProfileImageURLs.Medium) {
+	if raw.ProfileImageURLs.Medium != "" && !domain.ValidAvatarURL(raw.ProfileImageURLs.Medium) {
 		return domain.Artist{}, domain.ErrInvalid
 	}
 	return domain.Artist{
@@ -127,6 +127,9 @@ func NormalizeArtwork(raw RawArtwork) (domain.Artwork, error) {
 			for i := 0; i < raw.PageCount && i < len(raw.MetaPages); i++ {
 				urls[i].original = raw.MetaPages[i].ImageURLs.Original
 				urls[i].preview = raw.MetaPages[i].ImageURLs.Medium
+				if i == 0 && urls[i].preview == "" {
+					urls[i].preview = raw.ImageURLs.Medium
+				}
 			}
 		}
 	}

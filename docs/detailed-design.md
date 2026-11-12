@@ -1,6 +1,6 @@
 # 当前产品与接口设计
 
-版本：0.3；更新日期：2026-10-15；状态：实现契约，本轮离线与本机隔离验证完成。真实 Pixiv/PicHub 联调未执行。任务历史见[开发计划](development-plan.md)；本文只描述当前行为。
+版本：0.4；更新日期：2026-11-12；状态：实现契约。当前运行检查及修复的离线/实网验收分别记录于开发计划末尾；PicHub 联调尚未验收。任务历史见[开发计划](development-plan.md)；本文只描述当前行为。
 
 ## 产品流程
 
@@ -30,11 +30,15 @@ SQLite 单进程运行，迁移按 001–007 顺序事务应用；006 增加 `ac
 
 `GET /random` 默认返回 JSON 原图 URL；`format=redirect` 返回 HTTP 302。可用 `account_id` 限制来源，并与 `included_tags`、`excluded_tags`、内容分级、AI、方向和尺寸条件组合。账号来源筛选不删除或改变历史关系。
 
-Curator 不下载、缓存或代理原图字节。消费端（浏览器、PicHub）自行访问 Pixiv 图片 URL，服务端网络代理设置不改变消费端网络。固定作品页端点 `/i/{illust_id}/{page_index}` 保持该作品页身份，可返回 URL 或 302；它不接受任意目标 URL，且出图前重新检查画师及作品资格。
+公开供图不下载、缓存或代理原图字节。消费端（例如 PicHub）自行访问 Pixiv 图片 URL，需具备可达网络并设置 Pixiv Referer；服务端代理设置不改变消费端网络。仅已鉴权的管理预览由 Curator 带 Referer 流式转发，使用服务端网络设置，不落盘、不向图片域发送管理或 Pixiv 凭据。固定作品页端点 `/i/{illust_id}/{page_index}` 保持该作品页身份，可返回 URL 或 302；它不接受任意目标 URL，且出图前重新检查画师及作品资格。
+
+头像 URL 与原图 URL 分别校验：原图/预览只允许 HTTPS i.pximg.net；头像额外接受 HTTPS s.pximg.net/common/images/no_profile.png，不扩展原图白名单。
 
 ## 管理 API 与界面
 
 所有 `/admin/api` 请求（包括 GET）均须管理鉴权；Cookie 写请求校验 Origin/CSRF。凭据字段仅用于写入，响应只返回状态。当前管理界面为三个标签页：画师图库、发现画师、设置；没有任务页面，任务状态通过结构化日志观察。
+
+管理预览 `GET/HEAD /admin/api/previews/{illust_id}/{page_index}` 默认流式返回图片（也可 `format=stream`），支持显式 `format=json` 或 `format=redirect` 获取地址；页面使用默认流式模式。只解析已知作品页，所有请求均需管理鉴权，拒绝额外目标 URL 参数。优先使用该页缩略图，缺失时回退同一页原图；绝不换成其他页。每请求超时 20 秒、最大 64 MiB、禁止缓存，客户端断开取消上游。403/404 去重安排同作品修复，已经开始的失败图片响应直接中断，不混入 JSON 错误。公开 `/random` 和 `/i` 仍只支持 JSON/302，不提供流式模式。
 
 图库接口：
 
@@ -44,4 +48,4 @@ Curator 不下载、缓存或代理原图字节。消费端（浏览器、PicHub
 
 ## 验证边界
 
-全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过。本轮未执行 Docker 构建与远端 GitHub Actions。未执行真实 Pixiv 登录/同步、真实 CDN 图片访问、PicHub 下载与显示联调。服务端网络代理只作用于 Curator 发出的请求，不改变消费端访问原图 URL 的网络。mock 或配置存在不代表实网通过。
+全仓 `go vet ./...`、`go test -race ./...`，Linux/Windows amd64、arm64 构建和隔离浏览器桌面/手机验证通过。历史验收与本轮新增修复的结果应分开查看开发计划。本次是否执行真实 Pixiv、管理预览、Docker 或远端 CI，以该记录为准。服务端网络设置影响 API、OAuth 和管理预览，不改变消费端原图网络。mock 或配置存在不代表实网通过。

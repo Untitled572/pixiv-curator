@@ -195,7 +195,7 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 	if previewRec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated preview status=%d", previewRec.Code)
 	}
-	previewReq := httptest.NewRequest(http.MethodGet, previewPath, nil)
+	previewReq := httptest.NewRequest(http.MethodGet, previewPath+"?format=json", nil)
 	previewReq.Header.Set("Authorization", "Bearer "+adminTestToken)
 	previewRec = httptest.NewRecorder()
 	mux.ServeHTTP(previewRec, previewReq)

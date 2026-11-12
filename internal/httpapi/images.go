@@ -31,6 +31,26 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 	})
 	resolve := func(preview bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
+			query, err := url.ParseQuery(r.URL.RawQuery)
+			if err != nil {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			format := "json"
+			if preview {
+				format = "stream"
+			}
+			for key, values := range query {
+				if key != "format" || len(values) != 1 {
+					apiError(w, domain.ErrInvalid)
+					return
+				}
+				format = values[0]
+			}
+			if format != "json" && format != "redirect" && !(preview && format == "stream") {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
 			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 			if err != nil {
 				apiError(w, domain.ErrInvalid)
@@ -46,18 +66,35 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				imageError(w, err)
 				return
 			}
-			if _, present := r.URL.Query()["format"]; present {
-				values := r.URL.Query()["format"]
-				if len(values) != 1 || (values[0] != "json" && values[0] != "redirect") {
-					apiError(w, domain.ErrInvalid)
-					return
-				}
-			}
 			target := page.OriginalURL
 			if preview {
 				target = page.PreviewURL
 			}
-			if wantsRedirect(r) {
+			if format == "stream" {
+				if p == nil {
+					writeAPIError(w, http.StatusServiceUnavailable, "NOT_READY")
+					return
+				}
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
+				if err := p.Forward(w, r, target); err != nil {
+					var upstream *media.Error
+					if errors.As(err, &upstream) {
+						if upstream.Started {
+							panic(http.ErrAbortHandler)
+						}
+						if upstream.Code == "MEDIA_UNAVAILABLE" {
+							_ = s.Repair(r.Context(), id)
+						}
+						writeAPIError(w, http.StatusBadGateway, upstream.Code)
+						return
+					}
+					writeAPIError(w, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
+				}
+				return
+			}
+			if format == "redirect" {
 				http.Redirect(w, r, target, http.StatusFound)
 				return
 			}
@@ -67,7 +104,6 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			}{SelectedPage: page, URL: target})
 		}
 	}
-	_ = p // retained in the registration signature for existing application wiring
 	mux.HandleFunc("GET /i/{id}/{page}", resolve(false))
 	mux.Handle("GET /admin/api/previews/{id}/{page}", auth.Middleware(resolve(true)))
 	mux.Handle("GET /admin/api/settings/preferences", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

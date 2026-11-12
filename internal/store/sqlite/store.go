@@ -31,7 +31,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(absolute), 0700); err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(absolute)}
+	uriPath := filepath.ToSlash(absolute)
+	if filepath.VolumeName(absolute) != "" {
+		// A drive letter must be part of the URI path, not its authority:
+		// file:///C:/... is valid while file://C:/... is parsed with authority C:.
+		uriPath = "/" + uriPath
+	}
+	u := url.URL{Scheme: "file", Path: uriPath}
 	q := u.Query()
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "busy_timeout(5000)")

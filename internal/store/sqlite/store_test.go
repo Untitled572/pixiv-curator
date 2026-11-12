@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -67,6 +68,37 @@ func TestOpenCanRepeatMigrationsAndReopenData(t *testing.T) {
 	wantMigrations := migrationCount(t)
 	if migrations != wantMigrations {
 		t.Fatalf("migration rows = %d, want %d", migrations, wantMigrations)
+	}
+}
+
+func TestOpenPathWithSpecialCharactersCanWriteCloseAndReopen(t *testing.T) {
+	ctx := context.Background()
+	name := "目录 with spaces #percent%.db"
+	if runtime.GOOS != "windows" {
+		name = "目录 with spaces #question?percent%.db"
+	}
+	path := filepath.Join(t.TempDir(), name)
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("open database at special-character path: %v", err)
+	}
+	insertArtist(t, s, 4301, "special path")
+	if err := s.Close(); err != nil {
+		t.Fatalf("close database: %v", err)
+	}
+
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reopen database at special-character path: %v", err)
+	}
+	defer s.Close()
+	var nameStored string
+	if err := s.db.QueryRowContext(ctx, "SELECT name FROM artists WHERE id=4301").Scan(&nameStored); err != nil {
+		t.Fatalf("read reopened database: %v", err)
+	}
+	if nameStored != "special path" {
+		t.Fatalf("reopened name = %q, want %q", nameStored, "special path")
 	}
 }
 

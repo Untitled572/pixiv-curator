@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -91,8 +92,10 @@ func TestAccessTokenConcurrentRefreshSharedAndRotated(t *testing.T) {
 	if err != nil || strings.TrimSpace(string(got)) != "refresh-rotated" {
 		t.Fatalf("rotated token not persisted: %q, %v", got, err)
 	}
-	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0600 {
-		t.Fatalf("token mode = %v, %v", st, err)
+	if runtime.GOOS != "windows" {
+		if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0600 {
+			t.Fatalf("token mode = %v, %v", st, err)
+		}
 	}
 }
 
@@ -104,8 +107,8 @@ func TestRefreshPersistenceFailureBlocksFutureAttempts(t *testing.T) {
 		if err := os.Remove(path); err != nil {
 			t.Errorf("remove token: %v", err)
 		}
-		if err := os.Symlink(filepath.Join(filepath.Dir(path), "missing-target"), path); err != nil {
-			t.Errorf("symlink: %v", err)
+		if err := os.Mkdir(path, 0700); err != nil {
+			t.Errorf("replace credential with directory: %v", err)
 		}
 		return oauthResponse("access-new", "refresh-rotated"), nil
 	}))

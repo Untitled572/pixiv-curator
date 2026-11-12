@@ -280,3 +280,38 @@ func TestHydrateUsesFixedIllustIDFromTask(t *testing.T) {
 		t.Fatalf("hydration job did not finish succeeded: %+v", jobs)
 	}
 }
+
+func TestFollowingDefaultAvatarDoesNotInterruptSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openIngestTestStore(t)
+	calls := 0
+	client := &fakePixivClient{following: func(_ context.Context, cursor string) (pixiv.FollowingPage, error) {
+		calls++
+		if cursor == "" {
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(701, "first")}, Next: "last-page"}, nil
+		}
+		if cursor != "last-page" {
+			t.Fatalf("unexpected cursor %q", cursor)
+		}
+		artist := rawArtist(702, "default avatar")
+		artist.ProfileImageURLs.Medium = "https://s.pximg.net/common/images/no_profile.png"
+		return pixiv.FollowingPage{Artists: []pixiv.RawArtist{artist}}, nil
+	}}
+	job := claimIngestJob(t, store, "sync_following", "default-avatar", json.RawMessage("{}"))
+	if err := NewIngest(store, client).Handlers()["sync_following"](ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := store.Job(ctx, job.ID)
+	if err != nil || saved.State != "succeeded" || saved.ProgressPages != 2 || saved.ProgressItems != 2 || calls != 2 {
+		t.Fatalf("snapshot did not complete: job=%+v calls=%d error=%v", saved, calls, err)
+	}
+	artists, err := store.Artists(ctx, 0, 10)
+	if err != nil || len(artists) != 2 {
+		t.Fatalf("artists=%+v error=%v", artists, err)
+	}
+	for _, artist := range artists {
+		if artist.ReviewStatus != "approved" || !artist.CollectionEnabled || !artist.RemoteFollowed {
+			t.Fatalf("following did not enroll artist: %+v", artist)
+		}
+	}
+}

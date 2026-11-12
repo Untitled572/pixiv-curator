@@ -298,3 +298,32 @@ func artworkExists(t *testing.T, s *Store, id int64) bool {
 func testArtwork(id, artistID int64) domain.Artwork {
 	return domain.Artwork{ID: id, ArtistID: artistID, PageCount: 1, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/test.jpg", Width: 100, Height: 100}}}
 }
+
+func TestAtomicFollowingCompletionClearsPreviousRetryError(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+	if _, err := store.Enqueue(ctx, "sync_following", "following:retry-success", json.RawMessage("{}")); err != nil {
+		t.Fatal(err)
+	}
+	first, err := claimJobByKey(t, store, "following:retry-success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Finish(ctx, first, "retry_wait", "NETWORK_ERROR", time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := claimJobByKey(t, store, "following:retry-success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CommitFollowingBatch(ctx, retry, retry.ID, nil, json.RawMessage("{}"), true); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := store.Job(ctx, retry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != "succeeded" || completed.ErrorCode != "" || completed.Attempt != 2 {
+		t.Fatalf("successful retry retained obsolete failure: %+v", completed)
+	}
+}
