@@ -263,6 +263,13 @@ func TestHydrateUsesFixedIllustIDFromTask(t *testing.T) {
 	if err := s.Cancel(ctx, syncID); err != nil {
 		t.Fatal(err)
 	}
+	stub, err := pixiv.NormalizeArtwork(rawArtwork(7654321, 301))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertArtwork(ctx, stub); err != nil {
+		t.Fatal(err)
+	}
 	const illustID int64 = 7654321
 	job := claimIngestJob(t, s, "hydrate_artwork", "illust:7654321", json.RawMessage(`{"illust_id":7654321}`))
 	var requested int64
@@ -288,6 +295,68 @@ func TestHydrateUsesFixedIllustIDFromTask(t *testing.T) {
 	}
 	if !hydrationSucceeded {
 		t.Fatalf("hydration job did not finish succeeded: %+v", jobs)
+	}
+}
+
+func TestPausedArtistDoesNotStartArtistOrHydrationFetch(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openIngestTestStore(t)
+	catalog := NewCatalog(store)
+	const artistID, illustID int64 = 331, 76331
+	if err := catalog.ImportArtist(ctx, artistID); err != nil {
+		t.Fatal(err)
+	}
+	syncID, err := catalog.DecideArtist(ctx, artistID, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncJob, err := store.Claim(ctx, time.Now())
+	if err != nil || syncJob.ID != syncID {
+		t.Fatalf("claim sync=%+v err=%v", syncJob, err)
+	}
+	artwork, err := pixiv.NormalizeArtwork(rawArtwork(illustID, artistID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertArtwork(ctx, artwork); err != nil {
+		t.Fatal(err)
+	}
+	hydrateJob := claimIngestJob(t, store, "hydrate_artwork", "paused-hydrate", json.RawMessage(`{"illust_id":76331}`))
+	queuedHydrationID, err := store.Enqueue(ctx, "hydrate_artwork", "queued-hydrate", json.RawMessage(`{"illust_id":76331}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SetCollection(ctx, artistID, false); err != nil {
+		t.Fatal(err)
+	}
+	queuedHydration, err := store.Job(ctx, queuedHydrationID)
+	if err != nil || queuedHydration.State != "canceled" {
+		t.Fatalf("queued hydration=%+v err=%v; want canceled", queuedHydration, err)
+	}
+	artistCalls, hydrateCalls := 0, 0
+	client := &fakePixivClient{
+		artist: func(context.Context, int64, string) (pixiv.ArtworkPage, error) {
+			artistCalls++
+			return pixiv.ArtworkPage{}, nil
+		},
+		artwork: func(_ context.Context, id int64) (pixiv.RawArtwork, error) {
+			hydrateCalls++
+			return rawArtwork(id, artistID), nil
+		},
+	}
+	handlers := NewIngest(store, client).Handlers()
+	if err := handlers["sync_artist"](ctx, syncJob); err == nil {
+		t.Fatal("paused sync unexpectedly succeeded")
+	}
+	if err := handlers["hydrate_artwork"](ctx, hydrateJob); err == nil {
+		t.Fatal("paused hydration unexpectedly succeeded")
+	}
+	repairJob := claimIngestJob(t, store, "repair_media", "paused-repair", json.RawMessage(`{"illust_id":76331}`))
+	if err := handlers["repair_media"](ctx, repairJob); err == nil {
+		t.Fatal("repair for paused approved artist unexpectedly succeeded")
+	}
+	if artistCalls != 0 || hydrateCalls != 0 {
+		t.Fatalf("upstream calls artist=%d hydrate=%d; want zero", artistCalls, hydrateCalls)
 	}
 }
 

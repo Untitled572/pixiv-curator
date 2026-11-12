@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Untitled572/pixiv-curator/internal/app"
+	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
 func TestPublicImageURLsStreamOriginalWithoutConsumerReferer(t *testing.T) {
@@ -22,6 +23,11 @@ func TestPublicImageURLsStreamOriginalWithoutConsumerReferer(t *testing.T) {
 		h.Set("Set-Cookie", "upstream=private")
 		return &http.Response{StatusCode: 200, Header: h, Body: io.NopCloser(strings.NewReader("jpeg")), ContentLength: 4}, nil
 	}), cacheDir)
+	rules := domain.DefaultRules()
+	rules.ExcludeManga = false
+	if err := app.NewImages(store, "https://curator.test").PutPreferences(context.Background(), rules, 0); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DecideArtist(context.Background(), 99, "approve"); err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +103,11 @@ func TestPublicImageFailureQueuesRepairWithoutReturningRedirect(t *testing.T) {
 	store, mux := previewFixture(t, imageRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 403, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("forbidden"))}, nil
 	}))
+	rules := domain.DefaultRules()
+	rules.ExcludeManga = false
+	if err := app.NewImages(store, "https://curator.test").PutPreferences(context.Background(), rules, 0); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DecideArtist(context.Background(), 99, "approve"); err != nil {
 		t.Fatal(err)
 	}

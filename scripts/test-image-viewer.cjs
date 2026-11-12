@@ -52,12 +52,22 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator("dialog.pixiv-viewer-dialog").count(), 0, "dialog must be lazy-created");
     assert.equal(requests.filter((entry) => entry.startsWith("/admin/api/previews/")).length, 0);
 
+    await page.evaluate(() => {
+      window.__collectionWrites = [];
+      window.PixivCuratorViewer.configure({ loadArtist: async (id) => ({ id, review_status: "approved", collection_enabled: true }), setCollection: async (id, enabled) => { window.__collectionWrites.push({ id, enabled }); } });
+    });
     await page.locator("#artwork-dialog").evaluate((dialog) => dialog.showModal());
     const hostileTitle = `title <img id="injected" src="/should-not-load">`;
-    assert.equal(await page.evaluate((title) => window.PixivCuratorViewer.open({ id: "123", pageIndex: 0, title, artistName: "画师 <svg>", pageCount: 2, rating: "r18", aiStatus: "ai", tags: ["风景", "<script>"] }), hostileTitle), true);
+    assert.equal(await page.evaluate((title) => window.PixivCuratorViewer.open({ id: "123", artistId: "70", pageIndex: 0, title, artistName: "画师 <svg>", pageCount: 2, rating: "r18", aiStatus: "ai", tags: ["风景", "<script>"] }), hostileTitle), true);
     await page.locator(".pixiv-viewer-image").waitFor();
     await page.waitForFunction(() => document.querySelector(".pixiv-viewer-image").naturalWidth === 640);
     assert.equal(await page.locator(".pixiv-viewer-title").textContent(), hostileTitle);
+    assert.equal(await page.locator(".pixiv-viewer-dialog").evaluate((dialog) => getComputedStyle(dialog).backgroundColor), "rgb(255, 255, 255)");
+    await page.getByRole("button", { name: "暂停该作者采集", exact: true }).click();
+    await page.getByRole("button", { name: "恢复该作者采集", exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.__collectionWrites), [{ id: "70", enabled: false }]);
+    await page.getByRole("button", { name: "恢复该作者采集", exact: true }).click();
+    await page.getByRole("button", { name: "暂停该作者采集", exact: true }).waitFor();
     assert.equal(await page.locator("#injected").count(), 0, "title must be rendered as text");
     assert.equal(await page.locator(".pixiv-viewer-image").count(), 1, "viewer should use one image element");
     assert.equal(await page.locator(".pixiv-viewer-dimensions").textContent(), "640 × 480");
@@ -70,12 +80,12 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator(".pixiv-viewer-tag").nth(1).textContent(), "<script>");
 
 
-    await page.locator(".pixiv-viewer-page-button").last().click();
+    await page.locator(".pixiv-viewer-pager .pixiv-viewer-page-button").last().click();
     await page.waitForFunction(() => document.querySelector(".pixiv-viewer-image").naturalWidth === 800);
     assert.ok(requests.includes("/admin/api/previews/123/1?size=original"));
     assert.equal(await page.locator(".pixiv-viewer-page-status").textContent(), "2 / 2");
     assert.equal(await page.locator("#artwork-dialog").evaluate((dialog) => dialog.open), true, "closing viewer should restore the artist-details dialog");
-    await page.locator(".pixiv-viewer-page-button").first().click();
+    await page.locator(".pixiv-viewer-pager .pixiv-viewer-page-button").first().click();
     await page.waitForFunction(() => document.querySelector(".pixiv-viewer-image").naturalWidth === 640);
 
     await page.evaluate(() => window.PixivCuratorViewer.open({ id: 404, pageIndex: 0, title: "missing", artistName: "Artist", pageCount: 1, rating: "unknown", aiStatus: "unknown", tags: [] }));

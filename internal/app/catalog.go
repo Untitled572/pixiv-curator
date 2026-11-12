@@ -39,6 +39,19 @@ func (s *Catalog) ImportArtist(ctx context.Context, id int64) error {
 func (s *Catalog) Artists(ctx context.Context, after int64, limit int) ([]domain.Artist, error) {
 	return s.repository.Artists(ctx, after, limit)
 }
+func (s *Catalog) Artist(ctx context.Context, id int64) (domain.Artist, error) {
+	if id <= 0 {
+		return domain.Artist{}, domain.ErrInvalid
+	}
+	items, err := s.repository.Artists(ctx, id-1, 1)
+	if err != nil {
+		return domain.Artist{}, err
+	}
+	if len(items) != 1 || items[0].ID != id {
+		return domain.Artist{}, domain.ErrNotFound
+	}
+	return items[0], nil
+}
 func (s *Catalog) DecideArtist(ctx context.Context, id int64, action string) (string, error) {
 	if id <= 0 {
 		return "", domain.ErrInvalid

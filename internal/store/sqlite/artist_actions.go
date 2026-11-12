@@ -95,8 +95,47 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 }
 
 func cancelArtistJobs(ctx context.Context, tx *sql.Tx, id int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), id)
+	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE state IN ('pending','running','retry_wait','paused_auth') AND ((kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=?) OR (kind IN ('hydrate_artwork','repair_media') AND EXISTS (SELECT 1 FROM artworks w WHERE w.id=json_extract(jobs.payload_json,'$.illust_id') AND w.artist_id=?)))`, time.Now().UnixMilli(), id, id)
 	return err
+}
+
+// ValidateCollectionJob prevents paused artists from starting new upstream fetches.
+// The commit methods repeat this check to fence requests already in flight.
+func (s *Store) ValidateCollectionJob(ctx context.Context, j domain.Job) error {
+	var allowed bool
+	var query string
+	switch j.Kind {
+	case "sync_artist":
+		query = `SELECT a.review_status='approved' AND a.collection_enabled=1 FROM artists a WHERE a.id=json_extract(?, '$.artist_id')`
+	case "hydrate_artwork", "repair_media":
+		query = `SELECT (a.review_status='approved' AND a.collection_enabled=1) OR (?='repair_media' AND a.review_status='pending') FROM artists a JOIN artworks w ON w.artist_id=a.id WHERE w.id=json_extract(?, '$.illust_id')`
+	default:
+		return domain.ErrInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var live bool
+	if err = tx.QueryRowContext(ctx, `SELECT state='running' AND lease_token=? AND lease_until>? AND cancel_requested=0 FROM jobs WHERE id=?`, j.LeaseToken, time.Now().UnixMilli(), j.ID).Scan(&live); err != nil {
+		return err
+	}
+	if !live {
+		return domain.ErrLease
+	}
+	if j.Kind == "sync_artist" {
+		err = tx.QueryRowContext(ctx, query, j.Payload).Scan(&allowed)
+	} else {
+		err = tx.QueryRowContext(ctx, query, j.Kind, j.Payload).Scan(&allowed)
+	}
+	if err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrConflict
+	}
+	return nil
 }
 
 func cancelRemoteFollowJobs(ctx context.Context, tx *sql.Tx, id int64) error {
@@ -358,7 +397,7 @@ func (s *Store) CommitHydration(ctx context.Context, j domain.Job, a domain.Artw
 		return err
 	}
 	var allowed bool
-	if err = tx.QueryRowContext(ctx, `SELECT (review_status='approved' AND collection_enabled=1) OR (?='repair_media' AND review_status IN ('approved','pending')) FROM artists WHERE id=?`, j.Kind, a.ArtistID).Scan(&allowed); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT (review_status='approved' AND collection_enabled=1) OR (?='repair_media' AND review_status='pending') FROM artists WHERE id=?`, j.Kind, a.ArtistID).Scan(&allowed); err != nil {
 		return err
 	}
 	if !allowed {
@@ -381,6 +420,13 @@ func (s *Store) CommitUnavailable(ctx context.Context, j domain.Job, id int64) e
 	defer tx.Rollback()
 	if err = checkLease(ctx, tx, j); err != nil {
 		return err
+	}
+	var allowed bool
+	if err = tx.QueryRowContext(ctx, `SELECT (a.review_status='approved' AND a.collection_enabled=1) OR (?='repair_media' AND a.review_status='pending') FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE w.id=?`, j.Kind, id).Scan(&allowed); err != nil {
+		return err
+	}
+	if !allowed {
+		return domain.ErrConflict
 	}
 	r, err := tx.ExecContext(ctx, `UPDATE artworks SET metadata_state='unavailable',updated_at=? WHERE id=?`, time.Now().UnixMilli(), id)
 	if err != nil {

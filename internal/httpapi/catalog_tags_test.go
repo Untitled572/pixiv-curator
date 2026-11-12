@@ -98,6 +98,43 @@ func TestLibraryStatsRejectMalformedQuery(t *testing.T) {
 	}
 }
 
+func TestLibraryCollectionEnabledFilter(t *testing.T) {
+	h, s := newLibraryHandler(t)
+	ctx := context.Background()
+	for _, id := range []int64{83, 84} {
+		if err := s.UpsertArtist(ctx, domain.Artist{ID: id, Name: "artist"}, "manual", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := app.NewCatalog(s).DecideArtist(ctx, id, "approve"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := app.NewCatalog(s).SetCollection(ctx, 83, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.NewCatalog(s).SetCollection(ctx, 84, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{
+		{"", `"total":2`},
+		{"&collection_enabled=1", `"total":1`},
+		{"&collection_enabled=0", `"total":1`},
+	} {
+		rec := libraryRequest(h, http.MethodGet, "/admin/api/library/artists?page=1"+tc.query, "", true)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Errorf("query=%q status=%d body=%s; want %s", tc.query, rec.Code, rec.Body.String(), tc.want)
+		}
+	}
+	for _, query := range []string{"&collection_enabled=2", "&collection_enabled="} {
+		if rec := libraryRequest(h, http.MethodGet, "/admin/api/library/artists?page=1"+query, "", true); rec.Code != 422 {
+			t.Errorf("query=%q status=%d; want 422", query, rec.Code)
+		}
+	}
+}
+
 func TestLibraryTagSearchAndQueryValidation(t *testing.T) {
 	h, s := newLibraryHandler(t)
 	ctx := context.Background()

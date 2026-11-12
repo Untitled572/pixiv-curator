@@ -20,6 +20,7 @@ type PixivClient interface {
 	Credentials(context.Context, string) error
 }
 type IngestRepository interface {
+	ValidateCollectionJob(context.Context, domain.Job) error
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
 	CommitFollowingBatch(context.Context, domain.Job, string, []domain.Artist, json.RawMessage, bool) error
 	CommitArtistBatch(context.Context, domain.Job, int64, string, string, string, []domain.Artwork) error
@@ -177,6 +178,9 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
+		if err = s.store.ValidateCollectionJob(ctx, j); err != nil {
+			return classify(err)
+		}
 		page, err := s.client.ArtistArtworks(ctx, payload.ArtistID, cursor)
 		if err != nil {
 			return classify(err)
@@ -233,6 +237,9 @@ func (s *Ingest) hydrate(ctx context.Context, j domain.Job) error {
 	}
 	if json.Unmarshal(j.Payload, &payload) != nil || payload.ID <= 0 {
 		return taskInvalid()
+	}
+	if err := s.store.ValidateCollectionJob(ctx, j); err != nil {
+		return classify(err)
 	}
 	raw, err := s.client.Artwork(ctx, payload.ID)
 	if err != nil {

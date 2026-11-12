@@ -215,7 +215,7 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	if budget != recommend.DefaultBudget() {
 		t.Fatalf("stored budget=%+v", budget)
 	}
-	if run.RequestCount > 60 || fake.countAll() > 60 {
+	if run.RequestCount > budget.TotalRequests || fake.countAll() > budget.TotalRequests {
 		t.Fatalf("request budget exceeded: reserved=%d client calls=%d", run.RequestCount, fake.countAll())
 	}
 	if run.RequestCount != fake.countAll() {
@@ -241,8 +241,8 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 12 {
-		t.Fatalf("candidate count=%d, want 12", len(candidates))
+	if len(candidates) != budget.CandidateArtists {
+		t.Fatalf("candidate count=%d, want default budget", len(candidates))
 	}
 	for _, candidate := range candidates {
 		samples, err := s.RecommendationSamples(ctx, candidate.ArtistID, 2)
@@ -260,7 +260,7 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	if first.ArtistID != 30000 || len(first.Sources) != 2 || first.Sources[0] != recommend.SourceRelatedArtist || first.Sources[1] != recommend.SourceRelatedArtwork {
 		t.Fatalf("merged sources after optional 5xx: %+v", first)
 	}
-	if fake.countAll() > 60 {
+	if fake.countAll() > budget.TotalRequests {
 		t.Fatalf("fake client calls=%d", fake.countAll())
 	}
 	profileRaw, err := s.RecommendationProfile(ctx, runID)

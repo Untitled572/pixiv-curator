@@ -28,7 +28,12 @@ func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth)
 			apiError(w, err)
 			return
 		}
-		writeJSON(w, 202, map[string]string{"run_id": runID, "job_id": jobID})
+		run, _, err := s.Candidates(r.Context(), runID)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 202, map[string]any{"run_id": runID, "job_id": jobID, "reused": run.State == "succeeded"})
 	})))
 	mux.Handle("GET /admin/api/recommendations", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := recommendationQuery(r.URL.RawQuery, true)

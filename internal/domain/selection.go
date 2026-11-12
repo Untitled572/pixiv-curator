@@ -18,13 +18,15 @@ type SelectionRules struct {
 }
 
 func DefaultRules() SelectionRules {
-	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, ExcludeManga: false, Orientation: "any", Strategy: "balanced"}
+	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, ExcludeManga: true, Orientation: "any", Strategy: "balanced"}
 }
 
 type SelectionRequest struct {
 	SelectionRules
 	ArtistID  int64
 	AccountID string
+	// Overrides records explicitly supplied HTTP filters; omitted fields inherit preferences.
+	Overrides map[string]bool `json:"-"`
 }
 type SelectedPage struct {
 	IllustID           int64  `json:"illust_id,string"`

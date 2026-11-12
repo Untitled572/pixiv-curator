@@ -26,3 +26,21 @@
 .pixiv-viewer-link{color:#a8d3ff;text-decoration:underline;text-underline-offset:3px}
 .pixiv-viewer-url{flex:1 1 320px;min-width:0;padding:8px 10px;border:1px solid #394351;border-radius:7px;background:#171c24;color:#b9c4d1;font:12px ui-monospace,Consolas,monospace}
 @media(max-width:600px){.pixiv-viewer-dialog{width:calc(100vw - 14px);max-height:calc(100dvh - 12px);border-radius:12px}.pixiv-viewer-shell{gap:10px;padding:12px}.pixiv-viewer-frame{min-height:140px;max-height:64dvh}.pixiv-viewer-image{max-height:64dvh}.pixiv-viewer-links{align-items:stretch;flex-direction:column}.pixiv-viewer-url{flex-basis:auto;width:100%;box-sizing:border-box}.pixiv-viewer-pager{gap:8px}.pixiv-viewer-page-button{padding-inline:9px}}
+
+/* Match the light admin surfaces while keeping the artwork area neutral. */
+.pixiv-viewer-dialog{border-color:#d2dbe4;border-radius:16px;background:#fff;color:#22303c;box-shadow:0 16px 48px rgba(34,48,60,.18)}
+.pixiv-viewer-dialog::backdrop{background:rgba(34,48,60,.42)}
+.pixiv-viewer-eyebrow{color:#687887;letter-spacing:.03em}
+.pixiv-viewer-title{color:#22303c}
+.pixiv-viewer-artist{color:#687887}
+.pixiv-viewer-close,.pixiv-viewer-page-button,.pixiv-viewer-retry{border-color:#d2dbe4;background:#fff;color:#344e61}
+.pixiv-viewer-close:hover,.pixiv-viewer-page-button:hover:not(:disabled),.pixiv-viewer-retry:hover{border-color:#98a8b7;background:#edf3f8}
+.pixiv-viewer-chip,.pixiv-viewer-tag,.pixiv-viewer-empty-tags{border-color:#d9e3eb;background:#edf3f8;color:#4a6b82}
+.pixiv-viewer-frame{background:#ebeff3}
+.pixiv-viewer-status{color:#687887}
+.pixiv-viewer-dimensions{background:rgba(34,48,60,.78);color:#fff}
+.pixiv-viewer-page-status{color:#687887}
+.pixiv-viewer-link{color:#3f6682}
+.pixiv-viewer-url{border-color:#d2dbe4;background:#f8fafc;color:#455c6e}
+
+.pixiv-viewer-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.pixiv-viewer-collection-status{margin:0;color:#4a6b82;font-size:13px}.pixiv-viewer-collection{white-space:nowrap}

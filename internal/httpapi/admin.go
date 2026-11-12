@@ -147,6 +147,19 @@ func NewAdminHandler(service *app.Catalog, ingestion ...*app.Ingest) http.Handle
 		}
 		writeJSON(w, 200, map[string]string{"job_id": job})
 	})
+	mux.HandleFunc("GET /admin/api/artists/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || r.URL.RawQuery != "" {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		artist, err := service.Artist(r.Context(), id)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 200, artist)
+	})
 	mux.HandleFunc("PATCH /admin/api/artists/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {

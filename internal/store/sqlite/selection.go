@@ -119,14 +119,29 @@ func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview b
 		return result, err
 	}
 
-	rules, err := preferences(ctx, s.db)
+	return s.EligiblePageWithRequest(ctx, id, index, domain.SelectionRequest{})
+}
+
+// EligiblePageWithRequest resolves one fixed identity with explicit API options.
+func (s *Store) EligiblePageWithRequest(ctx context.Context, id int64, index int, req domain.SelectionRequest) (domain.SelectedPage, error) {
+	if id <= 0 || index < 0 {
+		return domain.SelectedPage{}, domain.ErrInvalid
+	}
+	global, err := preferences(ctx, s.db)
+	if err != nil {
+		return domain.SelectedPage{}, err
+	}
+	rules, impossible, err := combineSelectionRules(global, req)
+	if impossible {
+		return domain.SelectedPage{}, domain.ErrNotFound
+	}
 	if err != nil {
 		return domain.SelectedPage{}, err
 	}
 	if err := domain.ValidateRules(rules); err != nil {
 		return domain.SelectedPage{}, err
 	}
-	where, args, err := selectionWhere(rules, 0, "", nil)
+	where, args, err := selectionWhere(rules, req.ArtistID, req.AccountID, nil)
 	if err != nil {
 		return domain.SelectedPage{}, err
 	}
@@ -188,7 +203,7 @@ func preferences(ctx context.Context, db *sql.DB) (domain.SelectionRules, error)
 	if err != nil {
 		return domain.SelectionRules{}, err
 	}
-	var rules domain.SelectionRules
+	rules := domain.DefaultRules()
 	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
 		return domain.SelectionRules{}, fmt.Errorf("decode preferences: %w", domain.ErrInvalid)
 	}
@@ -271,6 +286,33 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 	}
 	if result.Orientation == "" {
 		result.Orientation = "any"
+	}
+	// Explicit API options replace defaults for that field. Blocked artists and
+	// disliked artworks remain unconditional eligibility constraints.
+	if req.Overrides["r18"] {
+		result.AllowedRatings = req.AllowedRatings
+	}
+	if req.Overrides["ai_type"] {
+		result.AllowedAI = req.AllowedAI
+	}
+	if req.Overrides["exclude_manga"] {
+		result.ExcludeManga = req.ExcludeManga
+	}
+	if req.Overrides["orientation"] {
+		result.Orientation = requestOrientation
+		impossible = false
+	}
+	if req.Overrides["min_width"] {
+		result.MinWidth = req.MinWidth
+	}
+	if req.Overrides["min_height"] {
+		result.MinHeight = req.MinHeight
+	}
+	if req.Overrides["included_tags"] {
+		result.IncludeTags = cloneGroups(req.IncludeTags)
+	}
+	if req.Overrides["excluded_tags"] {
+		result.ExcludeTags = uniqueStrings(req.ExcludeTags)
 	}
 	return result, impossible, nil
 }
@@ -436,11 +478,11 @@ func selectionWhere(rules domain.SelectionRules, artistID int64, accountID strin
 	}
 	switch normalizedOrientation(rules.Orientation) {
 	case "portrait":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.height>p.width`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.height*10>p.width*11`)
 	case "landscape":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width>p.height`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width*10>p.height*11`)
 	case "square":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width=p.height`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width*10<=p.height*11 AND p.height*10<=p.width*11`)
 	}
 	for _, group := range rules.IncludeTags {
 		where = appendAnd(where, `EXISTS (SELECT 1 FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id AND t.normalized_name IN (`+placeholders(len(group))+`))`)

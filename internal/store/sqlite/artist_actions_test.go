@@ -370,3 +370,53 @@ func TestAtomicFollowingCompletionClearsPreviousRetryError(t *testing.T) {
 		t.Fatalf("successful retry retained obsolete failure: %+v", completed)
 	}
 }
+
+func TestPausedArtistRejectsLateUnavailableAndRepairCommits(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	const artistID, illustID int64 = 7410, 7411
+	seedArtist(t, s, artistID)
+	syncID, err := s.DecideArtist(ctx, artistID, "approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Cancel(ctx, syncID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertArtwork(ctx, testArtwork(illustID, artistID)); err != nil {
+		t.Fatal(err)
+	}
+	jobID, err := s.Enqueue(ctx, "hydrate_artwork", "late-unavailable", json.RawMessage(`{"illust_id":7411}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := claimJobByKey(t, s, "late-unavailable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a pause racing with a 404 already returned by the upstream request.
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET collection_enabled=0 WHERE id=?`, artistID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CommitUnavailable(ctx, job, illustID); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("late unavailable commit error=%v; want ErrConflict (job %s)", err, jobID)
+	}
+	var state string
+	if err := s.db.QueryRowContext(ctx, `SELECT metadata_state FROM artworks WHERE id=?`, illustID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state == "unavailable" {
+		t.Fatal("late 404 changed paused artwork metadata")
+	}
+	repairID, err := s.Enqueue(ctx, "repair_media", "late-repair", json.RawMessage(`{"illust_id":7411}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repairJob, err := claimJobByKey(t, s, "late-repair")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CommitHydration(ctx, repairJob, testArtwork(illustID, artistID)); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("paused repair commit error=%v; want ErrConflict (job %s)", err, repairID)
+	}
+}

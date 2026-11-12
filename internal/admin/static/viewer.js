@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const ratings = { safe: "全年龄", r18: "R-18", r18g: "R-18G", unknown: "分级未知" };
+  const ratings = { safe: "全年龄", r18: "R18", r18g: "R18", unknown: "分级未知" };
   const aiStatuses = { non_ai: "非 AI", ai: "AI", unknown: "AI 状态未知" };
   let dialog = null;
   let state = null;
@@ -18,6 +18,9 @@
   let titleNode;
   let artistNode;
   let tagsNode;
+  let collectionButton;
+  let collectionStatus;
+  let collectionAPI = null;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -49,7 +52,16 @@
     closeButton.type = "button";
     closeButton.setAttribute("aria-label", "关闭大图");
     closeButton.addEventListener("click", () => closeViewer());
-    header.append(heading, closeButton);
+    const headerActions = element("div", "pixiv-viewer-actions");
+    collectionButton = element("button", "pixiv-viewer-page-button pixiv-viewer-collection", "读取采集状态…");
+    collectionButton.type = "button";
+    collectionButton.hidden = true;
+    collectionButton.addEventListener("click", toggleCollection);
+    headerActions.append(collectionButton, closeButton);
+    header.append(heading, headerActions);
+    collectionStatus = element("p", "pixiv-viewer-collection-status");
+    collectionStatus.setAttribute("role", "status");
+    collectionStatus.hidden = true;
 
     const metadata = element("div", "pixiv-viewer-metadata");
     const classification = element("div", "pixiv-viewer-classification");
@@ -97,7 +109,7 @@
     links.append(pixivLink, imageLink, imageInput);
     footer.append(pager, links);
 
-    shell.append(header, metadata, frame, footer);
+    shell.append(header, collectionStatus, metadata, frame, footer);
     dialog.append(shell);
     dialog.addEventListener("cancel", () => stopImage());
     dialog.addEventListener("close", () => {
@@ -105,6 +117,48 @@
       state = null;
     });
     document.body.append(dialog);
+  }
+
+  async function readCollection() {
+    const current = state;
+    collectionStatus.hidden = true;
+    collectionButton.hidden = !current?.artistId || !collectionAPI;
+    if (collectionButton.hidden) return;
+    collectionButton.disabled = true;
+    collectionButton.textContent = "读取采集状态…";
+    try {
+      const artist = await collectionAPI.loadArtist(current.artistId);
+      if (state !== current) return;
+      current.artist = artist;
+      renderCollection();
+    } catch (_) {
+      if (state !== current) return;
+      collectionButton.textContent = "采集状态暂不可用";
+    }
+  }
+  function renderCollection() {
+    if (!state?.artist) return;
+    collectionButton.disabled = state.artist.review_status !== "approved";
+    collectionButton.textContent = collectionButton.disabled ? "作者尚未加入图库" : state.artist.collection_enabled ? "暂停该作者采集" : "恢复该作者采集";
+    collectionButton.setAttribute("aria-pressed", String(!!state.artist.collection_enabled));
+  }
+  async function toggleCollection() {
+    const current = state;
+    if (!current?.artist || collectionButton.disabled) return;
+    const enabled = !current.artist.collection_enabled;
+    collectionButton.disabled = true;
+    collectionStatus.hidden = false;
+    collectionStatus.textContent = "正在保存…";
+    try {
+      await collectionAPI.setCollection(current.artistId, enabled);
+      if (state !== current) return;
+      current.artist.collection_enabled = enabled;
+      collectionStatus.textContent = enabled ? "已恢复该作者采集" : "已暂停该作者采集";
+      collectionAPI.onChange?.(current.artist);
+    } catch (_) {
+      if (state !== current) return;
+      collectionStatus.textContent = "保存失败，请重试。";
+    } finally { if (state === current) renderCollection(); }
   }
 
   function previewURL() {
@@ -202,6 +256,7 @@
     stopImage();
     state = {
       id,
+      artistId: positiveID(input.artistId),
       pageIndex,
       pageCount,
       title: String(input.title ?? ""),
@@ -213,8 +268,9 @@
     render();
     if (!dialog.open) dialog.showModal();
     loadImage();
+    readCollection();
     return true;
   }
 
-  window.PixivCuratorViewer = Object.freeze({ open, close: closeViewer });
+  window.PixivCuratorViewer = Object.freeze({ open, close: closeViewer, configure: (api) => { collectionAPI = api; } });
 })();

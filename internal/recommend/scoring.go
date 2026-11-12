@@ -29,8 +29,8 @@ type Budget struct {
 func DefaultBudget() Budget {
 	return Budget{
 		SeedArtists: 8, SeedSamplesPerArtist: 4,
-		CandidateArtists: 12, CandidateSamplesPerArtist: 2,
-		TotalRequests: 60,
+		CandidateArtists: 48, CandidateSamplesPerArtist: 2,
+		TotalRequests: 120,
 	}
 }
 

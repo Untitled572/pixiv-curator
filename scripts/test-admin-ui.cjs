@@ -20,7 +20,7 @@ const recommendationItems = [
   { artist_id: "803", artist: { id: "803", name: "未知分类" }, score: 0.73, reasons: ["保留未知"], sample_illust_ids: ["93001"], content_rating: "unknown", ai_status: "unknown" },
   { artist_id: "804", artist: { id: "804", name: "成人 AI 未知" }, score: 0.64, reasons: ["交叉筛选"], sample_illust_ids: ["94001"], content_rating: "adult", ai_status: "unknown" }
 ];
-const completedRunItems = Array.from({ length: 20 }, (_, index) => ({
+const completedRunItems = Array.from({ length: 55 }, (_, index) => ({
   artist_id: String(1001 + index), artist: { id: String(1001 + index), name: `完成候选 ${index + 1}` },
   score: 0.9 - index / 100, reasons: ["本地兴趣匹配"], sample_illust_ids: [String(100001 + index * 2), String(100002 + index * 2)], content_rating: "unknown", ai_status: "unknown"
 }));
@@ -81,7 +81,8 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/admin/api/library/artists") {
     const page = Number(url.searchParams.get("page")), limit = Number(url.searchParams.get("limit"));
-    const source = url.searchParams.get("tag") === "无结果" ? [] : artists;
+    let source = url.searchParams.get("tag") === "无结果" ? [] : artists;
+    if (url.searchParams.has("collection_enabled")) source = source.filter((artist) => artist.collection_enabled === (url.searchParams.get("collection_enabled") === "1"));
     payload = { items: source.slice((page - 1) * limit, page * limit), total: source.length, library_total: artists.length, total_pages: Math.ceil(source.length / limit) };
   } else if (url.pathname === "/admin/api/library/tags") {
     const q = url.searchParams.get("q") || "", limit = Math.min(30, Math.max(1, Number(url.searchParams.get("limit")) || 30));
@@ -237,15 +238,23 @@ const server = http.createServer((req, res) => {
 	await firstNewPreviewSeen;
 	assert.equal(newRunPolls, 3, "sample loading should only begin after the succeeded response");
 	assert.equal(await page.locator(".recommendation-card").count(), 0, "slow sample loading must not insert a partial batch");
-	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 12, null, { timeout: 10000 });
-	assert.equal(await page.locator(".recommendation-card").count(), 12, "completed results should cap rendered candidates at 12");
-	assert.equal(await page.locator(".sample-tile").count(), 24, "each rendered candidate may show at most two samples");
-	assert.equal(newRunPreviewRequests, 24, "only the first 12 candidates should load two previews each");
+	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 48, null, { timeout: 10000 });
+	assert.equal(await page.locator(".recommendation-card").count(), 48, "completed results should cap rendered candidates at 48");
+	assert.equal(await page.locator(".sample-tile").count(), 96, "each rendered candidate may show at most two samples");
+	assert.equal(newRunPreviewRequests, 96, "only the first 48 candidates should load two previews each");
 	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
 	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
 	await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.locator("#tab-library").click();
+    await page.locator("#library-collection").selectOption("0");
+    await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 0"));
+    assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") && hit.includes("collection_enabled=0")));
+    await page.locator("#library-collection").selectOption("");
+    await page.locator(".artist-card").first().waitFor();
+    const positions = await page.locator(".artist-card").first().locator(".artist-actions > button, .artist-actions summary").evaluateAll((items) => items.map((item) => ({ y: item.getBoundingClientRect().y, right: item.getBoundingClientRect().right, left: item.getBoundingClientRect().left })));
+    assert.equal(positions.length, 4);
+    assert.ok(positions.every((p) => Math.abs(p.y - positions[0].y) < 2), "tag editor and three actions should share one row");
     await page.locator("#library-page-size").selectOption("48");
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 48);
     await page.locator("#library-tag").selectOption("无结果");
@@ -278,11 +287,14 @@ const server = http.createServer((req, res) => {
     await page.locator("#api-exclude-manga").check();
     let generated = new URL(await page.locator("#api-url").inputValue());
     assert.equal(generated.searchParams.get("format"), "json");
-    assert.equal(generated.searchParams.get("exclude_manga"), "1");
-    assert.equal(generated.searchParams.get("delivery"), "proxy");
+    assert.equal(generated.searchParams.get("exclude_manga"), null);
+    assert.equal(generated.searchParams.get("delivery"), null);
     assert.equal(generated.searchParams.get("r18"), "0");
     assert.equal(generated.searchParams.get("ai_type"), "0");
     assert.deepEqual(generated.searchParams.getAll("included_tags"), ["猫|狗", "风景"]);
+    await page.locator("#api-exclude-manga").uncheck();
+    assert.equal(new URL(await page.locator("#api-url").inputValue()).searchParams.get("exclude_manga"), "0");
+    await page.locator("#api-exclude-manga").check();
     const pagesBeforeJSONTest = page.context().pages().length;
     await page.locator("#test-api").click();
     await page.waitForFunction(() => document.querySelector("#api-result").textContent.includes("i.pximg.net"));
@@ -311,7 +323,7 @@ const server = http.createServer((req, res) => {
     await page.locator("#api-format").selectOption("image");
     apiURL = new URL(await page.locator("#api-url").inputValue());
     assert.equal(apiURL.searchParams.get("format"), "image");
-    assert.equal(apiURL.searchParams.get("delivery"), "proxy", "image format should force proxy delivery");
+    assert.equal(apiURL.searchParams.get("delivery"), null, "image format should use implicit proxy delivery");
     assert.equal(await page.locator('#api-delivery option[value="original"]').evaluate((option) => option.disabled), true);
     const imagePopupPromise = page.context().waitForEvent("page");
     await page.locator("#test-api").click();
@@ -343,12 +355,13 @@ const server = http.createServer((req, res) => {
     await copyButton.click();
 	const copyFollowingResponse = await copyRequest;
 	assert.deepEqual(copyFollowingResponse.request().postDataJSON(), { source_account_id: "test" }, "copy-following sends only the selected source after explicit click");
+    await page.locator('#preferences-form input[name="rating"][value="r18"]').check();
     await page.locator('#preferences-form input[name="rating"][value="unknown"]').check();
     await page.locator('#preferences-form input[name="ai"][value="unknown"]').check();
     await page.locator("#exclude-manga").check();
     await page.locator('#preferences-form button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelector("#preference-version").textContent.includes("8"));
-    assert.deepEqual(preferenceWrites.at(-1).rules.allowed_ratings, ["safe", "unknown"]);
+    assert.deepEqual(preferenceWrites.at(-1).rules.allowed_ratings, ["safe", "r18", "r18g", "unknown"]);
     assert.deepEqual(preferenceWrites.at(-1).rules.allowed_ai, ["non_ai", "unknown"]);
     assert.equal(preferenceWrites.at(-1).rules.exclude_manga, true);
     await page.reload();

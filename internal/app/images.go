@@ -12,6 +12,7 @@ import (
 type ImageRepository interface {
 	Select(context.Context, domain.SelectionRequest) (domain.SelectedPage, error)
 	EligiblePage(context.Context, int64, int, bool) (domain.SelectedPage, error)
+	EligiblePageWithRequest(context.Context, int64, int, domain.SelectionRequest) (domain.SelectedPage, error)
 	EligibleAdminPage(context.Context, int64, int) (domain.SelectedPage, error)
 	Setting(context.Context, string) (json.RawMessage, int64, error)
 	PutSetting(context.Context, string, json.RawMessage, int64) error
@@ -48,6 +49,17 @@ func (s *Images) Result(p domain.SelectedPage) ImageResult {
 }
 func (s *Images) Page(ctx context.Context, id int64, index int, preview bool) (domain.SelectedPage, error) {
 	return s.page(ctx, id, index, preview, !preview)
+}
+
+func (s *Images) PageWithRequest(ctx context.Context, id int64, index int, req domain.SelectionRequest) (domain.SelectedPage, error) {
+	p, err := s.store.EligiblePageWithRequest(ctx, id, index, req)
+	if err != nil {
+		return domain.SelectedPage{}, err
+	}
+	if !domain.ValidImageURL(p.OriginalURL) {
+		return domain.SelectedPage{}, domain.ErrNotFound
+	}
+	return p, nil
 }
 
 // AdminPreviewPage resolves a fixed page using management preview eligibility,
@@ -97,7 +109,7 @@ func (s *Images) Preferences(ctx context.Context) (domain.SelectionRules, int64,
 	if errors.Is(err, domain.ErrNotFound) {
 		return domain.DefaultRules(), 0, nil
 	}
-	var rules domain.SelectionRules
+	rules := domain.DefaultRules()
 	if err != nil {
 		return rules, v, err
 	}

@@ -34,6 +34,7 @@ const selectedArtistsCTE = `WITH selected_artists AS (
  SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed
  FROM artists a WHERE a.review_status IN ('approved','blocked')
  AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))
+ AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))
  AND a.id>?
 )`
 
@@ -41,21 +42,32 @@ const pagedArtistsCTE = `WITH selected_artists AS (
  SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed
  FROM artists a WHERE a.review_status IN ('approved','blocked')
  AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))
+ AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))
  AND a.id>? ORDER BY a.id LIMIT ? OFFSET ?
 )`
 
 // ArtistTagPage returns the legacy keyset page, including one extra row when present.
 func (s *Store) ArtistTagPage(ctx context.Context, tag, accountID string, after int64, limit int) ([]domain.Artist, error) {
-	if after < 0 || limit < 1 || limit > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID {
+	return s.ArtistTagPageFiltered(ctx, tag, accountID, "", after, limit)
+}
+
+// ArtistTagPageFiltered applies an optional collection enabled filter ("1" or "0").
+func (s *Store) ArtistTagPageFiltered(ctx context.Context, tag, accountID, collectionEnabled string, after int64, limit int) ([]domain.Artist, error) {
+	if after < 0 || limit < 1 || limit > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID || !validCollectionFilter(collectionEnabled) {
 		return nil, domain.ErrInvalid
 	}
-	items, err := s.artistTagQuery(ctx, tag, accountID, after, 0, limit+1)
+	items, err := s.artistTagQuery(ctx, tag, accountID, collectionEnabled, after, 0, limit+1)
 	return items, err
 }
 
 // ArtistTagPageStats returns a stable page plus filtered and full library counts.
 func (s *Store) ArtistTagPageStats(ctx context.Context, tag, accountID string, page, pageSize int) ([]domain.Artist, int64, int64, int, string, error) {
-	if page < 1 || pageSize < 1 || pageSize > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID {
+	return s.ArtistTagPageStatsFiltered(ctx, tag, accountID, "", page, pageSize)
+}
+
+// ArtistTagPageStatsFiltered returns a filtered page while libraryTotal remains the full catalog count.
+func (s *Store) ArtistTagPageStatsFiltered(ctx context.Context, tag, accountID, collectionEnabled string, page, pageSize int) ([]domain.Artist, int64, int64, int, string, error) {
+	if page < 1 || pageSize < 1 || pageSize > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID || !validCollectionFilter(collectionEnabled) {
 		return nil, 0, 0, 0, "", domain.ErrInvalid
 	}
 	offset := (page - 1) * pageSize
@@ -69,13 +81,13 @@ func (s *Store) ArtistTagPageStats(ctx context.Context, tag, accountID string, p
 		return nil, 0, 0, 0, "", err
 	}
 	if tag == "" {
-		countSQL := `SELECT COUNT(*) FROM artists a WHERE a.review_status IN ('approved','blocked') AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))`
-		if err := s.db.QueryRowContext(ctx, countSQL, accountID, accountID).Scan(&total); err != nil {
+		countSQL := `SELECT COUNT(*) FROM artists a WHERE a.review_status IN ('approved','blocked') AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0)) AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))`
+		if err := s.db.QueryRowContext(ctx, countSQL, accountID, accountID, collectionEnabled, collectionEnabled).Scan(&total); err != nil {
 			return nil, 0, 0, 0, "", err
 		}
-		items, err = s.artistTagQuery(ctx, "", accountID, 0, offset, pageSize)
+		items, err = s.artistTagQuery(ctx, "", accountID, collectionEnabled, 0, offset, pageSize)
 	} else {
-		matches, err := s.artistTagQuery(ctx, tag, accountID, 0, 0, 0)
+		matches, err := s.artistTagQuery(ctx, tag, accountID, collectionEnabled, 0, 0, 0)
 		if err != nil {
 			return nil, 0, 0, 0, "", err
 		}
@@ -101,13 +113,13 @@ func (s *Store) ArtistTagPageStats(ctx context.Context, tag, accountID string, p
 	return items, total, libraryTotal, totalPages, next, nil
 }
 
-func (s *Store) artistTagQuery(ctx context.Context, tag, accountID string, after int64, offset, limit int) ([]domain.Artist, error) {
+func (s *Store) artistTagQuery(ctx context.Context, tag, accountID, collectionEnabled string, after int64, offset, limit int) ([]domain.Artist, error) {
 	paged := tag == ""
 	query := selectedArtistsCTE + artistTagsCTEs
-	args := []any{accountID, accountID, after}
+	args := []any{accountID, accountID, collectionEnabled, collectionEnabled, after}
 	if paged {
 		query = pagedArtistsCTE + artistTagsCTEs
-		args = []any{accountID, accountID, after, limit, offset}
+		args = []any{accountID, accountID, collectionEnabled, collectionEnabled, after, limit, offset}
 	}
 	query += ` SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,
  COALESCE((SELECT json_group_array(display_name) FROM (SELECT display_name FROM effective_tags e WHERE e.artist_id=a.id ORDER BY e.tag_order)), '[]')
@@ -159,6 +171,10 @@ func (s *Store) artistTagQuery(ctx context.Context, tag, accountID string, after
 		return items[offset:end], nil
 	}
 	return items, nil
+}
+
+func validCollectionFilter(value string) bool {
+	return value == "" || value == "0" || value == "1"
 }
 
 // SetArtistTagOverride sets a manual value, including an explicit empty list.

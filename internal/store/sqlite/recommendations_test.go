@@ -106,8 +106,8 @@ func TestRecommendationRunBudgetLeaseAndCandidateSamplesStayPending(t *testing.T
 	if err = s.CompleteRecommendation(ctx, j, runID); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err = s.StartRecommendation(ctx, json.RawMessage(`{}`)); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("recent completed run error=%v, want ErrConflict", err)
+	if reused, reusedJob, e := s.StartRecommendation(ctx, json.RawMessage(`{}`)); e != nil || reused != runID || reusedJob != j.ID {
+		t.Fatalf("recent completed run should be reused: %s %s %v", reused, reusedJob, e)
 	}
 }
 
@@ -394,5 +394,25 @@ func TestParseRecommendationSampleIDsRejectsMalformedAndNormalizes(t *testing.T)
 	ids, invalid, unknown = parseRecommendationSampleIDs(`[302]`)
 	if invalid || unknown != 0 || len(ids) != 1 || ids[0] != "302" {
 		t.Fatalf("numeric ID compatibility=%v invalid=%v unknown=%d", ids, invalid, unknown)
+	}
+}
+
+func TestLargerRecommendationBudgetDoesNotReuseSmallCachedRun(t *testing.T) {
+	s := openRecommendationStore(t)
+	ctx := context.Background()
+	old, _, err := s.StartRecommendation(ctx, json.RawMessage(`{"candidate_artists":12}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := s.Claim(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.CompleteRecommendation(ctx, job, old); err != nil {
+		t.Fatal(err)
+	}
+	current, _, err := s.StartRecommendation(ctx, json.RawMessage(`{"candidate_artists":48}`))
+	if err != nil || current == old {
+		t.Fatalf("larger request must start a new run: %s %v", current, err)
 	}
 }

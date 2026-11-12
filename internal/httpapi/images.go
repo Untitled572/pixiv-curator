@@ -58,6 +58,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			imageError(w, err)
 			return
 		}
+		out.URL = preserveSelectionOptions(out.URL, r.URL.Query())
 		if r.URL.Query().Get("delivery") == "original" {
 			out.URL = out.OriginalURL
 		}
@@ -81,9 +82,17 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			if preview {
 				format = "stream"
 			}
+			var req domain.SelectionRequest
+			if !preview {
+				req, err = selectionQuery(r)
+				if err != nil {
+					apiError(w, err)
+					return
+				}
+			}
 			for key, values := range query {
-				allowed := key == "format" || (!preview && key == "delivery") || (preview && key == "size")
-				if len(values) != 1 || !allowed {
+				allowed := !preview || key == "format" || key == "size"
+				if preview && (len(values) != 1 || !allowed) {
 					apiError(w, domain.ErrInvalid)
 					return
 				}
@@ -120,7 +129,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			if preview {
 				page, err = s.AdminPreviewPage(r.Context(), id, index, original)
 			} else {
-				page, err = s.Page(r.Context(), id, index, false)
+				page, err = s.PageWithRequest(r.Context(), id, index, req)
 			}
 			if err != nil {
 				imageError(w, err)
@@ -148,6 +157,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				return
 			}
 			out := s.Result(page)
+			out.URL = preserveSelectionOptions(out.URL, query)
 			if delivery == "original" {
 				out.URL = out.OriginalURL
 			}
@@ -202,6 +212,23 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 	})))
 }
 
+// preserveSelectionOptions carries explicit filters to the same fixed identity.
+func preserveSelectionOptions(target string, source url.Values) string {
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	for key, values := range source {
+		if key == "format" || key == "delivery" || key == "collection" {
+			continue
+		}
+		q[key] = values
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // validDelivery keeps direct-origin URLs available only as an explicit opt-in.
 func validDelivery(q url.Values, format string) bool {
 	values, present := q["delivery"]
@@ -216,11 +243,12 @@ func validDelivery(q url.Values, format string) bool {
 
 func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	q, err := url.ParseQuery(r.URL.RawQuery)
-	out := domain.SelectionRequest{}
+	out := domain.SelectionRequest{Overrides: map[string]bool{}}
 	if err != nil {
 		return out, domain.ErrInvalid
 	}
 	for k, v := range q {
+		out.Overrides[k] = true
 		switch k {
 		case "included_tags", "excluded_tags":
 		case "delivery", "format", "collection", "orientation", "r18", "ai_type", "exclude_manga", "min_width", "min_height", "user_id", "strategy", "account_id":

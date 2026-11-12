@@ -366,7 +366,7 @@ func TestSelectUnknownRequiresExplicitGlobalPermissionAndKeepsHardExclusions(t *
 	}
 }
 
-func TestExcludeMangaIsOptInAndGlobalPreferenceCannotBeRelaxed(t *testing.T) {
+func TestExcludeMangaLegacyRuleCombination(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	seedEligibleArtist(t, s, 1800, "approved")
@@ -377,6 +377,7 @@ func TestExcludeMangaIsOptInAndGlobalPreferenceCannotBeRelaxed(t *testing.T) {
 		t.Fatal(err)
 	}
 	global := domain.DefaultRules()
+	global.ExcludeManga = false
 	putSelectionRules(t, s, global)
 	base := domain.SelectionRequest{SelectionRules: domain.SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Orientation: "any"}, ArtistID: 1800}
 	if got, err := s.Select(ctx, base); err != nil || got.IllustID != 1810 {

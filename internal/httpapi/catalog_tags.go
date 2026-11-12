@@ -13,6 +13,8 @@ import (
 type libraryTagStore interface {
 	ArtistTagPage(context.Context, string, string, int64, int) ([]domain.Artist, error)
 	ArtistTagPageStats(context.Context, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
+	ArtistTagPageFiltered(context.Context, string, string, string, int64, int) ([]domain.Artist, error)
+	ArtistTagPageStatsFiltered(context.Context, string, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
 	ArtistTags(context.Context) ([]string, error)
 	ArtistTagsSearch(context.Context, string, int) ([]string, error)
 	SetArtistTagOverride(context.Context, int64, []string) error
@@ -33,7 +35,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			return
 		}
 		for key, values := range q {
-			if key != "tag" && key != "account_id" && key != "after" && key != "limit" && key != "page" || len(values) != 1 {
+			if key != "tag" && key != "account_id" && key != "collection_enabled" && key != "after" && key != "limit" && key != "page" || len(values) != 1 {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
@@ -62,8 +64,13 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		tag, accountID := q.Get("tag"), q.Get("account_id")
+		tag, accountID, collectionEnabled := q.Get("tag"), q.Get("account_id"), q.Get("collection_enabled")
+		_, hasCollectionFilter := q["collection_enabled"]
 		if len(tag) > 160 || len(accountID) > 256 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		if hasCollectionFilter && collectionEnabled != "0" && collectionEnabled != "1" {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
@@ -73,7 +80,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
-			items, total, libraryTotal, totalPages, next, err := store.ArtistTagPageStats(r.Context(), tag, accountID, page, limit)
+			items, total, libraryTotal, totalPages, next, err := store.ArtistTagPageStatsFiltered(r.Context(), tag, accountID, collectionEnabled, page, limit)
 			if err != nil {
 				apiError(w, err)
 				return
@@ -81,7 +88,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": total, "library_total": libraryTotal, "page": page, "page_size": limit, "total_pages": totalPages, "next_cursor": next})
 			return
 		}
-		items, err := store.ArtistTagPage(r.Context(), tag, accountID, after, limit)
+		items, err := store.ArtistTagPageFiltered(r.Context(), tag, accountID, collectionEnabled, after, limit)
 		if err != nil {
 			apiError(w, err)
 			return
