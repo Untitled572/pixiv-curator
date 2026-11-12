@@ -106,3 +106,6 @@ gh run list --workflow release.yml
 2026-11-12：[v0.1.1 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43179591669) 与 main CI 全部成功，源码 40ed3f7；Windows/Linux amd64、arm64 压缩包及 SHA256SUMS 已发布，Docker 双架构 manifest digest 为 sha256:0c90ee52e0b601d095efbc1e0a4f800aa5489a5f35866a6cc3e80a319c6e5826。服务器已从一致性备份后升级，实际根路径登录前后跳转、管理鉴权、PicHub 分发完整图片以及关注同步 5 页/117 人均通过。arm64 仍只有构建检查，没有原生运行验收。
 
 只读 Compose 根文件系统必须提供可写的内存临时目录：模板为运行 UID/GID 挂载 128 MiB `/tmp`，并设置 `SQLITE_TMPDIR=/tmp`。SQLite 大目录迁移的临时日志可能需要此目录；仅 `/data` 可写不足以覆盖该场景。Compose 冒烟测试使用 12,000 张次页的旧版数据库验证升级，账号与任务为空，不访问 Pixiv。
+
+
+2026-11-12：[v0.2.1 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43216825294) 成功，源码 c3654f6，Windows/Linux amd64、arm64 二进制和 SHA256SUMS 已发布；GHCR 双架构 digest 为 `sha256:6b9786c7c5073b8b34c772b1e150c73eb9a7cb207c821519168494b68cf7842d`。服务器已校验 GHCR 导出归档、源码 revision 和镜像内容后升级，数据库迁移至 11。Compose 临时目录修复来自后续 98083b4，使用仓库最新模板；其 [CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43222679715) 已通过，不需要重建同一应用镜像。v0.2.0 发布失败且没有部分 Release，保留该标签，不重写历史。arm64 只有构建检查，未做原生运行验收。
