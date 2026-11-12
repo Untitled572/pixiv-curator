@@ -34,12 +34,16 @@ def check(base, version, process):
     with opener.open(base + "/readyz", timeout=2) as response:
         assert response.status == 200
         assert json.load(response) == {"status": "ready"}
+    with opener.open(base + "/", timeout=2) as response:
+        assert response.status == 200
+        assert response.url == base + "/admin/login"
+        assert response.headers.get_content_type() == "text/html"
     try:
         opener.open(base + "/admin/api/artists", timeout=2)
         raise AssertionError("management route accepted an unauthenticated request")
     except urllib.error.HTTPError as error:
         assert error.code == 401
-    print(f"PASS: healthz, readyz, management authentication and version={version}", flush=True)
+    print(f"PASS: healthz, readyz, root login entry, management authentication and version={version}", flush=True)
 
 
 def main():

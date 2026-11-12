@@ -74,6 +74,20 @@ func (a *Auth) Register(mux *http.ServeMux) {
 	mux.Handle("POST /admin/logout", a.Middleware(http.HandlerFunc(a.logout)))
 }
 
+// ManagementEntry sends browser navigation to the login page or existing session.
+// It serves no management data and never changes authentication requirements.
+func (a *Auth) ManagementEntry(w http.ResponseWriter, r *http.Request) {
+	destination := "/admin/login"
+	if a != nil && len(a.token) > 0 {
+		_, session := a.sessionFromRequest(r)
+		if session || a.validBearer(r.Header.Get("Authorization")) {
+			destination = "/admin/"
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	http.Redirect(w, r, destination, http.StatusFound)
+}
+
 // Middleware requires a valid Bearer token or session for every wrapped route.
 // Browser session writes additionally require Origin and double-submit CSRF.
 func (a *Auth) Middleware(next http.Handler) http.Handler {

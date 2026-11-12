@@ -145,6 +145,6 @@ Compose 将整个 private 目录只读挂载到 /run/secrets；该目录必须�
 
 ## 当前公网与 PicHub 配置（2026-11-12）
 
-Lucky 已将 https://pix.ut572.eu.org 反代到服务器 127.0.0.1:5722；部署 .env 的 PIXIV_CURATOR_PUBLIC_BASE_URL 设置为该 HTTPS origin。公开 JSON 的 url 指向相同域名固定图片页，original_url 仅作原图兼容。管理页使用 https://pix.ut572.eu.org/admin/login，HTTPS 配置启用 Secure Cookie，Cookie 写操作的 Origin 必须匹配此域名。
+Lucky 已将 https://pix.ut572.eu.org 反代到服务器 127.0.0.1:5722；部署 .env 的 PIXIV_CURATOR_PUBLIC_BASE_URL 设置为该 HTTPS origin。公开 JSON 的 url 指向相同域名固定图片页，original_url 仅作原图兼容。管理页使用 https://pix.ut572.eu.org/admin/login；修复版根路径自动跳到登录页，已有会话直接进入管理页。HTTPS 配置启用 Secure Cookie，Cookie 写操作的 Origin 必须匹配此域名。
 
 PicHub 已新增 Pixiv Curator 图源（ID 40）：URL 为 https://pix.ut572.eu.org/random、resp_type=json、json_path=url、权重 10、分类 pixiv-curator；无需配置 Pixiv Referer 或任何 Curator/Pixiv 凭据。单独调用可用 `https://hub.ut572.eu.org/random?category=pixiv-curator&format=json`。实际分发已生成 PicHub 本地文件并完整返回 200 图片；没有验证收藏流程。既有 SSRF 规则保持启用，未改 PicHub 源码。

@@ -117,6 +117,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	server := &http.Server{
 		Handler: httpapi.NewHandlerWithRoutes(version, func(mux *http.ServeMux) {
 			auth.Register(mux)
+			mux.HandleFunc("GET /{$}", auth.ManagementEntry)
 			httpapi.RegisterAccounts(mux, client, auth)
 			httpapi.RegisterLibrary(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)

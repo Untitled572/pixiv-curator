@@ -52,6 +52,10 @@ def main():
             with opener.open(request, timeout=5) as response:
                 assert response.status == 200
                 assert json.load(response)["status"] == "authenticated"
+            with opener.open(base + "/", timeout=5) as response:
+                assert response.status == 200
+                assert response.url == base + "/admin/"
+                assert response.headers.get_content_type() == "text/html"
             with opener.open(base + "/admin/api/stats", timeout=5) as response:
                 stats = json.load(response)
                 assert stats["accounts"] == 0 and stats["image_pages"] == 0
