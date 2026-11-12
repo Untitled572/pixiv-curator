@@ -21,6 +21,8 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "dev.ps1"
 IS_WINDOWS = os.name == "nt"
+# A clean runner must compile the trimpath standard library before starting.
+STARTUP_TIMEOUT = 180
 
 
 def powershell_executable() -> str | None:
@@ -118,7 +120,7 @@ class WindowsLauncherTests(unittest.TestCase):
         )
 
     def wait_ready(self, process: subprocess.Popen[str]) -> None:
-        deadline = time.monotonic() + 45
+        deadline = time.monotonic() + STARTUP_TIMEOUT
         while time.monotonic() < deadline:
             if process.poll() is not None:
                 output, _ = process.communicate(timeout=2)
@@ -186,7 +188,7 @@ class WindowsLauncherTests(unittest.TestCase):
             except (OSError, ValueError):
                 pass
         try:
-            output, _ = process.communicate(timeout=20)
+            output, _ = process.communicate(timeout=STARTUP_TIMEOUT)
         except subprocess.TimeoutExpired:
             # Cleanup the whole process tree so a failed assertion cannot leave a service behind.
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
@@ -235,11 +237,11 @@ class WindowsLauncherTests(unittest.TestCase):
     def test_stop_after_ready_stops_child_and_releases_port(self) -> None:
         process = self.start_launcher("-StopAfterReady")
         try:
-            output, _ = process.communicate(timeout=20)
+            output, _ = process.communicate(timeout=STARTUP_TIMEOUT)
         except subprocess.TimeoutExpired:
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
-            process.communicate(timeout=10)
-            self.fail("-StopAfterReady 未在有限时间内退出")
+            output, _ = process.communicate(timeout=10)
+            self.fail("-StopAfterReady 构建和启动超时：\n" + self.redact(output))
         self.assertEqual(process.returncode, 0, "-StopAfterReady 应正常退出：\n" + self.redact(output))
         self.assertTrue(port_is_free(self.port), "-StopAfterReady 后监听端口仍被占用")
         if self.token_file().exists():
@@ -326,7 +328,7 @@ class WindowsLauncherTests(unittest.TestCase):
                 "-NoLoginHelper", "-StopAfterReady"]
         result = subprocess.run(
             self.command(*args, launcher=scripts / "dev.ps1"), cwd=release, env=env,
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=STARTUP_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0,
                          "无 Go 源码的发布目录启动失败：\n" + self.redact(result.stdout + result.stderr))
@@ -340,7 +342,7 @@ class WindowsLauncherTests(unittest.TestCase):
             ["cmd.exe", "/d", "/c", str(ROOT / "start.cmd"), "-Address", self.address,
              "-DevDir", str(self.dev_dir), "-NoBrowser", "-NoLoginHelper", "-StopAfterReady"],
             cwd=self.temp.name, env=self.env, capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=45,
+            text=True, encoding="utf-8", errors="replace", timeout=STARTUP_TIMEOUT,
         )
         self.assertEqual(result.returncode, 0,
                          "双击入口从其它工作目录启动失败：\n" + self.subprocess_output(result))
