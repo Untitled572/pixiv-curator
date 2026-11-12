@@ -318,5 +318,7 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - 经用户授权迁移 data/dev 一致性快照、继续同步所需账号凭据、OAuth/网络配置与 128 张管理缩略图。快照保留 1 账号、177 画师、10219 作品、18705 图片分页、2797 任务；SQLite integrity / foreign_key 检查通过，账号文件路径改为容器内 /data/private/accounts。D 盘原数据保留，本地服务停止，避免两端同时刷新同一凭据。
 - 部署首次启动发现单文件挂载产生的 /run/secrets 父目录权限过宽，改为整个 private 目录只读挂载，未放宽凭据校验。CI 改用真实 Compose 模板、独立空库与随机端口验证健康、版本、管理登录和鉴权统计；此检查已在服务器使用正式镜像通过，测试容器及空库已清理。
 - 实际服务 healthz / readyz / version、指定密码登录、统计与管理预览均成功；公开 JSON 返回自有固定图片地址且保留 original_url。无客户端 Referer 完整读取 5889307 字节 PNG，200，约 1.47 秒；管理缩略图 49832 字节 JPEG，200。正式容器稳定运行、重启次数 0。
-- 账号状态 ready，迁移后已有画师同步与 96 个作品补全任务成功，统计增至 10339 作品 / 18827 图片分页。关注同步复用迁入的旧 RATE_LIMITED 退避任务，仍在队列；不将旧状态当成此次新发生的上游 429，也不宣称本次全量关注同步重新完成。全部历史采集仍由后台队列推进。
+- 账号状态 ready，迁移后已有画师同步与 96 个作品补全任务成功，统计增至 10339 作品 / 18827 图片分页。首次检查时关注同步复用迁入的旧 RATE_LIMITED 退避任务并等待队列；最终检查时该任务已重试耗尽、状态 failed / RATE_LIMITED，因此本次全量关注同步未重新完成。账号仍 ready，后台作品采集继续，最终样本为 11143 作品 / 20748 图片分页。保留有限重试，不绕过上游限流。
 - 当前 PicHub 探测器对 loopback 返回 unsafe URL: non-global IP address is not allowed；未削弱其 SSRF 保护或更改其图源配置。本次探测前后图源均为 33 个，与前次临时联调的历史 32 个记录不同。Curator 同机 HTTP 供图已验证，PicHub 长期消费需另行配置其允许的可达地址；未宣称完整 PicHub 下载/收藏流程通过。
+
+- Compose 修复提交 3f8ac53 的[最终 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43172270373) 全部成功，日志明确包含 Compose private directory mount, login and authenticated statistics 通过；Windows SSH 本地转发访问正式版本和管理登录页也已返回 200。迁移凭据已在服务器轮换落盘，传输临时副本和隔离测试容器已清理。
