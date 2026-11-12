@@ -148,6 +148,9 @@ class WindowsLauncherTests(unittest.TestCase):
             output = output.replace(secret, "[REDACTED]")
         return output
 
+    def subprocess_output(self, result: subprocess.CompletedProcess[str]) -> str:
+        return self.redact((result.stdout or "") + (result.stderr or ""))
+
     def token_file(self) -> Path:
         # Match scripts/dev.sh's stable per-dev-directory credential filename.
         return self.dev_dir / "admin-token"
@@ -163,7 +166,7 @@ class WindowsLauncherTests(unittest.TestCase):
         result = subprocess.run(
             ["icacls", str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
         )
-        self.assertEqual(result.returncode, 0, "无法检查 Windows ACL")
+        self.assertEqual(result.returncode, 0, "无法检查 Windows ACL：\n" + self.subprocess_output(result))
         acl = result.stdout.lower()
         # The file may be granted to its owner, SYSTEM, and local Administrators.
         self.assertNotIn("everyone:", acl, "管理 token 对 Everyone 开放")
@@ -232,7 +235,7 @@ class WindowsLauncherTests(unittest.TestCase):
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=10)
             process.communicate(timeout=10)
             self.fail("-StopAfterReady 未在有限时间内退出")
-        self.assertEqual(process.returncode, 0, "-StopAfterReady 应正常退出")
+        self.assertEqual(process.returncode, 0, "-StopAfterReady 应正常退出：\n" + self.redact(output))
         self.assertTrue(port_is_free(self.port), "-StopAfterReady 后监听端口仍被占用")
         if self.token_file().exists():
             self.assertTrue(self.token_value() not in output, "启动器输出包含管理 token")
@@ -241,7 +244,20 @@ class WindowsLauncherTests(unittest.TestCase):
     def test_release_directory_without_go_starts_and_stop_after_ready(self) -> None:
         source_binary = ROOT / "bin" / "pixiv-curator.exe"
         if not source_binary.is_file():
-            self.skipTest("缺少已有 bin/pixiv-curator.exe，无法构造发布包目录")
+            go = shutil.which("go.exe") or shutil.which("go")
+            self.assertIsNotNone(go, "缺少 bin/pixiv-curator.exe 且 PATH 中没有 Go，无法构造发布包测试二进制")
+            self.assertTrue((ROOT / "go.mod").is_file() and (ROOT / "cmd/api/main.go").is_file(),
+                            "缺少已有二进制和 Go 源码，无法构造发布包测试二进制")
+            source_binary = Path(self.temp.name) / "built-pixiv-curator.exe"
+            build_env = dict(os.environ, GOOS="windows", GOARCH="amd64", CGO_ENABLED="0")
+            build = subprocess.run(
+                [go, "build", "-mod=readonly", "-buildvcs=false", "-trimpath", "-o",
+                 str(source_binary), "./cmd/api"],
+                cwd=ROOT, env=build_env, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=180,
+            )
+            self.assertEqual(build.returncode, 0,
+                             "构建发布目录测试二进制失败：\n" + self.subprocess_output(build))
         release = Path(self.temp.name) / "发布 包含 空格"
         scripts = release / "scripts"
         scripts.mkdir(parents=True)
@@ -276,7 +292,8 @@ class WindowsLauncherTests(unittest.TestCase):
             cwd=self.temp.name, env=self.env, capture_output=True,
             text=True, encoding="utf-8", errors="replace", timeout=45,
         )
-        self.assertEqual(result.returncode, 0, "双击入口从其它工作目录启动失败")
+        self.assertEqual(result.returncode, 0,
+                         "双击入口从其它工作目录启动失败：\n" + self.subprocess_output(result))
         self.assertTrue((self.dev_dir / "curator.db").is_file(), "双击入口未使用指定数据目录")
         self.assertTrue(port_is_free(self.port), "双击入口诊断结束后端口仍被占用")
         self.assertTrue(self.token_value() not in result.stdout + result.stderr, "双击入口泄漏管理 token")
@@ -303,7 +320,8 @@ class WindowsLauncherTests(unittest.TestCase):
                 errors="replace",
                 timeout=30,
             )
-            self.assertNotEqual(result.returncode, 0, "占用端口时启动器应提前失败")
+            self.assertNotEqual(result.returncode, 0,
+                                "占用端口时启动器应提前失败：\n" + self.subprocess_output(result))
             self.assertEqual(token_path.read_text(encoding="ascii"), sentinel + "\n", "端口失败时修改了既有 token")
             self.assertEqual(occupied.getsockname(), ("127.0.0.1", self.port), "占用监听器状态异常")
             with socket.create_connection(("127.0.0.1", self.port), timeout=2):
