@@ -324,11 +324,17 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - Compose 修复提交 3f8ac53 的[最终 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43172270373) 全部成功，日志明确包含 Compose private directory mount, login and authenticated statistics 通过；Windows SSH 本地转发访问正式版本和管理登录页也已返回 200。迁移凭据已在服务器轮换落盘，传输临时副本和隔离测试容器已清理。
 
 
-## 29. 公网接入与关注限流修复（2026-11-12，进行中）
+## 29. 公网接入与关注限流修复（2026-11-12，已完成）
 
 - 用户配置 Lucky 域名 pix.ut572.eu.org 并要求继续接入、尝试解决关注同步限流。实际公网 healthz/version/random 均 200；将 Compose PUBLIC_BASE_URL 改为 https://pix.ut572.eu.org，生成地址不再包含 loopback。HTTPS 管理登录、Secure Cookie、鉴权统计和匹配 Origin/CSRF 的退出均通过。
 - 公网固定图片端点无需消费端 Referer，完整读取 10554947 字节 PNG、200、约 1.73 秒。PicHub 公网 detect 返回 json 及 url/original_url 候选；明确使用 url 字段。新增唯一 Curator 图源 ID 40、独立分类 pixiv-curator，通过实际 PicHub 分发/落盘及完整读取 209316 字节 JPEG、200；其余图源配置未更改，未关闭 SSRF 检查。
 - 查明代码问题：本地共享 cooldown 未发上游请求也返回普通 429，领取任务预增 attempt，导致重试预算可被其它任务触发的冷却白耗。增加 LocalCooldown 分类，应用转为 Deferred；持久化仍为 retry_wait，带 lease fencing 原子退回本次 attempt。真正上游 429 仍尊重 Retry-After、最多五次失败。调度增加可运行 following 优先级，避免控制流程排在大量补全之后；历史仍最低。
-- 新增 OAuth/API 本地冷却与实际 429 区分、冷却结束恢复、attempt4→5 延期回退、真正五次失败、旧租约和取消优先、关注优先级及未到期不阻塞回归。Windows 全仓 go vet / go test -race 通过。准备 v0.1.1 修复发行；Actions、服务器升级及关注重同步最终结果待补。
+- 新增 OAuth/API 本地冷却与实际 429 区分、冷却结束恢复、attempt4→5 延期回退、真正五次失败、旧租约和取消优先、关注优先级及未到期不阻塞回归。Windows 全仓 go vet / go test -race 通过。已完成 v0.1.1 修复发行与部署，结果见下。
 
 - 用户发现直接打开域名根路径返回 not_found，补充根路径入口：根路径先 302 到 /admin/，管理 HTML 页未登录时再 302 到 /admin/login；已有有效会话直接进入，保留 /admin Cookie 路径；未知 API 仍 404。原生 HTTP 与真实 Compose 回归同时核对入口跳转，管理 API 鉴权保持原要求。
+
+- 最终 main [CI 43179478610](https://github.com/Untitled572/pixiv-curator/actions/runs/43179478610) 和 [Release 43179591669](https://github.com/Untitled572/pixiv-curator/actions/runs/43179591669) 全部成功；v0.1.1 对应 40ed3f7，四个 Windows/Linux 包和 SHA256SUMS 已发布，GHCR 双架构 digest 为 sha256:0c90ee52e0b601d095efbc1e0a4f800aa5489a5f35866a6cc3e80a319c6e5826。按 digest 回拉的 amd64 归档在服务器核验源码 revision、镜像 ID 与全部内容摘要后导入，Compose 已切换到 v0.1.1。
+- 切换前停机创建数据库一致性备份及 OAuth/账号/网络配置副本，位于部署目录 backups/pre-v0.1.1-20261112T081638Z，目录 0700 / 文件 0600。备份 integrity / foreign_key 检查通过；未替换服务器增长后的数据，也没有覆盖轮换凭据。
+- 部署后实际 HTTPS 根路径：匿名 200 登录页，登录后 200 管理页；匿名管理 API 401，Secure Cookie 路径仍为 /admin，匹配域名的 Cookie/Origin/CSRF 关注同步请求返回 202。公开固定页完整读取 942642 字节 JPEG、200；实际 PicHub 再次分发并完整读取 1917243 字节 PNG、200。
+- 关注同步在升级前及升级后各完整成功一次；升级后 job 918920f0965757972c871cb3cf070abf 为 succeeded，attempt=1、5 页/117 人、错误码为空，账号 ready / sync_state=succeeded。来源关系总数与 distinct 画师数均为 117，没有重复。正式容器运行且 restart_count=0；统计样本为 15637 作品 / 37634 图片分页，历史采集仍继续，不将单次同步成功描述为以后不会限流。
+- 早期根路径修复由容器回归发现 /admin Cookie 不发送到 / 的问题；最终改为根路径先跳 /admin/，再在 HTML 路由判断会话。原生二进制及 Compose 均覆盖匿名和登录后入口，不扩大 Cookie 范围。未重写已发布标签；中间失败 CI 保留，最终版本按上述通过记录验收。

@@ -34,7 +34,7 @@
 4. 镜像和二进制均就绪后才发布 Release；说明中记录镜像 digest。
 5. 带后缀的版本标记 prerelease；稳定版本标记最新并更新镜像 latest。
 
-镜像路径：ghcr.io/untitled572/pixiv-curator。首个已发布版本为 v0.1.0，稳定镜像标签为 :v0.1.0 与 :latest。
+镜像路径：ghcr.io/untitled572/pixiv-curator。首个已发布版本为 v0.1.0；当前稳定版为 v0.1.1，镜像标签为 :v0.1.1 与 :latest。
 
 不得为旧版本补发标签以更新 latest；补发旧版本时应先调整发布策略，避免覆盖当前稳定版本。已发布版本不覆盖，使用新版本号发布修复。
 
@@ -102,3 +102,5 @@ gh run list --workflow release.yml
 发布镜像后，Actions 会核对 GHCR manifest 的 linux/amd64 和 linux/arm64 描述，按 digest 拉取 amd64 镜像并核验源码 revision；另外生成 image-deploy-linux-amd64 artifact（保留 7 天），包含同一 GHCR 镜像的部署归档、校验和、镜像 ID、registry digest 及源码 revision，可在没有 GHCR 长期凭据的服务器上校验后导入。此 artifact 不包含账号配置或凭据，不替代正式 GHCR 发布。
 
 2026-11-12：[v0.1.0 正式发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43169485544) 全部成功，四个 Windows/Linux amd64/arm64 压缩包和校验和已上传至 [Release](https://github.com/Untitled572/pixiv-curator/releases/tag/v0.1.0)。GHCR 双架构 manifest 经按 digest 回拉校验，digest 为 sha256:bd363c124c89db4f16c402f89a4872a74de0f25d1098cab7b2d7dc18017d0df7。服务器已部署此 amd64 镜像，健康/版本、管理登录、统计、公开图片完整读取与后台作品采集通过；arm64 未执行原生运行。Compose 后续修正目录挂载，使用整个 0700 private 目录只读挂载到 /run/secrets，避免 Docker 自动创建的 0755 父目录被凭据校验拒绝；真实 Compose 鉴权回归已通过。
+
+2026-11-12：[v0.1.1 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43179591669) 与 main CI 全部成功，源码 40ed3f7；Windows/Linux amd64、arm64 压缩包及 SHA256SUMS 已发布，Docker 双架构 manifest digest 为 sha256:0c90ee52e0b601d095efbc1e0a4f800aa5489a5f35866a6cc3e80a319c6e5826。服务器已从一致性备份后升级，实际根路径登录前后跳转、管理鉴权、PicHub 分发完整图片以及关注同步 5 页/117 人均通过。arm64 仍只有构建检查，没有原生运行验收。
