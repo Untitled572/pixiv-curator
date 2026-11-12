@@ -60,7 +60,7 @@ func (s *Store) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
 	if err != nil {
 		return domain.Job{}, err
 	}
-	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0 ORDER BY CASE WHEN json_extract(payload_json,'$.phase')='history' THEN 1 ELSE 0 END,available_at,id LIMIT 1`, now.UnixMilli()))
+	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0 ORDER BY CASE WHEN kind='sync_following' THEN 0 WHEN json_extract(payload_json,'$.phase')='history' THEN 2 ELSE 1 END,available_at,id LIMIT 1`, now.UnixMilli()))
 	if err != nil {
 		if err == domain.ErrNotFound {
 			if commitErr := tx.Commit(); commitErr != nil {
@@ -130,14 +130,18 @@ func leaseResult(r sql.Result, err error) error {
 // never by upstream response bodies. Cancellation wins over success and retries.
 func (s *Store) Finish(ctx context.Context, j domain.Job, state, code string, available time.Time) error {
 	switch state {
-	case "succeeded", "retry_wait", "failed", "paused_auth", "canceled":
+	case "succeeded", "retry_wait", "deferred", "failed", "paused_auth", "canceled":
 	default:
 		return domain.ErrInvalid
 	}
-	if state == "retry_wait" && j.Attempt >= 5 {
+	deferred := state == "deferred"
+	if deferred {
+		// This is an internal completion command, never a persisted job state.
+		state = "retry_wait"
+	} else if state == "retry_wait" && j.Attempt >= 5 {
 		state = "failed"
 	}
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' ELSE ? END,error_code=CASE WHEN cancel_requested=1 OR ?='canceled' THEN '' ELSE ? END,available_at=?,lease_token='',lease_until=0,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>?`, state, state, code, available.UnixMilli(), time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
+	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' ELSE ? END,error_code=CASE WHEN cancel_requested=1 OR ?='canceled' THEN '' ELSE ? END,attempt=CASE WHEN ? AND cancel_requested=0 AND attempt>0 THEN attempt-1 ELSE attempt END,available_at=?,lease_token='',lease_until=0,updated_at=? WHERE id=? AND state='running' AND lease_token=? AND lease_until>?`, state, state, code, deferred, available.UnixMilli(), time.Now().UnixMilli(), j.ID, j.LeaseToken, time.Now().UnixMilli())
 	return leaseResult(r, err)
 }
 

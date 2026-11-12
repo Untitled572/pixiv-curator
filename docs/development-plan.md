@@ -322,3 +322,11 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - 当前 PicHub 探测器对 loopback 返回 unsafe URL: non-global IP address is not allowed；未削弱其 SSRF 保护或更改其图源配置。本次探测前后图源均为 33 个，与前次临时联调的历史 32 个记录不同。Curator 同机 HTTP 供图已验证，PicHub 长期消费需另行配置其允许的可达地址；未宣称完整 PicHub 下载/收藏流程通过。
 
 - Compose 修复提交 3f8ac53 的[最终 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43172270373) 全部成功，日志明确包含 Compose private directory mount, login and authenticated statistics 通过；Windows SSH 本地转发访问正式版本和管理登录页也已返回 200。迁移凭据已在服务器轮换落盘，传输临时副本和隔离测试容器已清理。
+
+
+## 29. 公网接入与关注限流修复（2026-11-12，进行中）
+
+- 用户配置 Lucky 域名 pix.ut572.eu.org 并要求继续接入、尝试解决关注同步限流。实际公网 healthz/version/random 均 200；将 Compose PUBLIC_BASE_URL 改为 https://pix.ut572.eu.org，生成地址不再包含 loopback。HTTPS 管理登录、Secure Cookie、鉴权统计和匹配 Origin/CSRF 的退出均通过。
+- 公网固定图片端点无需消费端 Referer，完整读取 10554947 字节 PNG、200、约 1.73 秒。PicHub 公网 detect 返回 json 及 url/original_url 候选；明确使用 url 字段。新增唯一 Curator 图源 ID 40、独立分类 pixiv-curator，通过实际 PicHub 分发/落盘及完整读取 209316 字节 JPEG、200；其余图源配置未更改，未关闭 SSRF 检查。
+- 查明代码问题：本地共享 cooldown 未发上游请求也返回普通 429，领取任务预增 attempt，导致重试预算可被其它任务触发的冷却白耗。增加 LocalCooldown 分类，应用转为 Deferred；持久化仍为 retry_wait，带 lease fencing 原子退回本次 attempt。真正上游 429 仍尊重 Retry-After、最多五次失败。调度增加可运行 following 优先级，避免控制流程排在大量补全之后；历史仍最低。
+- 新增 OAuth/API 本地冷却与实际 429 区分、冷却结束恢复、attempt4→5 延期回退、真正五次失败、旧租约和取消优先、关注优先级及未到期不阻塞回归。Windows 全仓 go vet / go test -race 通过。准备 v0.1.1 修复发行；Actions、服务器升级及关注重同步最终结果待补。

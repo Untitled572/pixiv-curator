@@ -224,7 +224,11 @@ func classify(err error) error {
 		case e.Status == 404:
 			return &jobs.JobError{Class: jobs.Failed, Code: e.Code}
 		case e.Status == 429:
-			return &jobs.JobError{Class: jobs.Retry, Code: e.Code, RetryAfter: e.RetryAfter}
+			class := jobs.Retry
+			if e.LocalCooldown {
+				class = jobs.Deferred
+			}
+			return &jobs.JobError{Class: class, Code: e.Code, RetryAfter: e.RetryAfter}
 		case e.Code == "INVALID_NEXT_URL" || e.Code == "INVALID_RESPONSE":
 			return &jobs.JobError{Class: jobs.Failed, Code: e.Code}
 		default:

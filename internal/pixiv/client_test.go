@@ -167,6 +167,9 @@ func TestOAuthRateLimitSharedAcrossJobs(t *testing.T) {
 		if !errors.As(err, &limited) || limited.Status != 429 || limited.RetryAfter <= 0 {
 			t.Fatalf("cooldown error: %v", err)
 		}
+		if limited.LocalCooldown != (i == 1) {
+			t.Fatalf("attempt %d local cooldown = %v", i, limited.LocalCooldown)
+		}
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("cooldown made %d upstream calls", calls.Load())

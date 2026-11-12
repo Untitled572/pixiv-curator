@@ -31,7 +31,9 @@ type Handler func(context.Context, domain.Job) error
 type ErrorClass string
 
 const (
-	Retry      ErrorClass = "retry"
+	Retry ErrorClass = "retry"
+	// Deferred waits for a shared local cooldown without spending a request attempt.
+	Deferred   ErrorClass = "deferred"
 	PausedAuth ErrorClass = "paused_auth"
 	Failed     ErrorClass = "failed"
 )
@@ -174,6 +176,9 @@ func (w *Worker) runJob(parent context.Context, job domain.Job) {
 	if err != nil && !errors.Is(err, domain.ErrLease) {
 		slog.Warn("task status persistence failed", "job_id", job.ID)
 	}
+	if state == "deferred" {
+		state = "retry_wait"
+	}
 	slog.Info("task finished", "job_id", job.ID, "kind", job.Kind, "state", state, "error_code", code, "next_attempt_at", available)
 }
 
@@ -200,6 +205,8 @@ func (w *Worker) outcome(job domain.Job, err error) (string, string, time.Time) 
 		switch classified.Class {
 		case Retry:
 			code = "RETRYABLE_ERROR"
+		case Deferred:
+			code = "DEFERRED"
 		case PausedAuth:
 			code = "AUTH_REQUIRED"
 		case Failed:
@@ -215,6 +222,8 @@ func (w *Worker) outcome(job domain.Job, err error) (string, string, time.Time) 
 		return "failed", code, now
 	case Retry:
 		return "retry_wait", code, now.Add(w.retryDelay(job.Attempt, classified.RetryAfter))
+	case Deferred:
+		return "deferred", code, now.Add(w.retryDelay(job.Attempt, classified.RetryAfter))
 	default:
 		return "retry_wait", "HANDLER_ERROR", now.Add(w.retryDelay(job.Attempt, 0))
 	}

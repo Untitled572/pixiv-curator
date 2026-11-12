@@ -141,3 +141,10 @@ Linux 同机部署可使用 deploy/compose.yml：host 网络默认只监听 127.
 Compose 将整个 private 目录只读挂载到 /run/secrets；该目录必须是运行用户拥有的 0700 目录，内部凭据为 0600。不要改回分别挂载凭据文件，否则 Docker 自动创建的父目录权限可能被程序拒绝。PIXIV_CURATOR_ADDR 可覆盖默认监听地址；更改端口时也要同步 PUBLIC_BASE_URL。
 
 同机可达不代表消费方允许内网 URL。若 PicHub 的探测器启用 SSRF 防护，127.0.0.1 或私网地址可能被拒绝；需在消费方既有安全策略内提供允许的服务地址，不应关闭防护。SSH 管理访问示例：`ssh -N -L 5722:127.0.0.1:5722 -p 222 l31155@ut572.eu.org`，浏览器打开 `http://127.0.0.1:5722/admin/login`。同一账号凭据迁往服务器后应停止旧本机实例，避免并发刷新；旧 Refresh Token 可能已轮换，不能直接用旧副本覆盖服务器新凭据。
+
+
+## 当前公网与 PicHub 配置（2026-11-12）
+
+Lucky 已将 https://pix.ut572.eu.org 反代到服务器 127.0.0.1:5722；部署 .env 的 PIXIV_CURATOR_PUBLIC_BASE_URL 设置为该 HTTPS origin。公开 JSON 的 url 指向相同域名固定图片页，original_url 仅作原图兼容。管理页使用 https://pix.ut572.eu.org/admin/login，HTTPS 配置启用 Secure Cookie，Cookie 写操作的 Origin 必须匹配此域名。
+
+PicHub 已新增 Pixiv Curator 图源（ID 40）：URL 为 https://pix.ut572.eu.org/random、resp_type=json、json_path=url、权重 10、分类 pixiv-curator；无需配置 Pixiv Referer 或任何 Curator/Pixiv 凭据。单独调用可用 `https://hub.ut572.eu.org/random?category=pixiv-curator&format=json`。实际分发已生成 PicHub 本地文件并完整返回 200 图片；没有验证收藏流程。既有 SSRF 规则保持启用，未改 PicHub 源码。

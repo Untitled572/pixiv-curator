@@ -52,6 +52,8 @@ type Error struct {
 	Code       string
 	Status     int
 	RetryAfter time.Duration
+	// LocalCooldown means this call made no upstream request.
+	LocalCooldown bool
 }
 
 func (e *Error) Error() string { return "pixiv: " + e.Code }
@@ -113,7 +115,7 @@ func (c *Client) accessToken(ctx context.Context, rejected string) (string, erro
 	c.mu.Lock()
 	if remaining := time.Until(c.cooldown); remaining > 0 {
 		c.mu.Unlock()
-		return "", &Error{Code: "RATE_LIMITED", Status: 429, RetryAfter: remaining}
+		return "", &Error{Code: "RATE_LIMITED", Status: 429, RetryAfter: remaining, LocalCooldown: true}
 	}
 	if c.blocked {
 		c.mu.Unlock()
@@ -133,6 +135,12 @@ func (c *Client) accessToken(ctx context.Context, rejected string) (string, erro
 		}
 		c.mu.Lock()
 		token, err := c.access, c.refreshErr
+		if remaining := time.Until(c.cooldown); remaining > 0 {
+			var limited *Error
+			if errors.As(err, &limited) && limited.Status == 429 {
+				err = &Error{Code: "RATE_LIMITED", Status: 429, RetryAfter: remaining, LocalCooldown: true}
+			}
+		}
 		c.mu.Unlock()
 		return token, err
 	}
