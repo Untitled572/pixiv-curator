@@ -34,7 +34,7 @@
 4. 镜像和二进制均就绪后才发布 Release；说明中记录镜像 digest。
 5. 带后缀的版本标记 prerelease；稳定版本标记最新并更新镜像 latest。
 
-镜像路径：ghcr.io/untitled572/pixiv-curator。例如版本 v0.1.0 的镜像标签为 :v0.1.0，此处仅举例，并不表示已发布。
+镜像路径：ghcr.io/untitled572/pixiv-curator。首个已发布版本为 v0.1.0，稳定镜像标签为 :v0.1.0 与 :latest。
 
 不得为旧版本补发标签以更新 latest；补发旧版本时应先调整发布策略，避免覆盖当前稳定版本。已发布版本不覆盖，使用新版本号发布修复。
 
@@ -91,7 +91,7 @@ gh run list --workflow release.yml
 
 2026-10-02，提交 ad0c4df 的[首次 CI](https://github.com/Untitled572/pixiv-curator/actions/runs/36960290306) 全部通过：Linux/Windows 测试及 HTTP 冒烟、Linux race 检查、四个平台压缩包构建与上传、Docker 双架构构建及 amd64 容器冒烟。
 
-本机 gh 2.102.0 已登录 Untitled572，SSH 认证及 main 推送成功；仓库保持私有。尚未创建版本标签，GHCR 推送与 GitHub Release 发布步骤需在首次正式发布时验证。
+当时本机 gh 2.102.0 已登录 Untitled572，SSH 认证及 main 推送成功；仓库保持私有。当时尚未创建版本标签；首次正式发布结果见后续 2026-11-12 记录。
 
 2026-10-08 的新业务与 SQLite 依赖已通过本机 race/vet、HTTP 冒烟和四平台 CGO=0 构建，但 Docker Hub 拉取超时且本机缺 Buildx。本轮镜像未验证；上述首次远端 CI 仅证明初始化版本，不作为新代码的容器验收。该次运行还提示 Docker Actions 的 Node 20 声明已弃用（由 runner 强制使用 Node 24，运行成功）；后续维护时升级对应 Actions。arm64 尚未执行原生运行测试。
 
@@ -100,3 +100,5 @@ gh run list --workflow release.yml
 可选账号浏览器登录面向本机桌面源码联调。默认 Docker 镜像仍为纯 Go/scratch，不含 Python、Chromium 或桌面；容器使用私密 refresh token 配置。二进制包随附登录 helper、锁定依赖和说明，启用它仍需自行准备 Python/浏览器环境；Windows 启动器会区分源码与发行包：源码模式需要 Go；发行包直接运行 EXE，无需 Go，首次 OAuth 配置仍可通过锁定 Python 辅助脚本准备。
 
 发布镜像后，Actions 会核对 GHCR manifest 的 linux/amd64 和 linux/arm64 描述，按 digest 拉取 amd64 镜像并核验源码 revision；另外生成 image-deploy-linux-amd64 artifact（保留 7 天），包含同一 GHCR 镜像的部署归档、校验和、镜像 ID、registry digest 及源码 revision，可在没有 GHCR 长期凭据的服务器上校验后导入。此 artifact 不包含账号配置或凭据，不替代正式 GHCR 发布。
+
+2026-11-12：[v0.1.0 正式发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43169485544) 全部成功，四个 Windows/Linux amd64/arm64 压缩包和校验和已上传至 [Release](https://github.com/Untitled572/pixiv-curator/releases/tag/v0.1.0)。GHCR 双架构 manifest 经按 digest 回拉校验，digest 为 sha256:bd363c124c89db4f16c402f89a4872a74de0f25d1098cab7b2d7dc18017d0df7。服务器已部署此 amd64 镜像，健康/版本、管理登录、统计、公开图片完整读取与后台作品采集通过；arm64 未执行原生运行。Compose 后续修正目录挂载，使用整个 0700 private 目录只读挂载到 /run/secrets，避免 Docker 自动创建的 0755 父目录被凭据校验拒绝；真实 Compose 鉴权回归已通过。

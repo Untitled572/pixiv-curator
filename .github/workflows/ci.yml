@@ -107,10 +107,7 @@ jobs:
         env:
           VERSION: ${{ inputs.version || 'dev' }}
         run: |
-          container=$(docker run --detach --publish 127.0.0.1::5722 pixiv-curator:ci)
-          trap 'docker logs "$container"; docker rm -f "$container"' EXIT
-          address=$(docker port "$container" 5722/tcp)
-          python3 scripts/smoke-test.py --url "http://$address" --version "$VERSION"
+          python3 scripts/smoke-compose.py --image pixiv-curator:ci --version "$VERSION"
       - name: Build both image architectures
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:

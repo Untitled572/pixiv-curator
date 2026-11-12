@@ -10,7 +10,7 @@ services:
     user: "${PIXIV_CURATOR_UID:-65532}:${PIXIV_CURATOR_GID:-65532}"
     stop_grace_period: 30s
     environment:
-      PIXIV_CURATOR_ADDR: "127.0.0.1:5722"
+      PIXIV_CURATOR_ADDR: "${PIXIV_CURATOR_ADDR:-127.0.0.1:5722}"
       PIXIV_CURATOR_PUBLIC_BASE_URL: "${PIXIV_CURATOR_PUBLIC_BASE_URL:-http://127.0.0.1:5722}"
       PIXIV_CURATOR_DATABASE_PATH: /data/curator.db
       PIXIV_CURATOR_ADMIN_TOKEN_FILE: /run/secrets/admin-token
@@ -18,5 +18,4 @@ services:
       PIXIV_CURATOR_NETWORK_CONFIG_FILE: /data/private/network.json
     volumes:
       - ./data:/data
-      - ./private/admin-token:/run/secrets/admin-token:ro
-      - ./private/oauth.json:/run/secrets/oauth.json:ro
+      - ./private:/run/secrets:ro

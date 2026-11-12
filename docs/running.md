@@ -137,3 +137,7 @@ Windows 发行包解压后也提供 start.cmd / scripts/dev.ps1，直接运行�
 Linux 同机部署可使用 deploy/compose.yml：host 网络默认只监听 127.0.0.1:5722，供同机 PicHub 调用，并可访问宿主机 127.0.0.1:7890 代理。管理页可经 SSH 本地转发访问；此模板不创建公网反向代理。准备 data/curator.db、data/private/accounts 及 private/admin-token、private/oauth.json，默认文件给 UID 65532 读取，数据库目录可写；也可设置 PIXIV_CURATOR_UID / PIXIV_CURATOR_GID 为拥有该目录的非 root 宿主机用户，保留 0700/0600 权限而无需将凭据开放给其它用户。跨系统迁移时 account.token_file 必须改成容器内实际绝对路径；不要直接复制 Windows 路径或运行中的 WAL 文件。
 
 设置 PIXIV_CURATOR_IMAGE 为要部署的版本或 digest。若使用 Actions 的 GHCR 镜像部署归档，先验证 SHA256SUMS / 镜像 ID / revision，再 docker load；相应 Compose 环境可设置 PIXIV_CURATOR_PULL_POLICY=never，避免没有 GHCR 凭据时重复拉取。普通 registry 拉取使用 missing 或 always，并自行配置只读包权限。
+
+Compose 将整个 private 目录只读挂载到 /run/secrets；该目录必须是运行用户拥有的 0700 目录，内部凭据为 0600。不要改回分别挂载凭据文件，否则 Docker 自动创建的父目录权限可能被程序拒绝。PIXIV_CURATOR_ADDR 可覆盖默认监听地址；更改端口时也要同步 PUBLIC_BASE_URL。
+
+同机可达不代表消费方允许内网 URL。若 PicHub 的探测器启用 SSRF 防护，127.0.0.1 或私网地址可能被拒绝；需在消费方既有安全策略内提供允许的服务地址，不应关闭防护。SSH 管理访问示例：`ssh -N -L 5722:127.0.0.1:5722 -p 222 l31155@ut572.eu.org`，浏览器打开 `http://127.0.0.1:5722/admin/login`。同一账号凭据迁往服务器后应停止旧本机实例，避免并发刷新；旧 Refresh Token 可能已轮换，不能直接用旧副本覆盖服务器新凭据。

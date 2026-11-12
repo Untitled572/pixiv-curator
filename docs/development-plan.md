@@ -309,12 +309,14 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - 独立库初步实网验证：同一张 Pixiv JPEG 无 Referer 原图为 403，本服务返回的固定图片地址无需客户端 Referer 返回 200，完整读取 743312 字节，约 2.2 秒，原图缓存文件数 0。全仓 go vet / go test -race 通过；分类边界、未知显式许可、原图兼容、凭据隔离与固定页屏蔽测试通过；发现布局、过滤前不加载不匹配样本、快速筛选取消、未知偏好保存和手机/桌面浏览器验证通过。
 
 
-## 28. 首次完整发行与 Compose 迁移（2026-11-12，进行中）
+## 28. 首次完整发行与 Compose 迁移（2026-11-12，已完成发行及部署）
 
-- 用户明确要求提交推送，使用 Actions 发布 Windows / Linux / Docker（均 amd64、arm64），推送 GHCR，并用 gh 检查结果。远端暂无版本标签或 Release，准备首次 v0.1.0，不改已有发布记录。
-- Windows 发行包增加 start.cmd / PowerShell 启动器；源码目录保持构建模式，发行包无需 Go 即可运行自带 EXE。PowerShell 5.1/7 的源码及无 Go 发行目录诊断验证通过。
-- 镜像成功后再部署到 ut572.eu.org 的 /home/l31155/docker/pixiv-curator。用户明确选择迁移 data/dev 及继续同步所需凭据；使用一致性 SQLite 快照、迁移容器内凭据路径和权限，管理凭据按用户指定值配置，不记入仓库或日志。
-- 当前代码和运行验收已通过；远端构建、发布及部署结果待补。
-
-
-- 发布前实际 main CI 已发现并修复 Windows runner 的多 Go 安装问题：Get-Command 返回多个路径被拼成伪可执行文件名。选择 PATH 首个应用，并补 PowerShell 5.1/7 双 Go 安装回归及脱敏失败日志；发行目录测试在无已有 EXE 时自行编译隔离样本，不依赖测试执行顺序。Linux 测试已通过，最终 CI/发行/部署结论仍待完成。
+- 用户明确要求 Windows / Linux / Docker，均包含 amd64、arm64。v0.1.0 标签对应 c4782fa；使用 gh 检查[正式发行工作流](https://github.com/Untitled572/pixiv-curator/actions/runs/43169485544)，所有任务成功。[Release](https://github.com/Untitled572/pixiv-curator/releases/tag/v0.1.0) 已发布四个压缩包及 SHA256SUMS。
+- GHCR v0.1.0 / latest 已推送；manifest 同时包含 linux/amd64、linux/arm64。registry digest 为 sha256:bd363c124c89db4f16c402f89a4872a74de0f25d1098cab7b2d7dc18017d0df7。Actions 按 digest 回拉并核对 revision；服务器导入同一镜像归档，镜像 ID、revision 和归档校验和一致。没有向服务器复制本机 GitHub 长期凭据，也没有改变包可见性。
+- Windows 包含 start.cmd / scripts/dev.ps1，发行目录无需 Go。实际 main CI 修复多 Go/Python 安装的路径拼接及 Windows 冷编译测试预算，PowerShell 5.1/7 回归与正式发行测试通过。arm64 验证构建，不宣称在 arm64 原生机器运行。
+- 新建 /home/l31155/docker/pixiv-curator 并使用 Docker Compose 部署；host 网络仅监听 127.0.0.1:5722，UID/GID 1000，根文件系统只读、unless-stopped。管理凭据按用户指定值配置，私密目录 0700 / 文件 0600，不写入文档或日志。
+- 经用户授权迁移 data/dev 一致性快照、继续同步所需账号凭据、OAuth/网络配置与 128 张管理缩略图。快照保留 1 账号、177 画师、10219 作品、18705 图片分页、2797 任务；SQLite integrity / foreign_key 检查通过，账号文件路径改为容器内 /data/private/accounts。D 盘原数据保留，本地服务停止，避免两端同时刷新同一凭据。
+- 部署首次启动发现单文件挂载产生的 /run/secrets 父目录权限过宽，改为整个 private 目录只读挂载，未放宽凭据校验。CI 改用真实 Compose 模板、独立空库与随机端口验证健康、版本、管理登录和鉴权统计；此检查已在服务器使用正式镜像通过，测试容器及空库已清理。
+- 实际服务 healthz / readyz / version、指定密码登录、统计与管理预览均成功；公开 JSON 返回自有固定图片地址且保留 original_url。无客户端 Referer 完整读取 5889307 字节 PNG，200，约 1.47 秒；管理缩略图 49832 字节 JPEG，200。正式容器稳定运行、重启次数 0。
+- 账号状态 ready，迁移后已有画师同步与 96 个作品补全任务成功，统计增至 10339 作品 / 18827 图片分页。关注同步复用迁入的旧 RATE_LIMITED 退避任务，仍在队列；不将旧状态当成此次新发生的上游 429，也不宣称本次全量关注同步重新完成。全部历史采集仍由后台队列推进。
+- 当前 PicHub 探测器对 loopback 返回 unsafe URL: non-global IP address is not allowed；未削弱其 SSRF 保护或更改其图源配置。本次探测前后图源均为 33 个，与前次临时联调的历史 32 个记录不同。Curator 同机 HTTP 供图已验证，PicHub 长期消费需另行配置其允许的可达地址；未宣称完整 PicHub 下载/收藏流程通过。
