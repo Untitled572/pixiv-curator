@@ -18,6 +18,9 @@ import (
 func TestManagerFollowingRestrictedRoutesVisibilityAndBindsIdentity(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	legacyPath := filepath.Join(dir, "legacy-token")
 	if err := os.WriteFile(legacyPath, []byte("legacy-token"), 0600); err != nil {
 		t.Fatal(err)
