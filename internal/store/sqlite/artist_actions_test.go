@@ -178,12 +178,16 @@ func TestCommitArtistBatchRollsBackWhenMiddleArtworkFails(t *testing.T) {
 func TestFollowingBatchesOnlyMarkUnfollowedOnCompleteSnapshot(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
+	if err := s.SaveAccount(ctx, domain.Account{ID: "test", Name: "visibility", TokenFile: "unused"}); err != nil {
+		t.Fatal(err)
+	}
 	seedArtist(t, s, 7201)
 	seedArtist(t, s, 7202)
+	seedArtist(t, s, 7203)
 	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1,remote_followed=1,last_seen_follow_run='older' WHERE id=7201`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1 WHERE id=7202`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run,visibility) VALUES('test',7201,1,'older','public')`); err != nil {
 		t.Fatal(err)
 	}
 	_, err := s.Enqueue(ctx, "sync_following", "following:test", json.RawMessage(`{"run":"test"}`))
@@ -194,17 +198,24 @@ func TestFollowingBatchesOnlyMarkUnfollowedOnCompleteSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newArtist := domain.Artist{ID: 7202, Name: "refreshed", ReviewStatus: "rejected"}
-	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
+	publicArtist := domain.Artist{ID: 7202, Name: "public"}
+	privateArtist := domain.Artist{ID: 7203, Name: "private"}
+	publicCtx := domain.WithFollowVisibility(domain.WithAccount(ctx, "test"), "public")
+	privateCtx := domain.WithFollowVisibility(domain.WithAccount(ctx, "test"), "private")
+	if err := s.CommitFollowingBatch(publicCtx, job, "run-1", []domain.Artist{publicArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
+	if err := s.CommitFollowingBatch(publicCtx, job, "run-1", []domain.Artist{publicArtist}, json.RawMessage(`{"cursor":"next"}`), false); err != nil {
 		t.Fatalf("repeat committed following page: %v", err)
 	}
 	assertFollowing(t, s, 7201, true, "approved", true)
 	assertFollowing(t, s, 7202, true, "approved", true)
+	var oldVisibility string
+	if err := s.db.QueryRowContext(ctx, `SELECT visibility FROM account_artists WHERE account_id='test' AND artist_id=7201`).Scan(&oldVisibility); err != nil || oldVisibility != "public" {
+		t.Fatalf("old source visibility=%q err=%v", oldVisibility, err)
+	}
 
-	if err := s.CommitFollowingBatch(ctx, job, "run-1", []domain.Artist{newArtist}, json.RawMessage(`{"cursor":""}`), true); err != nil {
+	if err := s.CommitFollowingBatch(privateCtx, job, "run-1", []domain.Artist{privateArtist}, json.RawMessage(`{"cursor":""}`), true); err != nil {
 		t.Fatal(err)
 	}
 	progress, err := s.Job(ctx, job.ID)
@@ -213,6 +224,38 @@ func TestFollowingBatchesOnlyMarkUnfollowedOnCompleteSnapshot(t *testing.T) {
 	}
 	assertFollowing(t, s, 7201, false, "approved", true)
 	assertFollowing(t, s, 7202, true, "approved", true)
+	assertFollowing(t, s, 7203, true, "approved", true)
+	if err := s.db.QueryRowContext(ctx, `SELECT visibility FROM account_artists WHERE account_id='test' AND artist_id=7202`).Scan(&oldVisibility); err != nil || oldVisibility != "public" {
+		t.Fatalf("public snapshot was overwritten: visibility=%q err=%v", oldVisibility, err)
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT visibility FROM account_artists WHERE account_id='test' AND artist_id=7203`).Scan(&oldVisibility); err != nil || oldVisibility != "private" {
+		t.Fatalf("private snapshot visibility=%q err=%v", oldVisibility, err)
+	}
+}
+
+func TestPublicFollowingCompletionCannotClearUnseenRelations(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	if err := s.SaveAccount(ctx, domain.Account{ID: "test", Name: "visibility", TokenFile: "unused"}); err != nil {
+		t.Fatal(err)
+	}
+	seedArtist(t, s, 7210)
+	seedArtist(t, s, 7211)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run,visibility) VALUES('test',7210,1,'older','private')`); err != nil {
+		t.Fatal(err)
+	}
+	job, err := claimJobByKey(t, s, "following:test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicCtx := domain.WithFollowVisibility(domain.WithAccount(ctx, "test"), "public")
+	if err = s.CommitFollowingBatch(publicCtx, job, "public-run", []domain.Artist{{ID: 7211, Name: "public"}}, json.RawMessage(`{"cursor":""}`), true); err != nil {
+		t.Fatal(err)
+	}
+	var stillFollowed bool
+	if err = s.db.QueryRowContext(ctx, `SELECT followed FROM account_artists WHERE account_id='test' AND artist_id=7210`).Scan(&stillFollowed); err != nil || !stillFollowed {
+		t.Fatalf("public completion cleared unseen private relation: followed=%t err=%v", stillFollowed, err)
+	}
 }
 
 func TestFollowingBatchRollsBackEarlierItemsOnMidBatchError(t *testing.T) {

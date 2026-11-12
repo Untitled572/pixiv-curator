@@ -65,43 +65,92 @@ func (s *Ingest) Resume(ctx context.Context, id string) error {
 
 func (s *Ingest) following(ctx context.Context, j domain.Job) error {
 	var payload struct {
-		Cursor string `json:"cursor"`
+		Cursor    string `json:"cursor"`
+		AccountID string `json:"account_id"`
+		Restrict  string `json:"restrict"`
 	}
 	if json.Unmarshal(j.Payload, &payload) != nil {
 		return taskInvalid()
 	}
+	phase := payload.Restrict
+	if phase == "" {
+		phase = "public"
+	}
+	if !domain.ValidFollowVisibility(phase) {
+		return taskInvalid()
+	}
+	restrictedClient, supportsRestricted := s.client.(interface {
+		FollowingRestricted(context.Context, string, string) (pixiv.FollowingPage, error)
+	})
+	accountID := domain.ContextAccount(ctx)
+	withRestrictedSnapshot := supportsRestricted && accountID != ""
+	if phase == "private" && !withRestrictedSnapshot {
+		return taskInvalid()
+	}
 	cursor := payload.Cursor
-	// Each job is a fresh snapshot; the durable payload tracks its continuation.
-	for pages := 0; pages < 10000; pages++ {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		page, err := s.client.Following(ctx, cursor)
-		if err != nil {
-			return classify(err)
-		}
-		if page.Next != "" && page.Next == cursor {
-			return taskInvalid()
-		}
-		artists := make([]domain.Artist, 0, len(page.Artists))
-		for _, raw := range page.Artists {
-			a, err := pixiv.NormalizeArtist(raw)
+	// Public and private pages share one job/run. Only the final page of the
+	// final phase completes the snapshot and marks unseen follows as removed.
+	for {
+		transitioned := false
+		for pages := 0; pages < 10000; pages++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var page pixiv.FollowingPage
+			var err error
+			if withRestrictedSnapshot {
+				page, err = restrictedClient.FollowingRestricted(ctx, cursor, phase)
+			} else {
+				page, err = s.client.Following(ctx, cursor)
+			}
 			if err != nil {
 				return classify(err)
 			}
-			artists = append(artists, a)
+			if page.Next != "" && page.Next == cursor {
+				return taskInvalid()
+			}
+			artists := make([]domain.Artist, 0, len(page.Artists))
+			for _, raw := range page.Artists {
+				a, err := pixiv.NormalizeArtist(raw)
+				if err != nil {
+					return classify(err)
+				}
+				artists = append(artists, a)
+			}
+
+			nextPhase, nextCursor := phase, page.Next
+			complete := page.Next == ""
+			if complete && phase == "public" && withRestrictedSnapshot {
+				nextPhase, nextCursor, complete = "private", "", false
+			}
+			nextPayload, _ := json.Marshal(struct {
+				Cursor   string `json:"cursor"`
+				Account  string `json:"account_id"`
+				Restrict string `json:"restrict"`
+				Complete bool   `json:"complete,omitempty"`
+			}{Cursor: nextCursor, Account: accountID, Restrict: nextPhase, Complete: complete})
+			batchCtx := domain.WithFollowVisibility(ctx, phase)
+			if err = s.store.CommitFollowingBatch(batchCtx, j, j.ID, artists, nextPayload, complete); err != nil {
+				return classify(err)
+			}
+			slog.Info("following page indexed", "job_id", j.ID, "account_id", accountID, "restrict", phase, "items", len(artists), "complete", complete)
+			if page.Next == "" {
+				if phase == "public" && withRestrictedSnapshot {
+					phase, cursor = "private", ""
+					transitioned = true
+					break
+				}
+				return nil
+			}
+			cursor = page.Next
 		}
-		nextPayload, _ := json.Marshal(map[string]string{"cursor": page.Next, "account_id": domain.ContextAccount(ctx)})
-		if err = s.store.CommitFollowingBatch(ctx, j, j.ID, artists, nextPayload, page.Next == ""); err != nil {
-			return classify(err)
+		if transitioned {
+			continue
 		}
-		slog.Info("following page indexed", "job_id", j.ID, "account_id", domain.ContextAccount(ctx), "items", len(artists), "complete", page.Next == "")
-		if page.Next == "" {
-			return nil
-		}
-		cursor = page.Next
+		// The saved cursor remains in the current phase, so a retry resumes
+		// exactly where this invocation stopped.
+		return &jobs.JobError{Class: jobs.Failed, Code: "PAGE_BUDGET_EXCEEDED"}
 	}
-	return &jobs.JobError{Class: jobs.Failed, Code: "PAGE_BUDGET_EXCEEDED"}
 }
 func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 	var payload struct {

@@ -30,6 +30,9 @@ type RecommendationClient interface {
 	RelatedArtworks(context.Context, int64) ([]pixiv.RawArtwork, error)
 	ArtistArtworks(context.Context, int64, string) (pixiv.ArtworkPage, error)
 }
+type RelatedArtistPreviewClient interface {
+	RelatedArtistPreviews(context.Context, int64) ([]pixiv.UserPreview, error)
+}
 type Recommender struct {
 	store  RecommendationRepository
 	client RecommendationClient
@@ -140,19 +143,41 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			candidates[a.ID] = a
 			sources[a.ID] = append(sources[a.ID], source)
 		}
+		previewSamples := map[int64][]domain.Artwork{}
 		ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
 		if err != nil {
 			return err
 		}
 		if ok {
-			users, err := s.client.RelatedArtists(ctx, seed.ID)
-			if err != nil {
-				if haltOptional(err) {
-					return classify(err)
+			if previewClient, supported := s.client.(RelatedArtistPreviewClient); supported {
+				previews, err := previewClient.RelatedArtistPreviews(ctx, seed.ID)
+				if err != nil {
+					if haltOptional(err) {
+						return classify(err)
+					}
+				} else {
+					for _, preview := range previews {
+						add(preview.User, recommend.SourceRelatedArtist)
+						if _, accepted := candidates[preview.User.ID]; !accepted {
+							continue
+						}
+						samples, err := normalizeRecommendationPreviewSamples(preview.Illusts, preview.User.ID, budget.CandidateSamplesPerArtist)
+						if err != nil {
+							return classify(err)
+						}
+						previewSamples[preview.User.ID] = mergeRecommendationPreviewSamples(previewSamples[preview.User.ID], samples, budget.CandidateSamplesPerArtist)
+					}
 				}
 			} else {
-				for _, raw := range users {
-					add(raw, recommend.SourceRelatedArtist)
+				users, err := s.client.RelatedArtists(ctx, seed.ID)
+				if err != nil {
+					if haltOptional(err) {
+						return classify(err)
+					}
+				} else {
+					for _, raw := range users {
+						add(raw, recommend.SourceRelatedArtist)
+					}
 				}
 			}
 		}
@@ -176,6 +201,29 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		}
 		if err = s.store.CommitRecommendationRecall(ctx, j, run.ID, seed.ID, candidates, sources, budget.CandidateArtists); err != nil {
 			return classify(err)
+		}
+		if len(previewSamples) > 0 {
+			admitted, err := s.store.RecommendationCandidates(ctx, run.ID, 0)
+			if err != nil {
+				return classify(err)
+			}
+			admittedIDs := make(map[int64]bool, len(admitted))
+			for _, candidate := range admitted {
+				admittedIDs[candidate.ArtistID] = true
+			}
+			ids := make([]int64, 0, len(previewSamples))
+			for id := range previewSamples {
+				ids = append(ids, id)
+			}
+			sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+			for _, id := range ids {
+				if !admittedIDs[id] || len(previewSamples[id]) == 0 {
+					continue
+				}
+				if err = s.store.CommitSeedSamples(ctx, j, id, previewSamples[id]); err != nil {
+					return classify(err)
+				}
+			}
 		}
 	}
 	// Freeze the profile once so resumed candidate scoring can be replayed offline.
@@ -218,20 +266,22 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			return classify(err)
 		}
 		if len(samples) == 0 {
-			ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
-			if err != nil {
-				return err
-			}
-			if ok {
-				page, err := s.client.ArtistArtworks(ctx, candidate.ArtistID, "")
+			if _, hasRelatedPreviews := s.client.(RelatedArtistPreviewClient); !hasRelatedPreviews {
+				ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
 				if err != nil {
-					if haltOptional(err) {
-						return classify(err)
-					}
-				} else {
-					samples, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
+					return err
+				}
+				if ok {
+					page, err := s.client.ArtistArtworks(ctx, candidate.ArtistID, "")
 					if err != nil {
-						return classify(err)
+						if haltOptional(err) {
+							return classify(err)
+						}
+					} else {
+						samples, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
+						if err != nil {
+							return classify(err)
+						}
 					}
 				}
 			}
@@ -248,6 +298,37 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		}
 	}
 	return classify(s.store.CompleteRecommendation(ctx, j, run.ID))
+}
+func normalizeRecommendationPreviewSamples(raw []pixiv.RawArtwork, artistID int64, max int) ([]domain.Artwork, error) {
+	matching := make([]pixiv.RawArtwork, 0, len(raw))
+	for _, artwork := range raw {
+		if artwork.User.ID == artistID {
+			matching = append(matching, artwork)
+		}
+	}
+	return normalizeSamples(matching, artistID, max)
+}
+
+func mergeRecommendationPreviewSamples(existing, incoming []domain.Artwork, max int) []domain.Artwork {
+	byID := make(map[int64]domain.Artwork, len(existing)+len(incoming))
+	for _, artwork := range append(append([]domain.Artwork(nil), existing...), incoming...) {
+		if artwork.ID > 0 {
+			byID[artwork.ID] = artwork
+		}
+	}
+	ids := make([]int64, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	if max > 0 && len(ids) > max {
+		ids = ids[:max]
+	}
+	result := make([]domain.Artwork, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, byID[id])
+	}
+	return result
 }
 func (s *Recommender) reserve(ctx context.Context, j domain.Job, run string, max int) (bool, error) {
 	ok, err := s.store.ReserveRecommendationRequest(ctx, j, run, max)

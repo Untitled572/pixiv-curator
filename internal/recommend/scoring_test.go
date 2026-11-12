@@ -10,9 +10,9 @@ import (
 
 func TestDefaultBudget(t *testing.T) {
 	want := Budget{
-		SeedArtists: 30, SeedSamplesPerArtist: 8,
-		CandidateArtists: 60, CandidateSamplesPerArtist: 4,
-		TotalRequests: 300,
+		SeedArtists: 8, SeedSamplesPerArtist: 4,
+		CandidateArtists: 12, CandidateSamplesPerArtist: 2,
+		TotalRequests: 60,
 	}
 	if got := DefaultBudget(); got != want {
 		t.Fatalf("DefaultBudget() = %+v, want %+v", got, want)
@@ -84,7 +84,7 @@ func TestScoreCandidateComponentsReasonsAndStringSampleIDs(t *testing.T) {
 			{ID: 50, Tags: []string{"red"}, Bookmarks: int64ptr(999999)},
 		},
 	}
-	result := ScoreCandidate(profile, candidate, DefaultBudget())
+	result := ScoreCandidate(profile, candidate, Budget{CandidateSamplesPerArtist: 4})
 	median := int64(550)
 	quality := math.Log1p(float64(median)) / math.Log1p(qualityBookmarkScale)
 	wantScore := clamp(0.55*0.6 + 0.25*0.5 + 0.20*quality - 0.20)

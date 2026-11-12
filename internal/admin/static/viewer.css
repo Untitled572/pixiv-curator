@@ -1,0 +1,28 @@
+.pixiv-viewer-dialog{width:min(1180px,calc(100vw - 28px));max-width:none;max-height:calc(100dvh - 24px);padding:0;border:1px solid rgba(255,255,255,.2);border-radius:18px;background:#11151b;color:#f1f4f8;box-shadow:0 24px 80px rgba(0,0,0,.48);overflow:auto}
+.pixiv-viewer-dialog::backdrop{background:rgba(8,12,18,.78)}
+.pixiv-viewer-shell{display:grid;gap:14px;padding:clamp(14px,2.3vw,26px)}
+.pixiv-viewer-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.pixiv-viewer-heading{min-width:0}
+.pixiv-viewer-eyebrow{margin:0 0 5px;color:#9baabc;font-size:12px;letter-spacing:.08em}
+.pixiv-viewer-title{margin:0;font-size:clamp(18px,2vw,25px);line-height:1.3;overflow-wrap:anywhere}
+.pixiv-viewer-artist{margin:5px 0 0;color:#bdc7d4;font-size:14px}
+.pixiv-viewer-close,.pixiv-viewer-page-button,.pixiv-viewer-retry{min-height:38px;padding:7px 13px;border:1px solid #46505f;border-radius:9px;background:#202733;color:#f5f7fa;font:inherit;cursor:pointer}
+.pixiv-viewer-close:hover,.pixiv-viewer-page-button:hover:not(:disabled),.pixiv-viewer-retry:hover{background:#303b4b}
+.pixiv-viewer-metadata{display:grid;gap:8px}
+.pixiv-viewer-classification,.pixiv-viewer-tags{display:flex;flex-wrap:wrap;gap:7px}
+.pixiv-viewer-chip,.pixiv-viewer-tag,.pixiv-viewer-empty-tags{padding:4px 9px;border:1px solid #394351;border-radius:999px;background:#1c232d;color:#dce4ed;font-size:12px}
+.pixiv-viewer-frame{position:relative;display:grid;place-items:center;min-height:180px;max-height:min(68dvh,900px);overflow:auto;border-radius:12px;background:#080a0d}
+.pixiv-viewer-image{display:block;width:auto;height:auto;max-width:100%;max-height:min(68dvh,900px);object-fit:contain}
+.pixiv-viewer-image[hidden]{display:none}
+.pixiv-viewer-status{margin:0;padding:24px 12px;color:#c1c9d3;text-align:center}
+.pixiv-viewer-dimensions{position:absolute;right:10px;bottom:8px;margin:0;padding:3px 7px;border-radius:5px;background:rgba(0,0,0,.72);color:#fff;font-size:12px}
+.pixiv-viewer-dimensions:empty{display:none}
+.pixiv-viewer-retry{margin:0 0 16px}
+.pixiv-viewer-footer{display:grid;gap:12px}
+.pixiv-viewer-pager{display:flex;align-items:center;justify-content:center;gap:14px}
+.pixiv-viewer-page-status{min-width:70px;color:#c1c9d3;text-align:center;font-variant-numeric:tabular-nums}
+.pixiv-viewer-page-button:disabled{opacity:.45;cursor:default}
+.pixiv-viewer-links{display:flex;align-items:center;flex-wrap:wrap;gap:10px}
+.pixiv-viewer-link{color:#a8d3ff;text-decoration:underline;text-underline-offset:3px}
+.pixiv-viewer-url{flex:1 1 320px;min-width:0;padding:8px 10px;border:1px solid #394351;border-radius:7px;background:#171c24;color:#b9c4d1;font:12px ui-monospace,Consolas,monospace}
+@media(max-width:600px){.pixiv-viewer-dialog{width:calc(100vw - 14px);max-height:calc(100dvh - 12px);border-radius:12px}.pixiv-viewer-shell{gap:10px;padding:12px}.pixiv-viewer-frame{min-height:140px;max-height:64dvh}.pixiv-viewer-image{max-height:64dvh}.pixiv-viewer-links{align-items:stretch;flex-direction:column}.pixiv-viewer-url{flex-basis:auto;width:100%;box-sizing:border-box}.pixiv-viewer-pager{gap:8px}.pixiv-viewer-page-button{padding-inline:9px}}

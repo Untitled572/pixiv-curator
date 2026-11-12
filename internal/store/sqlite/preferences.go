@@ -44,6 +44,16 @@ func (s *Store) SetArtworkPreference(ctx context.Context, id int64, value string
 	return tx.Commit()
 }
 func (s *Store) CleanupSelectionHistory(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM selection_history WHERE selected_at<?`, time.Now().Add(-30*time.Minute).UnixMilli())
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM selection_history WHERE selected_at<?`, time.Now().Add(-30*time.Minute).UnixMilli()); err != nil {
+		return err
+	}
+	if err = trimDistributionHistory(ctx, tx, time.Now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -149,6 +149,93 @@ func TestRecommendationSeedsAndSamplesRequireTrustedSeed(t *testing.T) {
 	}
 }
 
+func TestRecommendationSeedsPrioritizeRecentFollowsThenCreationButReturnIDOrder(t *testing.T) {
+	s := openRecommendationStore(t)
+	ctx := context.Background()
+	for _, id := range []int64{5, 10, 20, 30, 40} {
+		insertArtist(t, s, id, "seed")
+		if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved',remote_followed=1,created_at=? WHERE id=?`, id*10, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO accounts(id,name,token_file,created_at,updated_at) VALUES('seed-account','seed','unused',1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, relation := range []struct {
+		artistID   int64
+		followedAt int64
+		followed   int
+	}{{5, 999, 0}, {10, 200, 1}, {30, 300, 1}} {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,followed_at) VALUES('seed-account',?,?,?)`, relation.artistID, relation.followed, relation.followedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET created_at=CASE id WHEN 20 THEN 2000 WHEN 40 THEN 1000 ELSE created_at END`); err != nil {
+		t.Fatal(err)
+	}
+	seeds, err := s.RecommendationSeeds(ctx, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seeds) != 3 || seeds[0].ID != 10 || seeds[1].ID != 20 || seeds[2].ID != 30 {
+		t.Fatalf("recent subset in processing order = %+v, want IDs [10 20 30]", seeds)
+	}
+}
+
+func TestCommitSeedSamplesAllowsOnlyCurrentPendingCandidatesWithoutCursorAdvance(t *testing.T) {
+	s := openRecommendationStore(t)
+	ctx, runID, job := runningRecommendation(t, s)
+	candidates := map[int64]domain.Artist{
+		71: {ID: 71, Name: "blocked after recall"},
+		72: {ID: 72, Name: "rejected after recall"},
+		73: {ID: 73, Name: "eligible pending"},
+	}
+	if err := s.CommitRecommendationRecall(ctx, job, runID, 77, candidates, nil, 3); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='blocked' WHERE id=71`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='rejected' WHERE id=72`); err != nil {
+		t.Fatal(err)
+	}
+	valid := domain.Artwork{ID: 7301, ArtistID: 73, Title: "preview", Kind: "illust", PageCount: 1, Rating: "safe", AIStatus: "non_ai", MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/img-original/7301_p0.jpg", State: "indexed"}}}
+	wrongAuthor := valid
+	wrongAuthor.ID = 7310
+	wrongAuthor.ArtistID = 71
+	if err := s.CommitSeedSamples(ctx, job, 73, []domain.Artwork{wrongAuthor}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("cross-artist sample error=%v, want ErrInvalid", err)
+	}
+	for _, id := range []int64{71, 72} {
+		art := valid
+		art.ID = id * 100
+		art.ArtistID = id
+		if err := s.CommitSeedSamples(ctx, job, id, []domain.Artwork{art}); !errors.Is(err, domain.ErrConflict) {
+			t.Errorf("blocked/rejected candidate %d error=%v, want ErrConflict", id, err)
+		}
+	}
+	if err := s.CommitSeedSamples(ctx, job, 73, []domain.Artwork{valid}); err != nil {
+		t.Fatalf("current pending candidate preview rejected: %v", err)
+	}
+	run, err := s.RecommendationRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.SeedCursor != 77 || run.CandidateCursor != 0 {
+		t.Fatalf("sample commit advanced cursor: seed=%d candidate=%d", run.SeedCursor, run.CandidateCursor)
+	}
+	if err := s.CompleteRecommendation(ctx, job, runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE recommendation_runs SET finished_at=? WHERE id=?`, time.Now().Add(-2*time.Hour).UnixMilli(), runID); err != nil {
+		t.Fatal(err)
+	}
+	_, _, nextRunJob := runningRecommendation(t, s)
+	if err := s.CommitSeedSamples(ctx, nextRunJob, 73, []domain.Artwork{valid}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-run candidate preview error=%v, want ErrConflict", err)
+	}
+}
+
 func TestRecommendationCommitRequiresLiveLease(t *testing.T) {
 	s := openRecommendationStore(t)
 	ctx, runID, j := runningRecommendation(t, s)

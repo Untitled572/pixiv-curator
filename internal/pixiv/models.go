@@ -148,9 +148,15 @@ func NormalizeArtwork(raw RawArtwork) (domain.Artwork, error) {
 		if item.original != "" {
 			pageState = "indexed"
 		}
+		width, height := raw.Width, raw.Height
+		if i > 0 {
+			// The Pixiv artwork dimensions describe its first image only. The
+			// API meta_pages entries provide URLs but no independent dimensions.
+			width, height = 0, 0
+		}
 		artwork.Pages = append(artwork.Pages, domain.Page{
 			Index: i, OriginalURL: item.original, PreviewURL: item.preview,
-			Width: raw.Width, Height: raw.Height, State: pageState,
+			Width: width, Height: height, State: pageState,
 		})
 	}
 	if complete {

@@ -23,8 +23,8 @@ type selectionPage struct {
 	page domain.SelectedPage
 }
 
-// Select chooses a qualified image page, writes its history row and prunes the
-// bounded history in one transaction.
+// Select chooses a qualified image page, writes both the bounded anti-repeat
+// record and the persistent distribution event in one transaction.
 func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain.SelectedPage, error) {
 	if req.ArtistID < 0 {
 		return domain.SelectedPage{}, domain.ErrInvalid
@@ -89,6 +89,12 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 	if _, err = tx.ExecContext(ctx, `INSERT INTO selection_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,?,?,?,?,?)`, selectionID, selectionCollection, selected.page.IllustID, selected.page.PageIndex, now, selectionID); err != nil {
 		return domain.SelectedPage{}, err
 	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,?,?,?,?,?)`, selectionID, selectionCollection, selected.page.IllustID, selected.page.PageIndex, now, selectionID); err != nil {
+		return domain.SelectedPage{}, err
+	}
+	if err = trimDistributionHistory(ctx, tx, time.UnixMilli(now)); err != nil {
+		return domain.SelectedPage{}, err
+	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM selection_history WHERE collection=? AND selected_at<?`, selectionCollection, now-selectionWindow.Milliseconds()); err != nil {
 		return domain.SelectedPage{}, err
 	}
@@ -102,33 +108,15 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 }
 
 // EligiblePage resolves a fixed artwork/page identity. Preview mode is intended
-// only for a separately authenticated management route and returns no original URL.
+// only for a separately authenticated management route and omits the original URL.
 func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview bool) (domain.SelectedPage, error) {
 	if id <= 0 || index < 0 {
 		return domain.SelectedPage{}, domain.ErrInvalid
 	}
 	if preview {
-		var result domain.SelectedPage
-		var originalURL, previewURL string
-		err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
-			FROM artworks a JOIN artists ar ON ar.id=a.artist_id JOIN image_pages p ON p.illust_id=a.id
-			WHERE a.id=? AND p.page_index=? AND p.media_state='indexed'`, id, index).
-			Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &originalURL, &previewURL)
-		if err != nil {
-			if err == sql.ErrNoRows {
-				return domain.SelectedPage{}, domain.ErrNotFound
-			}
-			return domain.SelectedPage{}, err
-		}
-		if previewURL == "" {
-			previewURL = originalURL
-		}
-		if !domain.ValidImageURL(previewURL) {
-			return domain.SelectedPage{}, domain.ErrNotFound
-		}
-		result.PreviewURL = previewURL
-		result.PreviewIsThumbnail = previewURL != originalURL
-		return result, nil
+		result, err := s.EligibleAdminPage(ctx, id, index)
+		result.OriginalURL = ""
+		return result, err
 	}
 
 	rules, err := preferences(ctx, s.db)
@@ -158,6 +146,36 @@ func (s *Store) EligiblePage(ctx context.Context, id int64, index int, preview b
 	if result.PreviewURL != "" && !domain.ValidImageURL(result.PreviewURL) {
 		result.PreviewURL = ""
 	}
+	return result, nil
+}
+
+// EligibleAdminPage resolves a fixed visible image page for management preview.
+// It deliberately ignores public rating and AI preferences, but never serves
+// hidden artwork or artwork from a blocked artist.
+func (s *Store) EligibleAdminPage(ctx context.Context, id int64, index int) (domain.SelectedPage, error) {
+	if id <= 0 || index < 0 {
+		return domain.SelectedPage{}, domain.ErrInvalid
+	}
+	var result domain.SelectedPage
+	var previewURL string
+	err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
+		FROM artworks a JOIN artists ar ON ar.id=a.artist_id JOIN image_pages p ON p.illust_id=a.id
+		WHERE a.id=? AND p.page_index=? AND p.media_state='indexed' AND a.visible=1 AND ar.review_status<>'blocked'`, id, index).
+		Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &result.OriginalURL, &previewURL)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return domain.SelectedPage{}, domain.ErrNotFound
+		}
+		return domain.SelectedPage{}, err
+	}
+	if previewURL == "" {
+		previewURL = result.OriginalURL
+	}
+	if !domain.ValidImageURL(result.OriginalURL) || !domain.ValidImageURL(previewURL) {
+		return domain.SelectedPage{}, domain.ErrNotFound
+	}
+	result.PreviewURL = previewURL
+	result.PreviewIsThumbnail = previewURL != result.OriginalURL
 	return result, nil
 }
 
@@ -226,6 +244,7 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 		return domain.SelectionRules{}, false, err
 	}
 	result := global
+	result.ExcludeManga = global.ExcludeManga || req.ExcludeManga
 	result.AllowedRatings = intersectStrings(global.AllowedRatings, req.AllowedRatings)
 	result.AllowedAI = intersectStrings(global.AllowedAI, req.AllowedAI)
 	result.IncludeTags = append(cloneGroups(global.IncludeTags), cloneGroups(req.IncludeTags)...)
@@ -382,6 +401,9 @@ func selectionWhere(rules domain.SelectionRules, artistID int64, accountID strin
 		where = appendAnd(where, `a.artist_id=?`)
 		args = append(args, artistID)
 	}
+	if rules.ExcludeManga {
+		where = appendAnd(where, `a.kind<>'manga'`)
+	}
 	if accountID != "" {
 		where = appendAnd(where, `EXISTS (SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.account_id=? AND aa.artist_id=a.artist_id AND ac.deleted=0)`)
 		args = append(args, accountID)
@@ -414,11 +436,11 @@ func selectionWhere(rules domain.SelectionRules, artistID int64, accountID strin
 	}
 	switch normalizedOrientation(rules.Orientation) {
 	case "portrait":
-		where = appendAnd(where, `p.height>p.width AND p.width>0`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.height>p.width`)
 	case "landscape":
-		where = appendAnd(where, `p.width>p.height AND p.height>0`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width>p.height`)
 	case "square":
-		where = appendAnd(where, `p.width=p.height AND p.width>0`)
+		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width=p.height`)
 	}
 	for _, group := range rules.IncludeTags {
 		where = appendAnd(where, `EXISTS (SELECT 1 FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id AND t.normalized_name IN (`+placeholders(len(group))+`))`)

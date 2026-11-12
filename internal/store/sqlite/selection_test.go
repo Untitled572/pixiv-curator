@@ -2,9 +2,11 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -251,10 +253,10 @@ func TestBalancedSelectPrefersLikedPagesWithoutBypassingHardFilters(t *testing.T
 	}
 }
 
-func TestEligiblePageUsesFixedIdentityAndPreviewIgnoresReviewAndContentRules(t *testing.T) {
+func TestEligiblePageUsesFixedIdentityAndAdminPreviewHonorsVisibilityAndBlocks(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
-	seedEligibleArtist(t, s, 1100, "blocked")
+	seedEligibleArtist(t, s, 1100, "approved")
 	seedSelectionArtwork(t, s, 1101, 1100, "r18g", "ai", nil, 2)
 	putSelectionRules(t, s, domain.SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Orientation: "any"})
 
@@ -270,7 +272,28 @@ func TestEligiblePageUsesFixedIdentityAndPreviewIgnoresReviewAndContentRules(t *
 		t.Fatalf("preview did not preserve fixed page identity or hide original URL: first=%+v second=%+v", first, second)
 	}
 	if _, err := s.EligiblePage(ctx, 1101, 1, false); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("blocked/r18g/ai supply error = %v, want ErrNotFound", err)
+		t.Fatalf("r18g/ai public supply error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='blocked' WHERE id=1100`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EligiblePage(ctx, 1101, 1, true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("blocked thumbnail preview error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.EligibleAdminPage(ctx, 1101, 1); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("blocked original preview error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved' WHERE id=1100`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artworks SET visible=0 WHERE id=1101`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EligiblePage(ctx, 1101, 1, true); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("hidden thumbnail preview error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.EligibleAdminPage(ctx, 1101, 1); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("hidden original preview error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -340,5 +363,166 @@ func TestSelectUnknownRequiresExplicitGlobalPermissionAndKeepsHardExclusions(t *
 	}
 	if _, err = s.EligiblePage(ctx, 1612, 0, false); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("old URL bypassed dislike: %v", err)
+	}
+}
+
+func TestExcludeMangaIsOptInAndGlobalPreferenceCannotBeRelaxed(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1800, "approved")
+	seedEligibleArtist(t, s, 1801, "approved")
+	seedSelectionArtwork(t, s, 1810, 1800, "safe", "non_ai", nil, 1)
+	seedSelectionArtwork(t, s, 1811, 1801, "safe", "non_ai", nil, 2)
+	if _, err := s.db.ExecContext(ctx, `UPDATE artworks SET kind='manga' WHERE id=1810`); err != nil {
+		t.Fatal(err)
+	}
+	global := domain.DefaultRules()
+	putSelectionRules(t, s, global)
+	base := domain.SelectionRequest{SelectionRules: domain.SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Orientation: "any"}, ArtistID: 1800}
+	if got, err := s.Select(ctx, base); err != nil || got.IllustID != 1810 {
+		t.Fatalf("default false must preserve manga: selected=%+v err=%v", got, err)
+	}
+
+	base.ExcludeManga = true
+	if _, err := s.Select(ctx, base); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("request exclusion did not exclude manga: %v", err)
+	}
+	base.ExcludeManga = false
+	global.ExcludeManga = true
+	encoded, err := json.Marshal(global)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutSetting(ctx, "preferences", encoded, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Select(ctx, base); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("request false relaxed global manga exclusion: %v", err)
+	}
+	base.ArtistID = 1801
+	got, err := s.Select(ctx, base)
+	if err != nil || got.IllustID != 1811 {
+		t.Fatalf("non-manga multi-page candidate was excluded: selected=%+v err=%v", got, err)
+	}
+}
+
+func TestUnknownPageDimensionsOnlyMatchUnrestrictedOrientation(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1820, "approved")
+	seedSelectionArtwork(t, s, 1821, 1820, "safe", "non_ai", nil, 2)
+	if _, err := s.db.ExecContext(ctx, `UPDATE image_pages SET width=0,height=0 WHERE illust_id=1821 AND page_index=1`); err != nil {
+		t.Fatal(err)
+	}
+	pageMatches := func(rules domain.SelectionRules) int {
+		t.Helper()
+		where, args, err := selectionWhere(rules, 0, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		args = append(args, int64(1821), 1)
+		var count int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` AND a.id=? AND p.page_index=?`, args...).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	base := domain.DefaultRules()
+	if got := pageMatches(base); got != 1 {
+		t.Fatalf("orientation=any excluded unknown-size fixed page: %d", got)
+	}
+	for _, orientation := range []string{"portrait", "landscape", "square"} {
+		rules := base
+		rules.Orientation = orientation
+		if got := pageMatches(rules); got != 0 {
+			t.Errorf("orientation=%s matched unknown-size page: %d", orientation, got)
+		}
+	}
+	for _, rule := range []domain.SelectionRules{
+		{MinWidth: 1},
+		{MinHeight: 1},
+	} {
+		rules := base
+		rules.MinWidth, rules.MinHeight = rule.MinWidth, rule.MinHeight
+		if got := pageMatches(rules); got != 0 {
+			t.Errorf("minimum size matched unknown dimension: rules=%+v count=%d", rules, got)
+		}
+	}
+	if _, err := s.EligiblePage(ctx, 1821, 1, false); err != nil {
+		t.Fatalf("fixed page must remain eligible under orientation=any: %v", err)
+	}
+}
+
+func TestPageDimensionsMigrationClearsUnverifiedSecondaryPages(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "dimensions.db")
+	version, _ := findMigrationContaining(t, "UPDATE image_pages SET width=0,height=0")
+	entries, err := migrations.ReadDir("migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < version-1; i++ {
+		body, readErr := migrations.ReadFile("migrations/" + entries[i].Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if _, err := db.ExecContext(ctx, string(body)); err != nil {
+			t.Fatalf("apply pre-dimension migration %s: %v", entries[i].Name(), err)
+		}
+		if _, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version,applied_at) VALUES(?,?)`, i+1, int64(i+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, statement := range []string{
+		`INSERT INTO artists(id,name,review_status,created_at,updated_at) VALUES(1830,'dimensions artist','approved',1,1)`,
+		`INSERT INTO artworks(id,artist_id,title,kind,page_count,rating,ai_status,metadata_state,created_at,updated_at) VALUES(1831,1830,'dimensions','illust',2,'safe','non_ai','complete',1,1)`,
+		`INSERT INTO image_pages(illust_id,page_index,original_url,width,height,media_state,created_at,updated_at) VALUES(1831,0,'https://i.pximg.net/img-original/1831_p0.jpg',1600,900,'indexed',1,1),(1831,1,'https://i.pximg.net/img-original/1831_p1.jpg',1600,900,'indexed',1,1)`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgraded.Close()
+	artwork := domain.Artwork{
+		ID: 1831, ArtistID: 1830, Kind: "illust", PageCount: 2, Rating: "safe", AIStatus: "non_ai", MetadataState: "complete",
+		Pages: []domain.Page{
+			{Index: 0, OriginalURL: "https://i.pximg.net/img-original/1831_p0.jpg", Width: 1600, Height: 900, State: "indexed"},
+			{Index: 1, OriginalURL: "https://i.pximg.net/img-original/1831_p1.jpg", Width: 1600, Height: 900, State: "indexed"},
+		},
+	}
+	var firstWidth, firstHeight, nextWidth, nextHeight int
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT width,height FROM image_pages WHERE illust_id=1831 AND page_index=0`).Scan(&firstWidth, &firstHeight); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT width,height FROM image_pages WHERE illust_id=1831 AND page_index=1`).Scan(&nextWidth, &nextHeight); err != nil {
+		t.Fatal(err)
+	}
+	if firstWidth != 1600 || firstHeight != 900 || nextWidth != 0 || nextHeight != 0 {
+		t.Fatalf("migration dimensions: first=%dx%d second=%dx%d", firstWidth, firstHeight, nextWidth, nextHeight)
+	}
+	artwork.Pages[1].Width, artwork.Pages[1].Height = 0, 0
+	if err := upgraded.UpsertArtwork(ctx, artwork); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT width,height FROM image_pages WHERE illust_id=1831 AND page_index=1`).Scan(&nextWidth, &nextHeight); err != nil {
+		t.Fatal(err)
+	}
+	if nextWidth != 0 || nextHeight != 0 {
+		t.Fatalf("upsert restored unverified first-page dimensions to later page: %dx%d", nextWidth, nextHeight)
 	}
 }

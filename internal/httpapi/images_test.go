@@ -34,6 +34,9 @@ func TestSelectionQueryStrictValidationAndMappings(t *testing.T) {
 		"?collection=all",
 		"?r18=3",
 		"?ai_type=maybe",
+		"?exclude_manga=",
+		"?exclude_manga=2",
+		"?exclude_manga=0&exclude_manga=1",
 		"?min_width=0",
 		"?min_height=abc",
 		"?user_id=0",
@@ -52,14 +55,14 @@ func TestSelectionQueryStrictValidationAndMappings(t *testing.T) {
 		})
 	}
 
-	parsed, err := selectionQuery(httptest.NewRequest(http.MethodGet, "/random?format=json&collection=preferred&r18=2&ai_type=any&min_width=640&min_height=480&user_id=9007199254740993&account_id=legacy_01-X&orientation=landscape&strategy=random", nil))
+	parsed, err := selectionQuery(httptest.NewRequest(http.MethodGet, "/random?format=json&collection=preferred&r18=2&ai_type=any&exclude_manga=1&min_width=640&min_height=480&user_id=9007199254740993&account_id=legacy_01-X&orientation=landscape&strategy=random", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(parsed.AllowedRatings, []string{"safe", "r18", "r18g"}) || !reflect.DeepEqual(parsed.AllowedAI, []string{"non_ai", "ai"}) {
 		t.Fatalf("enum mapping: ratings=%v ai=%v", parsed.AllowedRatings, parsed.AllowedAI)
 	}
-	if parsed.MinWidth != 640 || parsed.MinHeight != 480 || parsed.ArtistID != 9007199254740993 || parsed.AccountID != "legacy_01-X" || parsed.Orientation != "landscape" || parsed.Strategy != "random" {
+	if parsed.MinWidth != 640 || parsed.MinHeight != 480 || parsed.ArtistID != 9007199254740993 || parsed.AccountID != "legacy_01-X" || parsed.Orientation != "landscape" || parsed.Strategy != "random" || !parsed.ExcludeManga {
 		t.Fatalf("parsed selection query=%+v", parsed)
 	}
 
@@ -84,8 +87,12 @@ func TestSelectionQueryStrictValidationAndMappings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.AllowedRatings != nil || parsed.AllowedAI != nil || parsed.IncludeTags != nil || parsed.ExcludeTags != nil || parsed.MinWidth != 0 || parsed.MinHeight != 0 || parsed.ArtistID != 0 {
+	if parsed.AllowedRatings != nil || parsed.AllowedAI != nil || parsed.ExcludeManga || parsed.IncludeTags != nil || parsed.ExcludeTags != nil || parsed.MinWidth != 0 || parsed.MinHeight != 0 || parsed.ArtistID != 0 {
 		t.Fatalf("omitted filters should stay unset for global preferences to apply: %+v", parsed)
+	}
+	parsed, err = selectionQuery(httptest.NewRequest(http.MethodGet, "/random?exclude_manga=0", nil))
+	if err != nil || parsed.ExcludeManga {
+		t.Fatalf("exclude_manga=0 mapping=%+v err=%v", parsed, err)
 	}
 }
 

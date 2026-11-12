@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"github.com/Untitled572/pixiv-curator/internal/jobs"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/store/sqlite"
 )
@@ -19,6 +20,15 @@ type fakePixivClient struct {
 	following func(context.Context, string) (pixiv.FollowingPage, error)
 	artist    func(context.Context, int64, string) (pixiv.ArtworkPage, error)
 	artwork   func(context.Context, int64) (pixiv.RawArtwork, error)
+}
+
+type fakeRestrictedPixivClient struct {
+	*fakePixivClient
+	restrictedFollowing func(context.Context, string, string) (pixiv.FollowingPage, error)
+}
+
+func (f *fakeRestrictedPixivClient) FollowingRestricted(ctx context.Context, cursor, visibility string) (pixiv.FollowingPage, error) {
+	return f.restrictedFollowing(ctx, cursor, visibility)
 }
 
 func (f *fakePixivClient) Following(ctx context.Context, cursor string) (pixiv.FollowingPage, error) {
@@ -313,5 +323,170 @@ func TestFollowingDefaultAvatarDoesNotInterruptSnapshot(t *testing.T) {
 		if artist.ReviewStatus != "approved" || !artist.CollectionEnabled || !artist.RemoteFollowed {
 			t.Fatalf("following did not enroll artist: %+v", artist)
 		}
+	}
+}
+
+func TestFollowingReadsPublicThenPrivateAndResumesOnlyPrivatePhase(t *testing.T) {
+	ctx := context.Background()
+	store, dbPath := openIngestTestStore(t)
+	if err := store.SaveAccount(ctx, domain.Account{ID: "restricted-account", Name: "restricted", TokenFile: "unused"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewCatalog(store).ImportArtist(ctx, 899); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run,visibility) VALUES('restricted-account',899,1,'previous-run','public')`); err != nil {
+		t.Fatal(err)
+	}
+	job := claimIngestJob(t, store, "sync_following", "restricted-following", json.RawMessage(`{"account_id":"restricted-account","cursor":""}`))
+	calls := make([]string, 0, 5)
+	privateFailure := true
+	base := &fakePixivClient{}
+	client := &fakeRestrictedPixivClient{fakePixivClient: base}
+	client.restrictedFollowing = func(_ context.Context, cursor, visibility string) (pixiv.FollowingPage, error) {
+		calls = append(calls, visibility+":"+cursor)
+		switch visibility + ":" + cursor {
+		case "public:":
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(801, "A"), rawArtist(802, "B")}, Next: "public-2"}, nil
+		case "public:public-2":
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(802, "B"), rawArtist(803, "C")}}, nil
+		case "private:":
+			var stillFollowed bool
+			if err := db.QueryRowContext(ctx, `SELECT followed=1 FROM account_artists WHERE account_id='restricted-account' AND artist_id=899`).Scan(&stillFollowed); err != nil || !stillFollowed {
+				t.Fatalf("unseen relations were cleared before private phase completed: followed=%v err=%v", stillFollowed, err)
+			}
+			var payload struct {
+				Restrict string `json:"restrict"`
+				Cursor   string `json:"cursor"`
+			}
+			persisted, err := store.Job(ctx, job.ID)
+			if err != nil || json.Unmarshal(persisted.Payload, &payload) != nil {
+				t.Fatalf("read persisted public-to-private handoff: job=%+v err=%v", persisted, err)
+			}
+			if persisted.State == "succeeded" || payload.Restrict != "private" || payload.Cursor != "" {
+				t.Fatalf("public phase completed or lost private handoff: job=%+v payload=%+v", persisted, payload)
+			}
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(803, "C"), rawArtist(804, "D")}, Next: "private-2"}, nil
+		case "private:private-2":
+			if privateFailure {
+				privateFailure = false
+				return pixiv.FollowingPage{}, errors.New("temporary private-page failure")
+			}
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(804, "D"), rawArtist(805, "E")}}, nil
+		default:
+			t.Fatalf("unexpected restricted request visibility=%q cursor=%q", visibility, cursor)
+			return pixiv.FollowingPage{}, nil
+		}
+	}
+	handler := NewIngest(store, client).Handlers()["sync_following"]
+	accountCtx := domain.WithAccount(ctx, "restricted-account")
+	if err := handler(accountCtx, job); err == nil {
+		t.Fatal("private page failure was not returned")
+	}
+	afterFailure, err := store.Job(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Restrict string `json:"restrict"`
+		Cursor   string `json:"cursor"`
+	}
+	if json.Unmarshal(afterFailure.Payload, &saved) != nil || saved.Restrict != "private" || saved.Cursor != "private-2" || afterFailure.State == "succeeded" {
+		t.Fatalf("private retry position was not persisted: job=%+v payload=%+v", afterFailure, saved)
+	}
+	if err := handler(accountCtx, afterFailure); err != nil {
+		t.Fatalf("resume private phase: %v", err)
+	}
+	wantCalls := "[public: public:public-2 private: private:private-2 private:private-2]"
+	if got := fmt.Sprint(calls); got != wantCalls {
+		t.Fatalf("restricted request sequence=%q; want %q", got, wantCalls)
+	}
+	finished, err := store.Job(ctx, job.ID)
+	if err != nil || finished.State != "succeeded" || finished.ProgressPages != 4 || finished.ProgressItems != 8 {
+		t.Fatalf("combined snapshot completion=%+v err=%v; want 4 committed pages and 8 returned artists", finished, err)
+	}
+
+	rows, err := db.QueryContext(ctx, `SELECT artist_id,visibility,last_seen_run FROM account_artists WHERE account_id=? ORDER BY artist_id`, "restricted-account")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := make(map[int64][2]string)
+	for rows.Next() {
+		var id int64
+		var visibility, runID string
+		if err := rows.Scan(&id, &visibility, &runID); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = [2]string{visibility, runID}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if got[899] != [2]string{"public", "previous-run"} {
+		t.Fatalf("unseen prior relation history=%v; want retained row from previous run", got[899])
+	}
+	delete(got, 899)
+	wantVisibility := map[int64]string{801: "public", 802: "public", 803: "private", 804: "private", 805: "private"}
+	if len(got) != len(wantVisibility) {
+		t.Fatalf("unique account artist rows=%v; want %d rows", got, len(wantVisibility))
+	}
+	for id, visibility := range wantVisibility {
+		if got[id] != [2]string{visibility, job.ID} {
+			t.Errorf("artist %d relation=%v; want visibility=%s and shared run %s", id, got[id], visibility, job.ID)
+		}
+	}
+	var oldFollowed bool
+	if err := db.QueryRowContext(ctx, `SELECT followed=1 FROM account_artists WHERE account_id='restricted-account' AND artist_id=899`).Scan(&oldFollowed); err != nil || oldFollowed {
+		t.Errorf("old unseen relation followed=%v err=%v after complete snapshot; want unfollowed only at final phase", oldFollowed, err)
+	}
+}
+
+func TestFollowingRestrictedEmptyPrivatePageCompletesWithoutAddingItems(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openIngestTestStore(t)
+	if err := store.SaveAccount(ctx, domain.Account{ID: "empty-private", Name: "empty", TokenFile: "unused"}); err != nil {
+		t.Fatal(err)
+	}
+	job := claimIngestJob(t, store, "sync_following", "empty-private-following", json.RawMessage(`{"account_id":"empty-private"}`))
+	var calls []string
+	base := &fakePixivClient{}
+	client := &fakeRestrictedPixivClient{fakePixivClient: base, restrictedFollowing: func(_ context.Context, cursor, visibility string) (pixiv.FollowingPage, error) {
+		calls = append(calls, visibility+":"+cursor)
+		if visibility == "public" {
+			return pixiv.FollowingPage{Artists: []pixiv.RawArtist{rawArtist(811, "public")}}, nil
+		}
+		return pixiv.FollowingPage{}, nil
+	}}
+	if err := NewIngest(store, client).Handlers()["sync_following"](domain.WithAccount(ctx, "empty-private"), job); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := store.Job(ctx, job.ID)
+	if err != nil || finished.State != "succeeded" || finished.ProgressPages != 2 || finished.ProgressItems != 1 {
+		t.Fatalf("empty private page should complete one page without adding items: job=%+v err=%v", finished, err)
+	}
+	if got := fmt.Sprint(calls); got != "[public: private:]" {
+		t.Fatalf("empty private request sequence=%q", got)
+	}
+}
+
+func TestFollowingRejectsInvalidVisibility(t *testing.T) {
+	ctx := context.Background()
+	store, _ := openIngestTestStore(t)
+	called := false
+	client := &fakePixivClient{following: func(context.Context, string) (pixiv.FollowingPage, error) {
+		called = true
+		return pixiv.FollowingPage{}, nil
+	}}
+	job := claimIngestJob(t, store, "sync_following", "invalid-following-phase", json.RawMessage(`{"restrict":"internal"}`))
+	err := NewIngest(store, client).Handlers()["sync_following"](ctx, job)
+	var jobErr *jobs.JobError
+	if !errors.As(err, &jobErr) || jobErr.Code != "INVALID_TASK" || called {
+		t.Fatalf("invalid visibility error=%v called=%v; want INVALID_TASK before upstream request", err, called)
 	}
 }

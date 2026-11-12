@@ -8,6 +8,7 @@ var ErrNoMatch = errors.New("no matching image")
 type SelectionRules struct {
 	AllowedRatings []string   `json:"allowed_ratings"`
 	AllowedAI      []string   `json:"allowed_ai"`
+	ExcludeManga   bool       `json:"exclude_manga"`
 	IncludeTags    [][]string `json:"included_tags"`
 	ExcludeTags    []string   `json:"excluded_tags"`
 	MinWidth       int        `json:"min_width"`
@@ -17,7 +18,7 @@ type SelectionRules struct {
 }
 
 func DefaultRules() SelectionRules {
-	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Orientation: "any", Strategy: "balanced"}
+	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, ExcludeManga: false, Orientation: "any", Strategy: "balanced"}
 }
 
 type SelectionRequest struct {

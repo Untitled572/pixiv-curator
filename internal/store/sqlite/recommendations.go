@@ -83,7 +83,20 @@ func (s *Store) RecommendationSeeds(ctx context.Context, limit int) ([]domain.Ar
 	if limit > 30 {
 		limit = 30
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM artists WHERE (review_status='approved' OR remote_followed=1) AND review_status NOT IN ('blocked','rejected') ORDER BY id LIMIT ?`, limit)
+	rows, err := s.db.QueryContext(ctx, `WITH eligible AS (
+		SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,a.created_at,
+			COALESCE(MAX(CASE WHEN aa.followed=1 AND ac.deleted=0 THEN aa.followed_at ELSE 0 END),0) AS followed_at
+		FROM artists a
+		LEFT JOIN account_artists aa ON aa.artist_id=a.id
+		LEFT JOIN accounts ac ON ac.id=aa.account_id
+		WHERE (a.review_status='approved' OR a.remote_followed=1) AND a.review_status NOT IN ('blocked','rejected')
+		GROUP BY a.id
+	), chosen AS (
+		SELECT * FROM eligible
+		ORDER BY CASE WHEN followed_at>0 THEN 0 ELSE 1 END,followed_at DESC,created_at DESC,id ASC
+		LIMIT ?
+	)
+	SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM chosen ORDER BY id ASC`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -474,11 +487,23 @@ func (s *Store) CommitSeedSamples(ctx context.Context, j domain.Job, artistID in
 		return err
 	}
 	defer tx.Rollback()
-	if err = checkRecommendationJobLease(ctx, tx, j); err != nil {
+	var payload struct {
+		RunID string `json:"run_id"`
+	}
+	if json.Unmarshal(j.Payload, &payload) != nil || payload.RunID == "" {
+		return domain.ErrLease
+	}
+	if err = checkRecommendationLease(ctx, tx, j, payload.RunID); err != nil {
 		return err
 	}
 	var allowed bool
-	if err = tx.QueryRowContext(ctx, `SELECT (review_status='approved' OR remote_followed=1) AND review_status NOT IN ('blocked','rejected') FROM artists WHERE id=?`, artistID).Scan(&allowed); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT
+		((a.review_status='approved' OR a.remote_followed=1) OR
+		 (a.review_status='pending' AND EXISTS (
+			SELECT 1 FROM recommendations r JOIN recommendation_runs rr ON rr.id=r.run_id
+			WHERE r.run_id=? AND r.artist_id=a.id AND rr.state='running'
+		 ))) AND a.review_status NOT IN ('blocked','rejected')
+		FROM artists a WHERE a.id=?`, payload.RunID, artistID).Scan(&allowed); err != nil {
 		return err
 	}
 	if !allowed {

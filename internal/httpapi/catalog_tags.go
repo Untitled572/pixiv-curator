@@ -14,6 +14,7 @@ type libraryTagStore interface {
 	ArtistTagPage(context.Context, string, string, int64, int) ([]domain.Artist, error)
 	ArtistTagPageStats(context.Context, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
 	ArtistTags(context.Context) ([]string, error)
+	ArtistTagsSearch(context.Context, string, int) ([]string, error)
 	SetArtistTagOverride(context.Context, int64, []string) error
 	ClearArtistTagOverride(context.Context, int64) error
 }
@@ -112,11 +113,32 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 	})
 	protect("GET /admin/api/library/tags", func(w http.ResponseWriter, r *http.Request) {
 		q, parseErr := url.ParseQuery(r.URL.RawQuery)
-		if parseErr != nil || len(q) != 0 {
+		if parseErr != nil {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		items, err := store.ArtistTags(r.Context())
+		for key, values := range q {
+			if (key != "q" && key != "limit") || len(values) != 1 {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+		}
+		limit := 0
+		if raw, ok := q["limit"]; ok {
+			n, err := strconv.Atoi(raw[0])
+			if err != nil || n < 1 || n > 100 {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			limit = n
+		}
+		var items []string
+		var err error
+		if len(q) == 0 {
+			items, err = store.ArtistTags(r.Context())
+		} else {
+			items, err = store.ArtistTagsSearch(r.Context(), q.Get("q"), limit)
+		}
 		if err != nil {
 			apiError(w, err)
 			return

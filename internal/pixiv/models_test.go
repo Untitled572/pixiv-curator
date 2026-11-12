@@ -54,6 +54,9 @@ func TestNormalizeArtworkMultiPageAndUnknownEnums(t *testing.T) {
 	if got.Kind != "manga" || got.Rating != "unknown" || got.AIStatus != "unknown" || got.MetadataState != "complete" || len(got.Pages) != 2 || got.Pages[1].Index != 1 {
 		t.Fatalf("unexpected normalized artwork: %+v", got)
 	}
+	if got.Pages[0].Width != 1200 || got.Pages[0].Height != 900 || got.Pages[1].Width != 0 || got.Pages[1].Height != 0 {
+		t.Fatalf("work-level dimensions must only describe the first page: %+v", got.Pages)
+	}
 
 	var unknown RawArtwork
 	if err := json.Unmarshal([]byte(`{"id":102,"user":{"id":42},"type":"future-kind","page_count":1,"meta_single_page":{"original_image_url":"https://i.pximg.net/img-original/b.jpg"}}`), &unknown); err != nil {
@@ -189,7 +192,7 @@ func TestNormalizeMultiPageUsesArtworkPreviewForFirstPage(t *testing.T) {
 	if got.Pages[0].PreviewURL != raw.ImageURLs.Medium {
 		t.Fatal("first-page artwork preview was lost")
 	}
-	if got.Pages[1].PreviewURL != "" || got.Pages[1].OriginalURL == "" {
+	if got.Pages[0].Width != 0 || got.Pages[0].Height != 0 || got.Pages[1].PreviewURL != "" || got.Pages[1].OriginalURL == "" || got.Pages[1].Width != 0 || got.Pages[1].Height != 0 {
 		t.Fatal("a preview for a different page must not be invented")
 	}
 }

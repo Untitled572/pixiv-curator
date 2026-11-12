@@ -269,6 +269,9 @@ func (c *Client) get(ctx context.Context, raw string, result any) error {
 		resp, err := c.http.Do(req)
 		c.nextRequest = time.Now().Add(time.Second)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return &Error{Code: "NETWORK_ERROR"}
 		}
 		if resp.StatusCode == 401 && attempt == 0 {
@@ -331,50 +334,19 @@ type FollowingPage struct {
 }
 
 func (c *Client) Following(ctx context.Context, next string) (FollowingPage, error) {
-	if next == "" {
-		select {
-		case c.gate <- struct{}{}:
-		case <-ctx.Done():
-			return FollowingPage{}, ctx.Err()
-		}
-		_, err := c.accessToken(ctx, "")
-		c.mu.Lock()
-		id := c.accountID
-		c.mu.Unlock()
-		<-c.gate
+	page, err := c.FollowingRestricted(ctx, next, "public")
+	if err != nil {
+		return FollowingPage{}, err
+	}
+	// Preserve the legacy two-phase behavior for callers that only use Following.
+	if page.Next == "" {
+		id, err := c.Authenticate(ctx)
 		if err != nil {
 			return FollowingPage{}, err
 		}
-		next = apiOrigin + "/v1/user/following?restrict=public&user_id=" + strconv.FormatInt(id, 10)
+		page.Next = apiOrigin + "/v1/user/following?restrict=private&user_id=" + strconv.FormatInt(id, 10)
 	}
-	var raw struct {
-		Users []struct {
-			User RawArtist `json:"user"`
-		} `json:"user_previews"`
-		Next string `json:"next_url"`
-	}
-	if err := c.get(ctx, next, &raw); err != nil {
-		return FollowingPage{}, err
-	}
-	if raw.Next != "" {
-		if err := validateAPIURL(raw.Next); err != nil {
-			return FollowingPage{}, err
-		}
-	}
-	out := FollowingPage{Next: raw.Next}
-	current, _ := url.Parse(next)
-	if raw.Next == "" && current.Query().Get("restrict") == "public" {
-		private := *current
-		q := private.Query()
-		q.Set("restrict", "private")
-		q.Del("offset")
-		private.RawQuery = q.Encode()
-		out.Next = private.String()
-	}
-	for _, a := range raw.Users {
-		out.Artists = append(out.Artists, a.User)
-	}
-	return out, nil
+	return page, nil
 }
 
 type ArtworkPage struct {

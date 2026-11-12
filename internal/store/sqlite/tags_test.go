@@ -207,3 +207,35 @@ func TestCatalogStatsEmptyCatalog(t *testing.T) {
 		t.Fatalf("empty catalog stats=%+v", stats)
 	}
 }
+
+func TestArtistTagsSearchFiltersUnicodeLimitsAndMergesOverrides(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedArtist(t, s, 8101)
+	if err := s.UpsertArtwork(ctx, domain.Artwork{ID: 8102, ArtistID: 8101, MetadataState: "complete", Tags: []string{"Blue Sky", "blue hour", "蓝色海景", "夜景"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetArtistTagOverride(ctx, 8101, []string{"BLUE SKY", "手动标签"}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := s.ArtistTagsSearch(ctx, "BLUE SKY", 1)
+	if err != nil || !reflect.DeepEqual(items, []string{"BLUE SKY"}) {
+		t.Fatalf("case-insensitive limited search=%v err=%v", items, err)
+	}
+	items, err = s.ArtistTagsSearch(ctx, "蓝色", 10)
+	if err != nil || !reflect.DeepEqual(items, []string{"蓝色海景"}) {
+		t.Fatalf("unicode search=%v err=%v", items, err)
+	}
+	items, err = s.ArtistTagsSearch(ctx, "手动", 10)
+	if err != nil || !reflect.DeepEqual(items, []string{"手动标签"}) {
+		t.Fatalf("manual tag search=%v err=%v", items, err)
+	}
+	items, err = s.ArtistTagsSearch(ctx, "absent", 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("empty search=%v err=%v", items, err)
+	}
+	if _, err = s.ArtistTagsSearch(ctx, "", 101); err == nil {
+		t.Fatal("limit above 100 should be rejected")
+	}
+}

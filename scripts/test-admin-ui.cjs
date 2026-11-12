@@ -7,33 +7,66 @@ const { chromium } = require(process.env.PIXIV_CURATOR_PLAYWRIGHT_MODULE || "pla
 const root = path.resolve(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "internal/admin/templates/home.html"), "utf8")
   .replace('{{define "home.html"}}', "").replace("{{end}}", "")
-  .replace("{{.CSS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/admin.css"), "utf8"))
-  .replace("{{.JS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/admin.js"), "utf8"));
+  .replace("{{.CSS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/admin.css"), "utf8") + "\n" + fs.readFileSync(path.join(root, "internal/admin/static/viewer.css"), "utf8"))
+  .replace("{{.JS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/viewer.js"), "utf8") + "\n" + fs.readFileSync(path.join(root, "internal/admin/static/admin.js"), "utf8"));
 const artists = Array.from({ length: 57 }, (_, index) => ({ id: String(index + 1), name: "画师 " + (index + 1), account: "artist", review_status: "approved", collection_enabled: true, tags: ["风景"] }));
+const tagCorpus = ["风景", "无结果", "搜索专用", ...Array.from({ length: 15139 }, (_, index) => `测试标签${String(index).padStart(5, "0")}`)];
 const hits = [];
 const preferenceWrites = [];
-let savedPreferences = { version: 7, rules: { allowed_ratings: ["safe"], allowed_ai: ["non_ai"], min_width: 0, min_height: 0, orientation: "any", strategy: "balanced", included_tags: [], excluded_tags: [] } };
+let savedPreferences = { version: 7, rules: { allowed_ratings: ["safe"], allowed_ai: ["non_ai"], exclude_manga: false, min_width: 0, min_height: 0, orientation: "any", strategy: "balanced", included_tags: [], excluded_tags: [] } };
 const recommendationItems = [
   { artist_id: "801", artist: { id: "801", name: "全年龄非 AI" }, score: 0.91, reasons: ["本地兴趣匹配"], sample_illust_ids: ["91001", "91002"], content_rating: "safe", ai_status: "non_ai" },
   { artist_id: "802", artist: { id: "802", name: "成人 AI" }, score: 0.82, reasons: ["分类组合"], sample_illust_ids: ["92001"], content_rating: "adult", ai_status: "ai" },
   { artist_id: "803", artist: { id: "803", name: "未知分类" }, score: 0.73, reasons: ["保留未知"], sample_illust_ids: ["93001"], content_rating: "unknown", ai_status: "unknown" },
   { artist_id: "804", artist: { id: "804", name: "成人 AI 未知" }, score: 0.64, reasons: ["交叉筛选"], sample_illust_ids: ["94001"], content_rating: "adult", ai_status: "unknown" }
 ];
+const completedRunItems = Array.from({ length: 20 }, (_, index) => ({
+  artist_id: String(1001 + index), artist: { id: String(1001 + index), name: `完成候选 ${index + 1}` },
+  score: 0.9 - index / 100, reasons: ["本地兴趣匹配"], sample_illust_ids: [String(100001 + index * 2), String(100002 + index * 2)], content_rating: "unknown", ai_status: "unknown"
+}));
+let newRunPolls = 0;
+let newRunActive = false;
+let activeNewPreviewRequests = 0, maxNewPreviewRequests = 0, newRunPreviewRequests = 0;
+let resolveFirstNewPreview;
+const firstNewPreviewSeen = new Promise((resolve) => { resolveFirstNewPreview = resolve; });
+const accountWrites = [];
+let accounts = [
+  { id: "test", name: "主账号", status: "ready", sync_state: "succeeded", is_default: true, follow_on_approve: false, followed_artists: 3, pending_follows: 0 },
+  { id: "second", name: "副账号", status: "ready", sync_state: "succeeded", is_default: false, follow_on_approve: false, followed_artists: 2, pending_follows: 0 }
+];
+const historyItems = [
+  { id: "event-2", selected_at: 1730000002000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, available: true },
+  { id: "event-1", selected_at: 1730000001000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, available: true },
+  { id: "event-blocked", selected_at: 1730000000000, illust_id: "7002", page_index: 0, artist_id: "71", artist_name: "已屏蔽画师", title: "不可预览作品", width: 800, height: 600, available: false }
+];
+const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CukAAAAASUVORK5CYII=", "base64");
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost"); hits.push(url.pathname + url.search);
   res.setHeader("Cache-Control", "no-store");
   if (url.pathname === "/admin/") { res.setHeader("Content-Type", "text/html; charset=utf-8"); return res.end(html); }
   if (url.pathname.startsWith("/admin/api/previews/")) {
     res.setHeader("Content-Type", "image/png");
-    return res.end(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CukAAAAASUVORK5CYII=", "base64"));
+    const id = url.pathname.split("/")[4] || "";
+    if (/^1000[0-9]+$/.test(id)) {
+      activeNewPreviewRequests++; newRunPreviewRequests++; maxNewPreviewRequests = Math.max(maxNewPreviewRequests, activeNewPreviewRequests); resolveFirstNewPreview();
+      return setTimeout(() => { activeNewPreviewRequests--; if (!res.destroyed) res.end(png); }, 180);
+    }
+    return res.end(png);
   }
   res.setHeader("Content-Type", "application/json");
   let payload;
   if (url.pathname === "/admin/api/recommendations" && req.method === "POST") {
-    payload = { run_id: "run-test" };
+    newRunActive = true; newRunPolls = 0; newRunPreviewRequests = 0; maxNewPreviewRequests = 0; activeNewPreviewRequests = 0;
+    payload = { run_id: "run-new" };
     return res.end(JSON.stringify(payload));
   }
   if ((url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") && req.method === "GET") {
+    if (url.searchParams.get("run_id") === "run-new" || (url.pathname === "/admin/api/recommendation-runs/latest" && newRunActive)) {
+      newRunPolls++;
+      const running = newRunPolls <= 2;
+      payload = { run: { id: "run-new", state: running ? "running" : "succeeded", request_count: newRunPolls }, items: running ? completedRunItems.slice(0, 3) : completedRunItems };
+      return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify(payload)); }, 30);
+    }
     const rating = url.searchParams.get("content_rating") || "all", ai = url.searchParams.get("ai_type") || "all";
     const filtered = recommendationItems.filter((item) => (rating === "all" || item.content_rating === rating) && (ai === "all" || item.ai_status === ai));
     payload = { run: { id: "run-test", state: "succeeded", request_count: 2 }, items: filtered };
@@ -50,11 +83,32 @@ const server = http.createServer((req, res) => {
     const page = Number(url.searchParams.get("page")), limit = Number(url.searchParams.get("limit"));
     const source = url.searchParams.get("tag") === "无结果" ? [] : artists;
     payload = { items: source.slice((page - 1) * limit, page * limit), total: source.length, library_total: artists.length, total_pages: Math.ceil(source.length / limit) };
-  } else if (url.pathname === "/admin/api/library/tags") payload = { items: ["风景", "无结果"] };
-  else if (url.pathname === "/admin/api/accounts") payload = { items: [{ id: "test", name: "测试账号" }] };
+  } else if (url.pathname === "/admin/api/library/tags") {
+    const q = url.searchParams.get("q") || "", limit = Math.min(30, Math.max(1, Number(url.searchParams.get("limit")) || 30));
+    payload = { items: tagCorpus.filter((tag) => tag.includes(q)).slice(0, limit) };
+  } else if (url.pathname === "/admin/api/accounts" && req.method === "GET") payload = { items: accounts };
+  else if (url.pathname.match(/^\/admin\/api\/accounts\/[^/]+$/) && req.method === "PATCH") {
+    let body = ""; req.on("data", (chunk) => { body += chunk; });
+    return req.on("end", () => {
+      const parsed = JSON.parse(body), id = decodeURIComponent(url.pathname.split("/").at(-1)); accountWrites.push({ path: url.pathname, method: req.method, body: parsed });
+      if (parsed.is_default === true) accounts = accounts.map((account) => ({ ...account, is_default: account.id === id }));
+      else if (Object.hasOwn(parsed, "follow_on_approve")) accounts = accounts.map((account) => account.id === id ? { ...account, follow_on_approve: parsed.follow_on_approve } : account);
+      res.end(JSON.stringify({ updated: true }));
+    });
+  } else if (url.pathname.endsWith("/copy-following") && req.method === "POST") {
+    let body = ""; req.on("data", (chunk) => { body += chunk; });
+    return req.on("end", () => { accountWrites.push({ path: url.pathname, method: req.method, body: JSON.parse(body) }); res.end(JSON.stringify({ queued: 2 })); });
+  } else if (url.pathname === "/admin/api/history") {
+    payload = { items: historyItems, total: historyItems.length, page: Number(url.searchParams.get("page")) || 1, page_size: Number(url.searchParams.get("limit")) || 24, total_pages: 1 };
+  }
   else if (url.pathname === "/admin/api/artworks") payload = { items: [{ id: "100", artist_id: url.searchParams.get("artist_id"), title: "测试代表作", visible: true, page_count: 1, rating: "safe", ai_status: "non_ai", tags: ["风景"], pages: [{ page_index: 0, media_state: "indexed" }] }], next_cursor: "" };
   else if (url.pathname === "/admin/api/stats") payload = { image_pages: 1234, artworks: 999, library_artists: 57, accounts: 1, indexed_pages: 1200 };
-  else if (url.pathname === "/random") payload = { url: "https://i.pximg.net/img-original/test.jpg", illust_id: "100", page_index: 0 };
+  else if (url.pathname === "/random") {
+    const format = url.searchParams.get("format") || "json";
+    if (format === "image") { res.setHeader("Content-Type", "image/png"); return res.end(png); }
+    if (format === "redirect") { res.statusCode = 302; res.setHeader("Location", "/mock-image.png"); return res.end(); }
+    payload = { url: "https://i.pximg.net/img-original/test.jpg", illust_id: "100", page_index: 0 };
+  } else if (url.pathname === "/mock-image.png") { res.setHeader("Content-Type", "image/png"); return res.end(png); }
   else { res.statusCode = 404; payload = { error: { code: "NOT_FOUND" } }; }
   res.end(JSON.stringify(payload));
 });
@@ -70,8 +124,20 @@ const server = http.createServer((req, res) => {
     await page.goto(base + "/admin/");
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
+    assert.equal(tagCorpus.length, 15142);
+    assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/tags?limit=30&q=")), "initial tag options should use bounded q/limit lookup");
+    assert.ok(await page.locator("#library-tag option").count() <= 32, "initial tag options should be capped at 30 plus the all/current entries");
+    assert.ok(await page.locator("body *").count() < 1500, "large tag corpus must not expand the DOM");
     assert.equal(await page.locator("img").count(), 0);
     assert.equal(hits.filter((u) => /artworks|previews/.test(u)).length, 0);
+    const tagSearch = page.waitForResponse((response) => response.url().includes("/admin/api/library/tags?") && new URL(response.url()).searchParams.get("q") === "搜索专用");
+    await page.locator("#library-tag-search").fill("搜索专用");
+    await tagSearch;
+    assert.equal(await page.locator("#library-tag option").count(), 2);
+    assert.equal(await page.locator("#library-tag option").nth(1).textContent(), "搜索专用");
+    assert.ok(hits.includes("/admin/api/library/tags?limit=30&q=%E6%90%9C%E7%B4%A2%E4%B8%93%E7%94%A8"));
+    const allTags = page.waitForResponse((response) => response.url().includes("/admin/api/library/tags?") && new URL(response.url()).searchParams.get("q") === "");
+    await page.locator("#library-tag-search").fill(""); await allTags;
     await page.reload();
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
@@ -90,9 +156,16 @@ const server = http.createServer((req, res) => {
     await page.locator("#artwork-list img").waitFor();
     assert.match(await page.locator("#artist-detail-info").textContent(), /UID 49/);
     assert.equal(await page.locator("#artwork-list img").count(), 1);
+    const detailViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/100/0?size=original"));
+    await page.locator("#artwork-list .artist-cover").click();
+    await detailViewerRequest;
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/100/0?size=original");
+    assert.equal(page.url(), base + "/admin/", "viewer thumbnail click must stay inside Curator");
+    await page.locator(".pixiv-viewer-close").click();
     await page.locator("#close-artworks").click();
     await page.waitForFunction(() => !document.querySelector("#artwork-dialog").open && document.querySelectorAll("#artwork-list img").length === 0);
-    assert.equal(await page.locator("img").count(), 0);
+    assert.equal(await page.locator("img").count(), 1, "closing the viewer should keep its UI shell but clear the image request");
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), null, "closing the viewer must stop and clear the original-image request");
     const hitsBeforeDiscover = hits.length;
 
     // Filter before opening Discover so adult-only previews are never requested.
@@ -124,11 +197,11 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["未知分类"]);
     const unknownRequest = hits.findLast((u) => u.startsWith("/admin/api/recommendation-runs/latest?") && u.includes("content_rating=unknown") && u.includes("ai_type=unknown"));
     assert.ok(unknownRequest, "unknown rating and AI filters should be sent together");
-    const runListRequest = page.waitForRequest((request) => request.url().includes("/admin/api/recommendations?") && request.url().includes("run_id=run-test"));
-    await page.locator("#start-recommendations").click();
-    await runListRequest;
-    await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
-    assert.ok(hits.some((u) => u.startsWith("/admin/api/recommendations?") && u.includes("run_id=run-test") && u.includes("content_rating=unknown") && u.includes("ai_type=unknown")), "run list requests should include both sample filters");
+	await page.locator(".recommendation-card").first().evaluate((card) => { window.__originalRecommendationCard = card; });
+	const sameRunRefresh = page.waitForRequest((request) => request.url().includes("/admin/api/recommendation-runs/latest?") && request.url().includes("content_rating=unknown") && request.url().includes("ai_type=unknown"));
+	await page.locator("#tab-discover").click(); await sameRunRefresh;
+	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
+	assert.ok(await page.locator(".recommendation-card").first().evaluate((card) => card.isSameNode(window.__originalRecommendationCard)), "refreshing identical recommendations must preserve existing card nodes");
 
     // An older, slower response must not replace the latest filter result.
     const adultRequest = page.waitForRequest((request) => request.url().includes("content_rating=adult"));
@@ -141,8 +214,36 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["全年龄非 AI"], "stale adult response must not overwrite latest result");
     await page.locator("#recommendation-rating").selectOption("adult");
     await page.locator("#recommendation-ai").selectOption("non_ai");
-    await page.waitForFunction(() => document.querySelector("#recommendation-list .empty-cell")?.textContent.includes("没有候选"));
+	await page.waitForFunction(() => document.querySelector("#recommendation-list .empty-cell")?.textContent.includes("没有带代表作的候选"));
     assert.equal(await page.locator(".recommendation-cover").count(), 0, "empty recommendation layout must not render a hero cover");
+	await page.locator("#recommendation-rating").selectOption("unknown");
+	await page.locator("#recommendation-ai").selectOption("unknown");
+	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
+	const beforeNewRunPreviews = hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length;
+	await page.locator("#start-recommendations").click();
+	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "已发起 1 次上游请求");
+	assert.equal(await page.locator("#start-recommendations").isDisabled(), true, "a running recommendation job cannot be started again");
+	assert.equal(await page.locator(".recommendation-card").count(), 0, "running jobs must not display partial candidates");
+	const runningPlaceholderText = await page.locator("#recommendation-list").evaluate((list) => { window.__runningRecommendationPlaceholder = list.firstElementChild; return list.firstElementChild?.textContent || ""; });
+	assert.ok(runningPlaceholderText.includes("正在收集候选"));
+	assert.equal(hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length, beforeNewRunPreviews, "partial candidate samples must not request previews");
+	assert.equal(hits.filter((hit) => hit === "/admin/api/recommendations").length, 1, "the new recommendation job should be submitted once");
+	await page.evaluate(() => document.querySelector("#start-recommendations").click());
+	assert.equal(hits.filter((hit) => hit === "/admin/api/recommendations").length, 1, "disabled start action must not submit a duplicate job");
+	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "已发起 2 次上游请求");
+	assert.ok(await page.locator("#recommendation-list").evaluate((list) => list.firstElementChild.isSameNode(window.__runningRecommendationPlaceholder)), "polling running status must not rebuild the candidate list (old=" + await page.evaluate(() => window.__runningRecommendationPlaceholder?.textContent) + ", new=" + await page.locator("#recommendation-list").textContent() + ")");
+	assert.equal(await page.locator(".recommendation-card").count(), 0, "the second running response must still hide partial candidates");
+	assert.equal(hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length, beforeNewRunPreviews, "running partial samples must remain unfetched");
+	await firstNewPreviewSeen;
+	assert.equal(newRunPolls, 3, "sample loading should only begin after the succeeded response");
+	assert.equal(await page.locator(".recommendation-card").count(), 0, "slow sample loading must not insert a partial batch");
+	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 12, null, { timeout: 10000 });
+	assert.equal(await page.locator(".recommendation-card").count(), 12, "completed results should cap rendered candidates at 12");
+	assert.equal(await page.locator(".sample-tile").count(), 24, "each rendered candidate may show at most two samples");
+	assert.equal(newRunPreviewRequests, 24, "only the first 12 candidates should load two previews each");
+	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
+	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
+	await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.locator("#tab-library").click();
     await page.locator("#library-page-size").selectOption("48");
@@ -150,6 +251,23 @@ const server = http.createServer((req, res) => {
     await page.locator("#library-tag").selectOption("无结果");
     await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 0"));
     assert.equal(await page.locator("#artist-count").textContent(), "57");
+    await page.locator("#tab-history").click();
+    await page.waitForFunction(() => document.querySelectorAll(".history-card").length === 3);
+    assert.ok(hits.some((hit) => hit === "/admin/api/history?page=1&limit=24"));
+    assert.deepEqual(await page.locator(".history-card").evaluateAll((cards) => cards.map((card) => card.dataset.historyId)), ["event-2", "event-1", "event-blocked"], "duplicate selections must remain separate history events");
+    const firstHistoryImage = page.locator('[data-history-id="event-2"] .history-preview img');
+    const secondHistoryImage = page.locator('[data-history-id="event-1"] .history-preview img');
+    await firstHistoryImage.waitFor(); await secondHistoryImage.waitFor();
+    assert.equal(await firstHistoryImage.getAttribute("src"), "/admin/api/previews/7001/0");
+    assert.equal(await secondHistoryImage.getAttribute("src"), "/admin/api/previews/7001/0", "separate history events may share one fixed image identity");
+    const blockedHistory = page.locator('[data-history-id="event-blocked"] .history-preview');
+    assert.equal(await blockedHistory.isDisabled(), true, "blocked history item cannot be previewed");
+    assert.equal(hits.some((hit) => hit.startsWith("/admin/api/previews/7002/")), false, "blocked history metadata must not request preview bytes");
+    const historyViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/7001/0?size=original"));
+    await firstHistoryImage.click(); await historyViewerRequest;
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/7001/0?size=original");
+    assert.equal(page.url(), base + "/admin/", "history viewer must open the fixed Curator endpoint, not navigate to Pixiv");
+    await page.locator(".pixiv-viewer-close").click();
     await page.locator("#tab-stats").click();
     await page.locator(".stat-value").first().waitFor();
     assert.equal(await page.locator(".stat-value").first().textContent(), "1,234");
@@ -157,17 +275,22 @@ const server = http.createServer((req, res) => {
     await page.locator("#api-rating").selectOption("0");
     await page.locator("#api-ai").selectOption("0");
     await page.locator("#api-include-tags").fill("猫|狗\n风景");
-    await page.locator("#api-format").selectOption("redirect");
-    const generated = new URL(await page.locator("#api-url").inputValue());
-    assert.equal(generated.searchParams.get("format"), "redirect");
+    await page.locator("#api-exclude-manga").check();
+    let generated = new URL(await page.locator("#api-url").inputValue());
+    assert.equal(generated.searchParams.get("format"), "json");
+    assert.equal(generated.searchParams.get("exclude_manga"), "1");
     assert.equal(generated.searchParams.get("delivery"), "proxy");
     assert.equal(generated.searchParams.get("r18"), "0");
     assert.equal(generated.searchParams.get("ai_type"), "0");
     assert.deepEqual(generated.searchParams.getAll("included_tags"), ["猫|狗", "风景"]);
+    const pagesBeforeJSONTest = page.context().pages().length;
     await page.locator("#test-api").click();
     await page.waitForFunction(() => document.querySelector("#api-result").textContent.includes("i.pximg.net"));
+    const jsonResult = JSON.parse(await page.locator("#api-result").textContent());
+    assert.equal(jsonResult.illust_id, "100", "JSON mode should keep displaying the API response");
     assert.match(hits.findLast((u) => u.startsWith("/random?")), /format=json/);
-    assert.equal(hits.some((u) => /\/random\?[^ ]*format=image/.test(u)), false, "test action must not request image bytes");
+    assert.equal(page.context().pages().length, pagesBeforeJSONTest, "JSON mode should not open a new tab");
+    assert.equal(hits.some((u) => u === "/mock-image.png" || /\/random\?[^ ]*format=image/.test(u)), false, "JSON test should not request image bytes");
     await page.locator("#api-rating").selectOption("unknown");
     await page.locator("#api-ai").selectOption("unknown");
     let apiURL = new URL(await page.locator("#api-url").inputValue());
@@ -176,22 +299,61 @@ const server = http.createServer((req, res) => {
     await page.locator("#api-delivery").selectOption("original");
     apiURL = new URL(await page.locator("#api-url").inputValue());
     assert.equal(apiURL.searchParams.get("delivery"), "original");
+    await page.locator("#api-format").selectOption("redirect");
+    apiURL = new URL(await page.locator("#api-url").inputValue());
+    assert.equal(apiURL.searchParams.get("format"), "redirect");
+    const redirectPopupPromise = page.context().waitForEvent("page");
+    await page.locator("#test-api").click();
+    const redirectPopup = await redirectPopupPromise; await redirectPopup.waitForLoadState("load");
+    assert.equal(new URL(redirectPopup.url()).pathname, "/mock-image.png", "302 mode should open and follow a same-origin image response");
+    assert.ok(hits.some((hit) => hit.startsWith("/random?") && hit.includes("format=redirect")) && hits.includes("/mock-image.png"));
+    await redirectPopup.close();
     await page.locator("#api-format").selectOption("image");
     apiURL = new URL(await page.locator("#api-url").inputValue());
     assert.equal(apiURL.searchParams.get("format"), "image");
     assert.equal(apiURL.searchParams.get("delivery"), "proxy", "image format should force proxy delivery");
     assert.equal(await page.locator('#api-delivery option[value="original"]').evaluate((option) => option.disabled), true);
+    const imagePopupPromise = page.context().waitForEvent("page");
+    await page.locator("#test-api").click();
+    const imagePopup = await imagePopupPromise; await imagePopup.waitForLoadState("load");
+    assert.equal(new URL(imagePopup.url()).searchParams.get("format"), "image", "image mode should open the actual image URL in a new tab");
+    assert.ok(hits.some((hit) => hit.startsWith("/random?") && hit.includes("format=image")));
+    await imagePopup.close();
 
     await page.locator("#tab-settings").click();
+    await page.locator(".account-card[data-account-id='second']").waitFor();
+    assert.equal(accountWrites.length, 0, "loading accounts with default-off options must not perform remote writes");
+    assert.equal(await page.locator(".account-card[data-account-id='second'] [data-follow-on-approve]").isChecked(), false);
+    const secondAccount = page.locator(".account-card[data-account-id='second']");
+	const defaultRequest = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/admin/api/accounts/second"));
+    await secondAccount.locator("[data-make-default]").click();
+	const makeDefaultResponse = await defaultRequest;
+	assert.deepEqual(makeDefaultResponse.request().postDataJSON(), { is_default: true }, "default account is set only after the explicit button click");
+    await page.waitForFunction(() => document.querySelector(".account-card[data-account-id='second'] [data-make-default]")?.textContent === "默认账号");
+	const followRequest = page.waitForResponse((response) => response.request().method() === "PATCH" && response.url().endsWith("/admin/api/accounts/second"));
+    await page.locator(".account-card[data-account-id='second'] [data-follow-on-approve]").check();
+	const followResponse = await followRequest;
+	assert.deepEqual(followResponse.request().postDataJSON(), { follow_on_approve: true }, "follow-on-approve changes only after explicit checkbox action");
+    const copyButton = page.locator(".account-card[data-account-id='second'] button", { hasText: "复制关注到此账号" });
+    const writesBeforeEmptyCopy = accountWrites.length;
+    await copyButton.click();
+    assert.equal(accountWrites.length, writesBeforeEmptyCopy, "copy-following must wait for an explicit source account choice");
+    await page.locator(".account-card[data-account-id='second'] select").selectOption("test");
+	const copyRequest = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/accounts/second/copy-following"));
+    await copyButton.click();
+	const copyFollowingResponse = await copyRequest;
+	assert.deepEqual(copyFollowingResponse.request().postDataJSON(), { source_account_id: "test" }, "copy-following sends only the selected source after explicit click");
     await page.locator('#preferences-form input[name="rating"][value="unknown"]').check();
     await page.locator('#preferences-form input[name="ai"][value="unknown"]').check();
+    await page.locator("#exclude-manga").check();
     await page.locator('#preferences-form button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelector("#preference-version").textContent.includes("8"));
     assert.deepEqual(preferenceWrites.at(-1).rules.allowed_ratings, ["safe", "unknown"]);
     assert.deepEqual(preferenceWrites.at(-1).rules.allowed_ai, ["non_ai", "unknown"]);
+    assert.equal(preferenceWrites.at(-1).rules.exclude_manga, true);
     await page.reload();
     await page.locator("#tab-settings").click();
-    await page.waitForFunction(() => document.querySelector('#preferences-form input[name="rating"][value="unknown"]').checked && document.querySelector('#preferences-form input[name="ai"][value="unknown"]').checked);
+    await page.waitForFunction(() => document.querySelector('#preferences-form input[name="rating"][value="unknown"]').checked && document.querySelector('#preferences-form input[name="ai"][value="unknown"]').checked && document.querySelector("#exclude-manga").checked);
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "horizontal overflow at " + width);

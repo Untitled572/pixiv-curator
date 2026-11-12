@@ -13,7 +13,7 @@ import (
 )
 
 func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Auth) {
-	forward := func(w http.ResponseWriter, r *http.Request, page domain.SelectedPage, preview bool) {
+	forward := func(w http.ResponseWriter, r *http.Request, page domain.SelectedPage, preview, original bool) {
 		if p == nil {
 			writeAPIError(w, http.StatusServiceUnavailable, "NOT_READY")
 			return
@@ -22,11 +22,11 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		var err error
-		if preview && page.PreviewIsThumbnail {
+		if preview && !original && page.PreviewIsThumbnail {
 			err = p.ForwardPreview(w, r, page.PreviewURL)
 		} else {
 			target := page.OriginalURL
-			if preview {
+			if preview && !original {
 				target = page.PreviewURL
 			}
 			err = p.Forward(w, r, target)
@@ -63,7 +63,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 		}
 		switch r.URL.Query().Get("format") {
 		case "image":
-			forward(w, r, out.SelectedPage, false)
+			forward(w, r, out.SelectedPage, false, false)
 		case "redirect":
 			http.Redirect(w, r, out.URL, http.StatusFound)
 		default:
@@ -82,7 +82,8 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				format = "stream"
 			}
 			for key, values := range query {
-				if len(values) != 1 || (key != "format" && (preview || key != "delivery")) {
+				allowed := key == "format" || (!preview && key == "delivery") || (preview && key == "size")
+				if len(values) != 1 || !allowed {
 					apiError(w, domain.ErrInvalid)
 					return
 				}
@@ -91,6 +92,11 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				format = values[0]
 			}
 			delivery := query.Get("delivery")
+			size := query.Get("size")
+			if preview && size != "" && size != "thumbnail" && size != "original" {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
 			if format != "json" && format != "redirect" && !(preview && format == "stream") && !(!preview && format == "image") {
 				apiError(w, domain.ErrInvalid)
 				return
@@ -109,24 +115,36 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				apiError(w, domain.ErrInvalid)
 				return
 			}
-			page, err := s.Page(r.Context(), id, index, preview)
+			original := preview && size == "original"
+			var page domain.SelectedPage
+			if preview {
+				page, err = s.AdminPreviewPage(r.Context(), id, index, original)
+			} else {
+				page, err = s.Page(r.Context(), id, index, false)
+			}
 			if err != nil {
 				imageError(w, err)
 				return
 			}
 			if format == "stream" || format == "image" {
-				forward(w, r, page, preview)
+				forward(w, r, page, preview, original)
 				return
 			}
 			if preview {
+				previewURL := page.PreviewURL
+				if original {
+					previewURL = page.OriginalURL
+				} else {
+					page.OriginalURL = ""
+				}
 				if format == "redirect" {
-					http.Redirect(w, r, page.PreviewURL, http.StatusFound)
+					http.Redirect(w, r, previewURL, http.StatusFound)
 					return
 				}
 				writeJSON(w, http.StatusOK, struct {
 					domain.SelectedPage
 					URL string `json:"url"`
-				}{SelectedPage: page, URL: page.PreviewURL})
+				}{SelectedPage: page, URL: previewURL})
 				return
 			}
 			out := s.Result(page)
@@ -205,7 +223,7 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 	for k, v := range q {
 		switch k {
 		case "included_tags", "excluded_tags":
-		case "delivery", "format", "collection", "orientation", "r18", "ai_type", "min_width", "min_height", "user_id", "strategy", "account_id":
+		case "delivery", "format", "collection", "orientation", "r18", "ai_type", "exclude_manga", "min_width", "min_height", "user_id", "strategy", "account_id":
 			if len(v) != 1 {
 				return out, domain.ErrInvalid
 			}
@@ -253,6 +271,16 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			out.AllowedAI = []string{"unknown"}
 		case "any":
 			out.AllowedAI = []string{"non_ai", "ai"}
+		default:
+			return out, domain.ErrInvalid
+		}
+	}
+	if v, ok := q["exclude_manga"]; ok {
+		switch v[0] {
+		case "0":
+			out.ExcludeManga = false
+		case "1":
+			out.ExcludeManga = true
 		default:
 			return out, domain.ErrInvalid
 		}

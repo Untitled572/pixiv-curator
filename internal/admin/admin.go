@@ -43,7 +43,7 @@ func Home(w http.ResponseWriter, r *http.Request) {
 	if err := page.ExecuteTemplate(w, "home.html", struct {
 		CSS template.CSS
 		JS  template.JS
-	}{template.CSS(readAsset("static/admin.css")), template.JS(readAsset("static/admin.js"))}); err != nil {
+	}{template.CSS(readAsset("static/admin.css") + "\n" + readAsset("static/viewer.css")), template.JS(readAsset("static/viewer.js") + "\n" + readAsset("static/admin.js"))}); err != nil {
 		return
 	}
 }

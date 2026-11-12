@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"github.com/Untitled572/pixiv-curator/internal/jobs"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/recommend"
 	"github.com/Untitled572/pixiv-curator/internal/store/sqlite"
@@ -25,6 +27,21 @@ type fakeRecommendationClient struct {
 	relatedArtists      func(context.Context, int64) ([]pixiv.RawArtist, error)
 	relatedArtworks     func(context.Context, int64) ([]pixiv.RawArtwork, error)
 	artistArtworks      func(context.Context, int64, string) (pixiv.ArtworkPage, error)
+}
+
+type fakeRecommendationPreviewClient struct {
+	*fakeRecommendationClient
+	previews func(context.Context, int64) ([]pixiv.UserPreview, error)
+}
+
+func (f *fakeRecommendationPreviewClient) RelatedArtistPreviews(ctx context.Context, id int64) ([]pixiv.UserPreview, error) {
+	f.mu.Lock()
+	f.relatedArtistCalls[id]++
+	f.mu.Unlock()
+	if f.previews == nil {
+		return nil, nil
+	}
+	return f.previews(ctx, id)
 }
 
 func newFakeRecommendationClient() *fakeRecommendationClient {
@@ -139,7 +156,7 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	ctx := context.Background()
 	s := openRecommendationAppStore(t)
 	const seedBase int64 = 10000
-	for i := int64(0); i < 30; i++ {
+	for i := int64(0); i < 8; i++ {
 		addApprovedRecommendationSeed(t, s, seedBase+i)
 	}
 	if err := s.UpsertArtwork(ctx, storedArtwork(999999, seedBase, "avoid-tag")); err != nil {
@@ -198,42 +215,42 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	if budget != recommend.DefaultBudget() {
 		t.Fatalf("stored budget=%+v", budget)
 	}
-	if run.RequestCount > 300 || fake.countAll() > 300 {
+	if run.RequestCount > 60 || fake.countAll() > 60 {
 		t.Fatalf("request budget exceeded: reserved=%d client calls=%d", run.RequestCount, fake.countAll())
 	}
 	if run.RequestCount != fake.countAll() {
 		t.Fatalf("reserved requests=%d fake upstream calls=%d", run.RequestCount, fake.countAll())
 	}
-	seeds, err := s.RecommendationSeeds(ctx, 30)
+	seeds, err := s.RecommendationSeeds(ctx, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(seeds) != 30 {
+	if len(seeds) != 8 {
 		t.Fatalf("eligible seeds=%d", len(seeds))
 	}
 	for _, seed := range seeds {
-		samples, err := s.RecommendationSamples(ctx, seed.ID, 8)
+		samples, err := s.RecommendationSamples(ctx, seed.ID, 4)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(samples) != 8 {
-			t.Fatalf("seed %d sample count=%d, want 8", seed.ID, len(samples))
+		if len(samples) != 4 {
+			t.Fatalf("seed %d sample count=%d, want 4", seed.ID, len(samples))
 		}
 	}
 	candidates, err := s.RecommendationCandidates(ctx, runID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(candidates) != 60 {
-		t.Fatalf("candidate count=%d, want 60", len(candidates))
+	if len(candidates) != 12 {
+		t.Fatalf("candidate count=%d, want 12", len(candidates))
 	}
 	for _, candidate := range candidates {
-		samples, err := s.RecommendationSamples(ctx, candidate.ArtistID, 8)
+		samples, err := s.RecommendationSamples(ctx, candidate.ArtistID, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(samples) != 4 {
-			t.Fatalf("candidate %d sample count=%d, want max 4", candidate.ArtistID, len(samples))
+		if len(samples) != 2 {
+			t.Fatalf("candidate %d sample count=%d, want max 2", candidate.ArtistID, len(samples))
 		}
 		if candidate.Artist.ReviewStatus != "pending" || candidate.Artist.CollectionEnabled {
 			t.Fatalf("candidate auto-approved: %+v", candidate.Artist)
@@ -243,7 +260,7 @@ func TestRecommendationDefaultsStayBoundedAndOutputNeedsApproval(t *testing.T) {
 	if first.ArtistID != 30000 || len(first.Sources) != 2 || first.Sources[0] != recommend.SourceRelatedArtist || first.Sources[1] != recommend.SourceRelatedArtwork {
 		t.Fatalf("merged sources after optional 5xx: %+v", first)
 	}
-	if fake.countAll() > 300 {
+	if fake.countAll() > 60 {
 		t.Fatalf("fake client calls=%d", fake.countAll())
 	}
 	profileRaw, err := s.RecommendationProfile(ctx, runID)
@@ -481,6 +498,123 @@ func TestRecommendationStartIsIdempotentAndEmptySeedsComplete(t *testing.T) {
 				t.Fatalf("empty-seed job state=%q", item.State)
 			}
 		}
+	}
+}
+
+func TestRecommendationUsesRelatedPreviewSamplesWithoutCandidateArtworkFetch(t *testing.T) {
+	ctx := context.Background()
+	s := openRecommendationAppStore(t)
+	const seedID int64 = 49000
+	addApprovedRecommendationSeed(t, s, seedID)
+	if err := s.UpsertArtwork(ctx, storedArtwork(49001, seedID, "seed-tag")); err != nil {
+		t.Fatal(err)
+	}
+	base := newFakeRecommendationClient()
+	base.relatedArtworks = func(context.Context, int64) ([]pixiv.RawArtwork, error) { return nil, nil }
+	client := &fakeRecommendationPreviewClient{
+		fakeRecommendationClient: base,
+		previews: func(_ context.Context, id int64) ([]pixiv.UserPreview, error) {
+			if id != seedID {
+				t.Errorf("related seed=%d, want %d", id, seedID)
+			}
+			return []pixiv.UserPreview{
+				{User: rawArtist(50001, "with two samples"), Illusts: []pixiv.RawArtwork{recArtwork(500011, 50001, "match"), recArtwork(500012, 50001, "second")}},
+				{User: rawArtist(50002, "identity checked"), Illusts: []pixiv.RawArtwork{recArtwork(500021, 50002, "match"), recArtwork(509999, 99999, "must-not-persist")}},
+			}, nil
+		},
+	}
+	budget := recommend.Budget{SeedArtists: 1, SeedSamplesPerArtist: 1, CandidateArtists: 2, CandidateSamplesPerArtist: 2, TotalRequests: 10}
+	runID, job := createRecommendationJob(t, s, budget)
+	service := NewRecommender(s, client)
+	if err := service.Handler(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if base.countArtist(50001) != 0 || base.countArtist(50002) != 0 {
+		t.Fatalf("candidate artwork requests = %d/%d, want no per-candidate requests", base.countArtist(50001), base.countArtist(50002))
+	}
+	if base.countAll() != 2 {
+		t.Fatalf("related endpoint requests = %d, want one user-preview and one related-artwork request", base.countAll())
+	}
+	candidates, err := s.RecommendationCandidates(ctx, runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("candidate count=%d, want 2", len(candidates))
+	}
+	byID := make(map[int64]domain.Recommendation, len(candidates))
+	for _, candidate := range candidates {
+		byID[candidate.ArtistID] = candidate
+		if candidate.Artist.ReviewStatus != "pending" || candidate.Artist.CollectionEnabled {
+			t.Fatalf("candidate was automatically approved: %+v", candidate.Artist)
+		}
+	}
+	if got := byID[50001].SampleIDs; !reflect.DeepEqual(got, []string{"500011", "500012"}) {
+		t.Fatalf("first candidate sample IDs=%v", got)
+	}
+	if got := byID[50002].SampleIDs; !reflect.DeepEqual(got, []string{"500021"}) {
+		t.Fatalf("identity-mismatched preview was retained: sample IDs=%v", got)
+	}
+	for id, want := range map[int64]int{50001: 2, 50002: 1} {
+		samples, err := s.RecommendationSamples(ctx, id, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(samples) != want {
+			t.Errorf("candidate %d persisted samples=%d, want %d", id, len(samples), want)
+		}
+		for _, sample := range samples {
+			if sample.ArtistID != id {
+				t.Errorf("candidate %d received sample from artist %d", id, sample.ArtistID)
+			}
+		}
+	}
+}
+
+func TestRecommendationPreviewErrorsKeepCancelAnd429Classification(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		check func(*testing.T, error)
+	}{
+		{name: "cancel", err: context.Canceled, check: func(t *testing.T, err error) {
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancel error=%v", err)
+			}
+		}},
+		{name: "rate limit", err: &pixiv.Error{Code: "RATE_LIMITED", Status: 429, RetryAfter: 17 * time.Second}, check: func(t *testing.T, err error) {
+			var jobErr *jobs.JobError
+			if !errors.As(err, &jobErr) || jobErr.Class != jobs.Retry || jobErr.Code != "RATE_LIMITED" || jobErr.RetryAfter != 17*time.Second {
+				t.Fatalf("rate-limit classification=%+v", err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openRecommendationAppStore(t)
+			const seedID int64 = 49500
+			addApprovedRecommendationSeed(t, s, seedID)
+			if err := s.UpsertArtwork(ctx, storedArtwork(49501, seedID, "seed")); err != nil {
+				t.Fatal(err)
+			}
+			base := newFakeRecommendationClient()
+			client := &fakeRecommendationPreviewClient{fakeRecommendationClient: base, previews: func(context.Context, int64) ([]pixiv.UserPreview, error) {
+				return nil, tc.err
+			}}
+			runID, job := createRecommendationJob(t, s, recommend.Budget{SeedArtists: 1, SeedSamplesPerArtist: 1, CandidateArtists: 2, CandidateSamplesPerArtist: 2, TotalRequests: 3})
+			if err := NewRecommender(s, client).Handler(ctx, job); err == nil {
+				t.Fatal("expected preview request error")
+			} else {
+				tc.check(t, err)
+			}
+			run, err := s.RecommendationRun(ctx, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.SeedCursor != 0 {
+				t.Fatalf("failed preview advanced seed cursor to %d", run.SeedCursor)
+			}
+		})
 	}
 }
 

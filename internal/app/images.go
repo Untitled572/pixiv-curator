@@ -12,6 +12,7 @@ import (
 type ImageRepository interface {
 	Select(context.Context, domain.SelectionRequest) (domain.SelectedPage, error)
 	EligiblePage(context.Context, int64, int, bool) (domain.SelectedPage, error)
+	EligibleAdminPage(context.Context, int64, int) (domain.SelectedPage, error)
 	Setting(context.Context, string) (json.RawMessage, int64, error)
 	PutSetting(context.Context, string, json.RawMessage, int64) error
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
@@ -46,6 +47,30 @@ func (s *Images) Result(p domain.SelectedPage) ImageResult {
 	return ImageResult{SelectedPage: p, OriginalURL: p.OriginalURL, URL: strings.TrimRight(s.base, "/") + fmt.Sprintf("/i/%d/%d?format=image", p.IllustID, p.PageIndex)}
 }
 func (s *Images) Page(ctx context.Context, id int64, index int, preview bool) (domain.SelectedPage, error) {
+	return s.page(ctx, id, index, preview, !preview)
+}
+
+// AdminPreviewPage resolves a fixed page using management preview eligibility,
+// while allowing the caller to choose the thumbnail or original URL.
+func (s *Images) AdminPreviewPage(ctx context.Context, id int64, index int, original bool) (domain.SelectedPage, error) {
+	if id <= 0 || index < 0 {
+		return domain.SelectedPage{}, domain.ErrInvalid
+	}
+	p, err := s.store.EligibleAdminPage(ctx, id, index)
+	if err != nil {
+		return domain.SelectedPage{}, err
+	}
+	url := p.PreviewURL
+	if original {
+		url = p.OriginalURL
+	}
+	if !domain.ValidImageURL(url) {
+		return domain.SelectedPage{}, domain.ErrNotFound
+	}
+	return p, nil
+}
+
+func (s *Images) page(ctx context.Context, id int64, index int, preview, original bool) (domain.SelectedPage, error) {
 	if id <= 0 || index < 0 {
 		return domain.SelectedPage{}, domain.ErrInvalid
 	}
@@ -54,7 +79,7 @@ func (s *Images) Page(ctx context.Context, id int64, index int, preview bool) (d
 		return domain.SelectedPage{}, err
 	}
 	url := p.OriginalURL
-	if preview {
+	if preview && !original {
 		url = p.PreviewURL
 	}
 	if !domain.ValidImageURL(url) {

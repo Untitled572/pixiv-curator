@@ -2,8 +2,10 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -93,5 +95,48 @@ func TestLibraryStatsRejectMalformedQuery(t *testing.T) {
 		if rec := libraryRequest(h, http.MethodGet, path, "", true); rec.Code != 422 {
 			t.Errorf("%s status=%d, want 422", path, rec.Code)
 		}
+	}
+}
+
+func TestLibraryTagSearchAndQueryValidation(t *testing.T) {
+	h, s := newLibraryHandler(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		id   int64
+		tags []string
+	}{{91, []string{"Alpha", "alphabet"}}, {92, []string{"蓝色海景"}}} {
+		if err := s.UpsertArtist(ctx, domain.Artist{ID: tc.id, Name: "artist"}, "manual", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetArtistTagOverride(ctx, tc.id, tc.tags); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var response struct {
+		Items []string `json:"items"`
+	}
+	rec := libraryRequest(h, http.MethodGet, "/admin/api/library/tags?q=alp&limit=1", "", true)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &response) != nil || !reflect.DeepEqual(response.Items, []string{"Alpha"}) {
+		t.Fatalf("filtered limited tags status=%d body=%s items=%v", rec.Code, rec.Body.String(), response.Items)
+	}
+	rec = libraryRequest(h, http.MethodGet, "/admin/api/library/tags?q=%E8%93%9D%E8%89%B2&limit=5", "", true)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &response) != nil || !reflect.DeepEqual(response.Items, []string{"蓝色海景"}) {
+		t.Fatalf("unicode tags status=%d body=%s items=%v", rec.Code, rec.Body.String(), response.Items)
+	}
+	for _, path := range []string{
+		"/admin/api/library/tags?unknown=1",
+		"/admin/api/library/tags?q=a&q=b",
+		"/admin/api/library/tags?limit=1&limit=2",
+		"/admin/api/library/tags?limit=0",
+		"/admin/api/library/tags?limit=101",
+		"/admin/api/library/tags?limit=nope",
+	} {
+		if rec = libraryRequest(h, http.MethodGet, path, "", true); rec.Code != 422 {
+			t.Errorf("%s status=%d, want 422", path, rec.Code)
+		}
+	}
+	if rec = libraryRequest(h, http.MethodGet, "/admin/api/library/tags", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"items":["Alpha","alphabet","蓝色海景"]`) {
+		t.Fatalf("legacy full result status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }

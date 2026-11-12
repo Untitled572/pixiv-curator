@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -66,13 +67,22 @@ func previewRequest(mux *http.ServeMux, method, path string, authenticated bool)
 
 func TestManagementPreviewStreamsKnownPageWithoutCredentials(t *testing.T) {
 	var upstream []*http.Request
-	_, mux := previewFixture(t, imageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	store, mux := previewFixture(t, imageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstream = append(upstream, r.Clone(r.Context()))
 		headers := make(http.Header)
 		headers.Set("Content-Type", "image/jpeg")
 		headers.Set("Set-Cookie", "upstream=private")
 		return &http.Response{StatusCode: 200, Header: headers, Body: io.NopCloser(strings.NewReader("jpeg")), ContentLength: 4}, nil
 	}))
+	publicRules := domain.DefaultRules()
+	publicRules.ExcludeManga = true
+	rulesJSON, err := json.Marshal(publicRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PutSetting(context.Background(), "preferences", rulesJSON, 0); err != nil {
+		t.Fatal(err)
+	}
 	path := "/admin/api/previews/991/0"
 	unauthenticated := previewRequest(mux, "GET", path, false)
 	if unauthenticated.Code != 401 || len(upstream) != 0 {
@@ -112,7 +122,7 @@ func TestManagementPreviewStreamsKnownPageWithoutCredentials(t *testing.T) {
 			t.Fatal("pending sample leaked through public image API")
 		}
 	}
-	for _, query := range []string{"?url=https://evil.test/", "?format=xml", "?format=stream&format=json", "?format=%ZZ"} {
+	for _, query := range []string{"?url=https://evil.test/", "?format=xml", "?format=stream&format=json", "?format=%ZZ", "?size=full", "?size=original&size=thumbnail", "?unknown=1&unknown=2"} {
 		if rec := previewRequest(mux, "GET", "/admin/api/previews/991/0"+query, true); rec.Code != 422 {
 			t.Fatalf("invalid preview query %q status=%d", query, rec.Code)
 		}
@@ -172,7 +182,7 @@ func TestManagementPreviewAbortsBrokenStream(t *testing.T) {
 func TestManagementPreviewCacheRequiresAuthAndOnlyCachesThumbnail(t *testing.T) {
 	var upstream []*http.Request
 	cacheDir := t.TempDir()
-	_, mux := previewFixture(t, imageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	store, mux := previewFixture(t, imageRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 		upstream = append(upstream, r.Clone(r.Context()))
 		h := make(http.Header)
 		h.Set("Content-Type", "image/jpeg")
@@ -198,13 +208,41 @@ func TestManagementPreviewCacheRequiresAuthAndOnlyCachesThumbnail(t *testing.T) 
 	if len(upstream) != 1 {
 		t.Fatal("HEAD did not use cached thumbnail headers")
 	}
+	originalHead := previewRequest(mux, "HEAD", path+"?size=original", true)
+	if originalHead.Code != 200 || originalHead.Body.Len() != 0 || upstream[len(upstream)-1].URL.String() != previewOriginal {
+		t.Fatalf("original HEAD status=%d body=%q upstream=%v", originalHead.Code, originalHead.Body.String(), upstream[len(upstream)-1].URL)
+	}
+	if upstream[len(upstream)-1].Header.Get("Referer") != "https://www.pixiv.net/" || upstream[len(upstream)-1].Header.Get("Authorization") != "" || upstream[len(upstream)-1].Header.Get("Cookie") != "" {
+		t.Fatal("original HEAD request forwarded management credentials or omitted Pixiv Referer")
+	}
+	for i := 0; i < 2; i++ {
+		got := previewRequest(mux, "GET", path+"?size=original", true)
+		if got.Code != 200 || got.Body.String() != "jpeg" {
+			t.Fatalf("original stream status=%d body=%q", got.Code, got.Body.String())
+		}
+		if upstream[len(upstream)-1].URL.String() != previewOriginal {
+			t.Fatalf("size=original fetched %q, want fixed original page %q", upstream[len(upstream)-1].URL, previewOriginal)
+		}
+	}
+	if len(upstream) != 4 {
+		t.Fatalf("original stream requests=%d, want all requests to bypass thumbnail cache", len(upstream))
+	}
+	originalJSON := previewRequest(mux, "GET", path+"?format=json&size=original", true)
+	var originalPayload map[string]any
+	if originalJSON.Code != 200 || json.Unmarshal(originalJSON.Body.Bytes(), &originalPayload) != nil || originalPayload["url"] != previewOriginal {
+		t.Fatalf("original JSON lost size selection: status=%d body=%s", originalJSON.Code, originalJSON.Body)
+	}
+	originalRedirect := previewRequest(mux, "GET", path+"?format=redirect&size=original", true)
+	if originalRedirect.Code != http.StatusFound || originalRedirect.Header().Get("Location") != previewOriginal {
+		t.Fatalf("original redirect lost size selection: status=%d location=%q", originalRedirect.Code, originalRedirect.Header().Get("Location"))
+	}
 	for i := 0; i < 2; i++ {
 		if got := previewRequest(mux, "GET", "/admin/api/previews/991/1", true); got.Code != 200 {
 			t.Fatalf("fallback status=%d", got.Code)
 		}
 	}
-	if len(upstream) != 3 {
-		t.Fatalf("original fallback was cached: upstream requests=%d urls=%v", len(upstream), upstream)
+	if len(upstream) != 6 {
+		t.Fatalf("original URLs were cached: upstream requests=%d urls=%v", len(upstream), upstream)
 	}
 	files, err := filepath.Glob(filepath.Join(cacheDir, "*.cache"))
 	if err != nil {
@@ -212,6 +250,9 @@ func TestManagementPreviewCacheRequiresAuthAndOnlyCachesThumbnail(t *testing.T) 
 	}
 	if len(files) != 1 {
 		t.Fatalf("cached files=%d; want thumbnail only", len(files))
+	}
+	if got := previewRequest(mux, "GET", path+"?size=original", false); got.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated original status=%d", got.Code)
 	}
 	if err := os.WriteFile(files[0], []byte("corrupt"), 0600); err != nil {
 		t.Fatal(err)
@@ -225,5 +266,17 @@ func TestManagementPreviewCacheRequiresAuthAndOnlyCachesThumbnail(t *testing.T) 
 	}
 	if _, err := os.Stat(files[0]); err != nil {
 		t.Fatalf("unauthenticated request accessed cache: %v", err)
+	}
+	if _, err := store.DecideArtist(context.Background(), 99, "block"); err != nil {
+		t.Fatal(err)
+	}
+	before = len(upstream)
+	for _, query := range []string{"", "?size=original"} {
+		if got := previewRequest(mux, "GET", path+query, true); got.Code != http.StatusNotFound {
+			t.Fatalf("blocked preview %q status=%d body=%s", query, got.Code, got.Body)
+		}
+	}
+	if len(upstream) != before {
+		t.Fatal("blocked thumbnail or original preview reached upstream")
 	}
 }

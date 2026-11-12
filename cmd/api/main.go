@@ -106,6 +106,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	recommender := app.NewRecommender(store, client)
 	handlers := ingestion.Handlers()
 	handlers["recommend_artists"] = recommender.Handler
+	handlers["follow_artist"] = app.NewRemoteFollows(store, client).Handler
 	worker := jobs.NewWorker(store, handlers)
 	go func() { defer close(workerDone); _ = worker.Run(workerCtx) }()
 	defer func() { stopWorker(); <-workerDone; <-maintenanceDone }()
@@ -122,6 +123,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 				http.Redirect(w, r, "/admin/", http.StatusFound)
 			})
 			httpapi.RegisterAccounts(mux, client, auth)
+			httpapi.RegisterAccountOptions(mux, client, auth)
+			httpapi.RegisterHistory(mux, store, auth)
 			httpapi.RegisterLibrary(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)

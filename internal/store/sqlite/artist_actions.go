@@ -64,9 +64,31 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 	if err != nil {
 		return "", err
 	}
+	if action == "approve" && state == "pending" {
+		var accountID string
+		err = tx.QueryRowContext(ctx, `SELECT id FROM accounts WHERE deleted=0 AND is_default=1 AND follow_on_approve=1 AND EXISTS(SELECT 1 FROM artist_sources WHERE artist_id=? AND source_type='recommend')`, id).Scan(&accountID)
+		if err != nil && err != sql.ErrNoRows {
+			return "", err
+		}
+		if err == nil {
+			if _, err = enqueueRemoteFollow(ctx, tx, accountID, id, "approval", "public"); err != nil {
+				return "", err
+			}
+		}
+	}
+	if next == "blocked" || next == "rejected" {
+		if _, err = tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='follow_artist' AND json_extract(payload_json,'$.artist_id')=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), id); err != nil {
+			return "", err
+		}
+	}
 	if !enabled {
 		if err = cancelArtistJobs(ctx, tx, id); err != nil {
 			return "", err
+		}
+		if action == "block" || action == "reject" {
+			if err = cancelRemoteFollowJobs(ctx, tx, id); err != nil {
+				return "", err
+			}
 		}
 	}
 	return jobID, tx.Commit()
@@ -74,6 +96,11 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 
 func cancelArtistJobs(ctx context.Context, tx *sql.Tx, id int64) error {
 	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), id)
+	return err
+}
+
+func cancelRemoteFollowJobs(ctx context.Context, tx *sql.Tx, id int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE kind='follow_artist' AND json_extract(payload_json,'$.artist_id')=? AND state IN ('pending','running','retry_wait','paused_auth')`, time.Now().UnixMilli(), id)
 	return err
 }
 
@@ -205,6 +232,10 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 	if runID == "" || !json.Valid(nextPayload) {
 		return domain.ErrInvalid
 	}
+	visibility := domain.ContextFollowVisibility(ctx)
+	if !domain.ValidFollowVisibility(visibility) {
+		return domain.ErrInvalid
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -238,7 +269,7 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 			return err
 		}
 		if accountID != "" {
-			if _, err = tx.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run) VALUES(?,?,1,?) ON CONFLICT(account_id,artist_id) DO UPDATE SET followed=1,last_seen_run=excluded.last_seen_run`, accountID, a.ID, runID); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO account_artists(account_id,artist_id,followed,last_seen_run,visibility) VALUES(?,?,1,?,?) ON CONFLICT(account_id,artist_id) DO UPDATE SET followed=1,last_seen_run=excluded.last_seen_run,visibility=excluded.visibility`, accountID, a.ID, runID, visibility); err != nil {
 				return err
 			}
 		}
@@ -269,7 +300,7 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 			return err
 		}
 	}
-	if complete {
+	if complete && visibility == "private" {
 		if accountID != "" {
 			if _, err = tx.ExecContext(ctx, `UPDATE account_artists SET followed=0 WHERE account_id=? AND last_seen_run<>?`, accountID, runID); err != nil {
 				return err
@@ -277,7 +308,9 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 			if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=artists.id AND aa.followed=1 AND ac.deleted=0),updated_at=?`, time.Now().UnixMilli()); err != nil {
 				return err
 			}
-		} else if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=0,updated_at=? WHERE remote_followed=1 AND last_seen_follow_run<>?`, time.Now().UnixMilli(), runID); err != nil {
+		}
+	} else if complete && accountID == "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE artists SET remote_followed=0,updated_at=? WHERE remote_followed=1 AND last_seen_follow_run<>?`, time.Now().UnixMilli(), runID); err != nil {
 			return err
 		}
 	}

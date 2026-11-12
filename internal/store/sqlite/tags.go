@@ -222,18 +222,36 @@ func (s *Store) ClearArtistTagOverride(ctx context.Context, artistID int64) erro
 }
 
 func (s *Store) ArtistTags(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT display_name FROM tags ORDER BY normalized_name`)
+	return s.ArtistTagsSearch(ctx, "", 0)
+}
+
+// ArtistTagsSearch returns case-insensitive tag matches in stable order. A zero
+// limit means unlimited; the query reads the normalized tag catalog directly
+// and does not calculate per-artist automatic tags.
+func (s *Store) ArtistTagsSearch(ctx context.Context, query string, limit int) ([]string, error) {
+	if limit < 0 || limit > 100 {
+		return nil, domain.ErrInvalid
+	}
+	needle := strings.ToLower(query)
+	sqlQuery := `SELECT normalized_name,display_name FROM tags`
+	args := []any{}
+	if needle != "" {
+		sqlQuery += ` WHERE instr(normalized_name,?)>0`
+		args = append(args, needle)
+	}
+	sqlQuery += ` ORDER BY normalized_name`
+	rows, err := s.db.QueryContext(ctx, sqlQuery, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []string{}
+	seen := map[string]string{}
 	for rows.Next() {
-		var v string
-		if err = rows.Scan(&v); err != nil {
+		var normalized, display string
+		if err = rows.Scan(&normalized, &display); err != nil {
+			rows.Close()
 			return nil, err
 		}
-		out = append(out, v)
+		seen[normalized] = display
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
@@ -242,32 +260,44 @@ func (s *Store) ArtistTags(ctx context.Context) ([]string, error) {
 	if err = rows.Close(); err != nil {
 		return nil, err
 	}
+
 	manual, err := s.db.QueryContext(ctx, `SELECT tags_json FROM artist_tag_overrides`)
 	if err != nil {
 		return nil, err
 	}
-	defer manual.Close()
-	seen := map[string]string{}
-	for _, v := range out {
-		seen[strings.ToLower(v)] = v
-	}
 	for manual.Next() {
 		var raw string
 		if err = manual.Scan(&raw); err != nil {
+			manual.Close()
 			return nil, err
 		}
-		var ts []string
-		if err = json.Unmarshal([]byte(raw), &ts); err != nil {
+		var tags []string
+		if err = json.Unmarshal([]byte(raw), &tags); err != nil {
+			manual.Close()
 			return nil, err
 		}
-		for _, v := range ts {
-			seen[strings.ToLower(v)] = v
+		for _, tag := range tags {
+			normalized := strings.ToLower(tag)
+			if needle == "" || strings.Contains(normalized, needle) {
+				seen[normalized] = tag
+			}
 		}
 	}
-	out = out[:0]
-	for _, v := range seen {
-		out = append(out, v)
+	if err = manual.Err(); err != nil {
+		manual.Close()
+		return nil, err
+	}
+	if err = manual.Close(); err != nil {
+		return nil, err
+	}
+
+	out := make([]string, 0, len(seen))
+	for _, tag := range seen {
+		out = append(out, tag)
 	}
 	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i]) < strings.ToLower(out[j]) })
-	return out, manual.Err()
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }

@@ -171,6 +171,16 @@ func (m *Manager) Save(ctx context.Context, id, name, token string) (domain.Acco
 	} else if current.TokenFile != path {
 		_ = os.Remove(current.TokenFile)
 	}
+	// Return the persisted options; credential replacement never resets them.
+	if saved, listErr := m.store.Accounts(ctx); listErr == nil {
+		for _, account := range saved {
+			if account.ID == a.ID {
+				account.Status = c.Status()
+				a = account
+				break
+			}
+		}
+	}
 	return a, nil
 }
 func (m *Manager) Delete(ctx context.Context, id string) error {

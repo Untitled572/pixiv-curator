@@ -41,7 +41,8 @@ func TestAccountFollowingUnionAndExplicitExclusions(t *testing.T) {
 			a = append(a, domain.Artist{ID: id, Name: "artist"})
 		}
 		p, _ := json.Marshal(map[string]string{"account_id": account, "cursor": ""})
-		if err = s.CommitFollowingBatch(domain.WithAccount(ctx, account), j, j.ID, a, p, true); err != nil {
+		batchCtx := domain.WithFollowVisibility(domain.WithAccount(ctx, account), "private")
+		if err = s.CommitFollowingBatch(batchCtx, j, j.ID, a, p, true); err != nil {
 			t.Fatal(err)
 		}
 	}
