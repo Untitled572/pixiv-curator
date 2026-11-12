@@ -9,7 +9,11 @@ services:
     read_only: true
     user: "${PIXIV_CURATOR_UID:-65532}:${PIXIV_CURATOR_GID:-65532}"
     stop_grace_period: 30s
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,mode=0700,uid=${PIXIV_CURATOR_UID:-65532},gid=${PIXIV_CURATOR_GID:-65532}
     environment:
+      SQLITE_TMPDIR: /tmp
+      TMPDIR: /tmp
       PIXIV_CURATOR_ADDR: "${PIXIV_CURATOR_ADDR:-127.0.0.1:5722}"
       PIXIV_CURATOR_PUBLIC_BASE_URL: "${PIXIV_CURATOR_PUBLIC_BASE_URL:-http://127.0.0.1:5722}"
       PIXIV_CURATOR_DATABASE_PATH: /data/curator.db

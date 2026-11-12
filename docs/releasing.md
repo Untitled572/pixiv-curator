@@ -104,3 +104,5 @@ gh run list --workflow release.yml
 2026-11-12：[v0.1.0 正式发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43169485544) 全部成功，四个 Windows/Linux amd64/arm64 压缩包和校验和已上传至 [Release](https://github.com/Untitled572/pixiv-curator/releases/tag/v0.1.0)。GHCR 双架构 manifest 经按 digest 回拉校验，digest 为 sha256:bd363c124c89db4f16c402f89a4872a74de0f25d1098cab7b2d7dc18017d0df7。服务器已部署此 amd64 镜像，健康/版本、管理登录、统计、公开图片完整读取与后台作品采集通过；arm64 未执行原生运行。Compose 后续修正目录挂载，使用整个 0700 private 目录只读挂载到 /run/secrets，避免 Docker 自动创建的 0755 父目录被凭据校验拒绝；真实 Compose 鉴权回归已通过。
 
 2026-11-12：[v0.1.1 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43179591669) 与 main CI 全部成功，源码 40ed3f7；Windows/Linux amd64、arm64 压缩包及 SHA256SUMS 已发布，Docker 双架构 manifest digest 为 sha256:0c90ee52e0b601d095efbc1e0a4f800aa5489a5f35866a6cc3e80a319c6e5826。服务器已从一致性备份后升级，实际根路径登录前后跳转、管理鉴权、PicHub 分发完整图片以及关注同步 5 页/117 人均通过。arm64 仍只有构建检查，没有原生运行验收。
+
+只读 Compose 根文件系统必须提供可写的内存临时目录：模板为运行 UID/GID 挂载 128 MiB `/tmp`，并设置 `SQLITE_TMPDIR=/tmp`。SQLite 大目录迁移的临时日志可能需要此目录；仅 `/data` 可写不足以覆盖该场景。Compose 冒烟测试使用 12,000 张次页的旧版数据库验证升级，账号与任务为空，不访问 Pixiv。
