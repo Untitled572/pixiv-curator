@@ -315,3 +315,6 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - Windows 发行包增加 start.cmd / PowerShell 启动器；源码目录保持构建模式，发行包无需 Go 即可运行自带 EXE。PowerShell 5.1/7 的源码及无 Go 发行目录诊断验证通过。
 - 镜像成功后再部署到 ut572.eu.org 的 /home/l31155/docker/pixiv-curator。用户明确选择迁移 data/dev 及继续同步所需凭据；使用一致性 SQLite 快照、迁移容器内凭据路径和权限，管理凭据按用户指定值配置，不记入仓库或日志。
 - 当前代码和运行验收已通过；远端构建、发布及部署结果待补。
+
+
+- 发布前实际 main CI 已发现并修复 Windows runner 的多 Go 安装问题：Get-Command 返回多个路径被拼成伪可执行文件名。选择 PATH 首个应用，并补 PowerShell 5.1/7 双 Go 安装回归及脱敏失败日志；发行目录测试在无已有 EXE 时自行编译隔离样本，不依赖测试执行顺序。Linux 测试已通过，最终 CI/发行/部署结论仍待完成。

@@ -253,9 +253,9 @@ try {
         $helper = Join-Path $PSScriptRoot 'pixiv-login.py'
         if (-not (Test-Path -LiteralPath $requirements) -or -not (Test-Path -LiteralPath $helper)) { throw '缺少 OAuth 配置辅助文件。' }
         $pythonArgs = @()
-        if ($Python) { $pythonCommand = Get-Command $Python -CommandType Application -ErrorAction Stop }
+        if ($Python) { $pythonCommand = Get-Command $Python -CommandType Application -ErrorAction Stop | Select-Object -First 1 }
         else {
-            $pythonCommand = Get-Command py.exe -CommandType Application -ErrorAction SilentlyContinue
+            $pythonCommand = Get-Command py.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($pythonCommand) { $pythonArgs = @('-3') }
             else {
                 $pythonCommand = Get-Command python.exe -CommandType Application -ErrorAction SilentlyContinue |
@@ -297,7 +297,7 @@ try {
     $hasGoSource = (Test-Path -LiteralPath (Join-Path $repo 'go.mod') -PathType Leaf) -and
         (Test-Path -LiteralPath (Join-Path $repo 'cmd/api/main.go') -PathType Leaf)
     if ($hasGoSource) {
-        $go = Get-Command go.exe -CommandType Application -ErrorAction SilentlyContinue
+        $go = Get-Command go.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($null -eq $go) { throw '源码目录启动需要 Go；未找到 Go，请先安装 Go 1.26+ 并加入 PATH。' }
         $binary = Join-Path $repo 'bin/pixiv-curator.exe'
         [void][IO.Directory]::CreateDirectory((Split-Path -Parent $binary))

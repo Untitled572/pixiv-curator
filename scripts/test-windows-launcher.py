@@ -94,7 +94,12 @@ class WindowsLauncherTests(unittest.TestCase):
             *args,
         ]
 
-    def start_launcher(self, *extra_args: str, no_login_helper: bool = True) -> subprocess.Popen[str]:
+    def start_launcher(
+        self,
+        *extra_args: str,
+        no_login_helper: bool = True,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.Popen[str]:
         args = ["-Address", self.address, "-DevDir", str(self.dev_dir), "-NoBrowser"]
         if no_login_helper:
             args.append("-NoLoginHelper")
@@ -102,7 +107,7 @@ class WindowsLauncherTests(unittest.TestCase):
         return subprocess.Popen(
             self.command(*args),
             cwd=ROOT,
-            env=self.env,
+            env=env or self.env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -239,6 +244,51 @@ class WindowsLauncherTests(unittest.TestCase):
         self.assertTrue(port_is_free(self.port), "-StopAfterReady 后监听端口仍被占用")
         if self.token_file().exists():
             self.assertTrue(self.token_value() not in output, "启动器输出包含管理 token")
+
+    def test_multiple_go_installations_select_first(self) -> None:
+        original_go = shutil.which("go.exe", path=self.env.get("PATH")) or shutil.which(
+            "go", path=self.env.get("PATH")
+        )
+        self.assertIsNotNone(original_go, "PATH 中未找到 Go，无法检查多安装场景")
+        original_dir = Path(original_go).resolve().parent
+        duplicate_dir = Path(self.temp.name) / "Go 第二安装 中文 空格"
+        duplicate_dir.mkdir()
+        shutil.copy2(original_go, duplicate_dir / Path(original_go).name)
+
+        other_paths = [
+            entry for entry in self.env.get("PATH", "").split(os.pathsep)
+            if entry and Path(entry).resolve() not in (original_dir, duplicate_dir.resolve())
+        ]
+        env = dict(self.env)
+        env["PATH"] = os.pathsep.join([str(original_dir), str(duplicate_dir), *other_paths])
+
+        count_check = subprocess.run(
+            [self.powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+             "$n = @(Get-Command go.exe -CommandType Application -All).Count; Write-Output $n"],
+            cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=15,
+        )
+        count_output = self.subprocess_output(count_check).strip()
+        self.assertEqual(count_check.returncode, 0,
+                         "检查 Go 安装数量失败：\n" + count_output)
+        try:
+            command_count = int(count_output.splitlines()[-1])
+        except (ValueError, IndexError):
+            self.fail("无法解析 Get-Command 安装数量：\n" + count_output)
+        self.assertGreaterEqual(command_count, 2,
+                                f"Get-Command 应发现至少两个 Go 安装，实际数量：{command_count}")
+
+        process = self.start_launcher("-StopAfterReady", env=env)
+        try:
+            output, _ = process.communicate(timeout=45)
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+            output, _ = process.communicate(timeout=10)
+            self.fail("多 Go 安装下启动超时：\n" + self.redact(output))
+        self.assertEqual(process.returncode, 0,
+                         "多 Go 安装下源码启动失败：\n" + self.redact(output))
+        self.assertTrue(port_is_free(self.port), "多 Go 安装下 StopAfterReady 后端口仍被占用")
 
 
     def test_release_directory_without_go_starts_and_stop_after_ready(self) -> None:
