@@ -331,4 +331,4 @@ M1–M4 是满足用户完整流程的第一版。M3 是可提前使用的最小
 - 查明代码问题：本地共享 cooldown 未发上游请求也返回普通 429，领取任务预增 attempt，导致重试预算可被其它任务触发的冷却白耗。增加 LocalCooldown 分类，应用转为 Deferred；持久化仍为 retry_wait，带 lease fencing 原子退回本次 attempt。真正上游 429 仍尊重 Retry-After、最多五次失败。调度增加可运行 following 优先级，避免控制流程排在大量补全之后；历史仍最低。
 - 新增 OAuth/API 本地冷却与实际 429 区分、冷却结束恢复、attempt4→5 延期回退、真正五次失败、旧租约和取消优先、关注优先级及未到期不阻塞回归。Windows 全仓 go vet / go test -race 通过。准备 v0.1.1 修复发行；Actions、服务器升级及关注重同步最终结果待补。
 
-- 用户发现直接打开域名根路径返回 not_found，补充根路径入口：未登录 302 到 /admin/login，已有有效会话 302 到 /admin/；未知 API 仍 404。原生 HTTP 与真实 Compose 回归同时核对入口跳转，管理 API 鉴权保持原要求。
+- 用户发现直接打开域名根路径返回 not_found，补充根路径入口：根路径先 302 到 /admin/，管理 HTML 页未登录时再 302 到 /admin/login；已有有效会话直接进入，保留 /admin Cookie 路径；未知 API 仍 404。原生 HTTP 与真实 Compose 回归同时核对入口跳转，管理 API 鉴权保持原要求。

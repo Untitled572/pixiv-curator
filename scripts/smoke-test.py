@@ -2,10 +2,12 @@
 """Check a native executable or running container through real HTTP requests."""
 
 import argparse
+import http.cookiejar
 import json
 import os
 from pathlib import Path
 import socket
+import secrets
 import subprocess
 import tempfile
 import time
@@ -13,7 +15,7 @@ import urllib.error
 import urllib.request
 
 
-def check(base, version, process):
+def check(base, version, process, admin_token=None):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + 30
     while True:
@@ -43,6 +45,15 @@ def check(base, version, process):
         raise AssertionError("management route accepted an unauthenticated request")
     except urllib.error.HTTPError as error:
         assert error.code == 401
+    if admin_token is not None:
+        browser = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        request = urllib.request.Request(base + "/admin/login", data=json.dumps({"token": admin_token}).encode(), headers={"Content-Type": "application/json"})
+        with browser.open(request, timeout=2) as response:
+            assert response.status == 200
+        with browser.open(base + "/", timeout=2) as response:
+            assert response.status == 200
+            assert response.url == base + "/admin/"
+            assert response.headers.get_content_type() == "text/html"
     print(f"PASS: healthz, readyz, root login entry, management authentication and version={version}", flush=True)
 
 
@@ -61,12 +72,16 @@ def main():
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     private = tempfile.TemporaryDirectory(prefix="curator-smoke-")
+    token = secrets.token_urlsafe(32)
+    credential = Path(private.name) / "admin-token"
+    credential.write_text(token + "\n", encoding="utf-8")
+    credential.chmod(0o600)
     env = dict(os.environ, PIXIV_CURATOR_ADDR=f"127.0.0.1:{port}",
                PIXIV_CURATOR_DATABASE_PATH=str(Path(private.name) / "catalog.db"),
-               PIXIV_CURATOR_ADMIN_TOKEN_FILE="", PIXIV_CURATOR_PIXIV_TOKEN_FILE="")
+               PIXIV_CURATOR_ADMIN_TOKEN_FILE=str(credential), PIXIV_CURATOR_PIXIV_TOKEN_FILE="")
     process = subprocess.Popen([str(args.binary.resolve())], env=env)
     try:
-        check(f"http://127.0.0.1:{port}", args.version, process)
+        check(f"http://127.0.0.1:{port}", args.version, process, token)
     finally:
         process.terminate()
         try:

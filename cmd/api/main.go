@@ -117,12 +117,15 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	server := &http.Server{
 		Handler: httpapi.NewHandlerWithRoutes(version, func(mux *http.ServeMux) {
 			auth.Register(mux)
-			mux.HandleFunc("GET /{$}", auth.ManagementEntry)
+			mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Cache-Control", "no-store")
+				http.Redirect(w, r, "/admin/", http.StatusFound)
+			})
 			httpapi.RegisterAccounts(mux, client, auth)
 			httpapi.RegisterLibrary(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
-			mux.Handle("GET /admin/{$}", auth.Middleware(http.HandlerFunc(admin.Home)))
+			mux.Handle("GET /admin/{$}", auth.BrowserMiddleware(http.HandlerFunc(admin.Home)))
 			httpapi.RegisterImages(mux, images, previewProxy, auth)
 			httpapi.RegisterRecommendations(mux, recommender, auth)
 			mux.Handle("/admin/", auth.Middleware(httpapi.NewAdminHandler(service)))
