@@ -288,13 +288,15 @@
   }
   function updateRecommendationStatus(run, loadingSamples = false) {
     const status = $("#recommendation-status");
-    const key = [run.id, run.state, run.request_count, loadingSamples].join(":");
+    const progress = Math.max(0, Math.min(100, Number(run.progress_percent) || 0));
+    const displayProgress = loadingSamples && progress >= 100 ? 99 : progress;
+    const key = [run.id, run.state, progress, loadingSamples].join(":");
     if (status.dataset.stateKey === key) return;
     status.dataset.stateKey = key;
     const parts = document.createDocumentFragment();
     parts.append(node("span", "run-state", loadingSamples ? "正在加载代表作，完成后统一显示" : "为你发现的画师"));
     parts.append(node("span", `run-pill state-${run.state || "unknown"}`, runLabel(run.state)));
-    parts.append(node("span", "run-meta", `已发起 ${Number(run.request_count) || 0} 次上游请求`));
+    parts.append(node("span", "run-meta", `${displayProgress}%`));
     status.replaceChildren(parts);
     const running = ["pending", "running", "retry_wait"].includes(run.state);
     $("#start-recommendations").disabled = running || loadingSamples;
@@ -343,7 +345,7 @@
       recommendationRunID = String(run.id || runID || "");
       if (!recommendationRunID) throw new Error("NOT_FOUND");
       if (recommendationPollError) { recommendationPollError = false; showMessage(""); }
-      updateRecommendationStatus(run);
+      updateRecommendationStatus(run, run.state === "succeeded");
       if (["pending", "running", "retry_wait"].includes(run.state)) {
         if (recommendationPendingID !== recommendationRunID || !list.children.length || invalidate) {
           list.replaceChildren(node("p", "empty-cell", "正在收集候选与代表作，完成后一次展示；候选不会自动加入图库。"));
@@ -401,13 +403,13 @@
   function renderRecommendation(item) {
     const artist = item.artist || {}, id = String(artist.id || item.artist_id || "");
     const card = node("article", "recommendation-card");
+    card.dataset.exploration = String(!!item.exploration);
     const title = node("h3", "candidate-name", artist.name || "Pixiv UID " + id);
     const sampleIDs = Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids.slice(0, 3) : [];
     const samples = node("div", "candidate-samples");
     const content = node("div", "recommendation-content");
     const heading = node("div", "candidate-heading");
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
-    if (item.exploration) identity.append(node("span", "reason-chip exploration-chip", "随机探索"));
     const score = Number(item.score);
     heading.append(node("span", "score-badge", Number.isFinite(score) ? `匹配度 ${score.toFixed(2)}` : "推荐候选")); content.append(heading);
     const reasons = Array.isArray(item.reasons) ? item.reasons : [];
@@ -431,16 +433,35 @@
       content.prepend(samples);
     } else content.append(node("p", "field-help no-samples", "尚无代表作样本，分类保持未知。"));
     const actions = node("div", "candidate-actions");
-    const approve = button(actions, "加入图库", "button button-primary", async (event) => {
-      const actionButton = event.currentTarget; actionButton.disabled = true;
-      try { await api(`/admin/api/artists/${encodeURIComponent(id)}/approve`, { method: "POST" }); showMessage("已加入图库，后台会自动安排采集。"); card.remove(); }
-      catch (error) { actionButton.disabled = false; report(error, "加入图库"); }
+    const exploring = !!item.exploration;
+    let decisionPending = false;
+    const approveButton = button(actions, "加入图库", "button button-primary", async (event) => {
+      const actionButton = event.currentTarget;
+      if (decisionPending) return;
+      decisionPending = true; approveButton.disabled = true; rejectButton.disabled = true;
+      try {
+        await api(`/admin/api/artists/${encodeURIComponent(id)}/approve`, { method: "POST" });
+        showMessage("已加入图库，后台会自动安排采集。");
+        if (exploring && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          card.classList.add("is-exploration-approved");
+          card.setAttribute("aria-label", "已加入图库：" + (artist.name || id));
+          const confirm = node("div", "exploration-confirmation");
+          confirm.append(node("strong", "", "已加入图库"), node("span", "", "已加入采集名单"));
+          card.prepend(confirm);
+          setTimeout(() => card.remove(), 650);
+        } else card.remove();
+      } catch (error) {
+        decisionPending = false; actionButton.disabled = false; rejectButton.disabled = false;
+        report(error, "加入图库");
+      }
     });
-    approve.dataset.approve = "true"; approve.disabled = true;
-    button(actions, "不感兴趣", "button button-quiet", async (event) => {
-      const actionButton = event.currentTarget; actionButton.disabled = true;
+    approveButton.dataset.approve = "true"; approveButton.disabled = true;
+    const rejectButton = button(actions, "不感兴趣", "button button-quiet", async (event) => {
+      const actionButton = event.currentTarget;
+      if (decisionPending) return;
+      decisionPending = true; approveButton.disabled = true; rejectButton.disabled = true;
       try { await api(`/admin/api/artists/${encodeURIComponent(id)}/reject`, { method: "POST" }); showMessage("已记录为不感兴趣。"); card.remove(); }
-      catch (error) { actionButton.disabled = false; report(error, "记录选择"); }
+      catch (error) { decisionPending = false; actionButton.disabled = false; approveButton.disabled = false; report(error, "记录选择"); }
     });
     content.append(actions); card.append(content); return card;
   }

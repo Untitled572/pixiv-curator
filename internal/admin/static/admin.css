@@ -94,6 +94,12 @@ textarea{resize:vertical;line-height:1.55}
 .run-meta{color:#687887}
 .recommendation-list{display:grid;gap:14px}
 .recommendation-card{display:grid;grid-template-columns:minmax(220px,.72fr) minmax(0,1.28fr);overflow:hidden;border:1px solid var(--line);border-radius:15px;background:#fff}
+.recommendation-card.is-exploration-approved{position:relative;animation:exploration-approved .65s ease-out both}
+.exploration-confirmation{position:absolute;z-index:3;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;background:rgba(239,248,237,.94);color:#356c42;text-align:center;animation:exploration-confirmation .65s ease-out both}
+.exploration-confirmation strong{font-size:20px}.exploration-confirmation span{font-size:13px;color:#64806a}
+@keyframes exploration-approved{0%{outline:0 solid rgba(173,190,89,0)}35%{outline:5px solid rgba(173,190,89,.45);transform:scale(1.008)}100%{outline:0 solid rgba(173,190,89,0);transform:scale(1)}}
+@keyframes exploration-confirmation{0%{opacity:0}18%{opacity:1}82%{opacity:1}100%{opacity:0}}
+@media(prefers-reduced-motion:reduce){.recommendation-card.is-exploration-approved,.exploration-confirmation{animation:none}.exploration-confirmation{opacity:1}}
 .recommendation-cover{min-height:310px}
 .recommendation-content{min-width:0;padding:19px}
 .candidate-heading{align-items:center;margin-bottom:11px}
@@ -303,7 +309,6 @@ input[type=radio]{min-height:0;padding:0;border:0;box-shadow:none}
 #artist-list .artist-actions{grid-column:3;grid-row:1/3;margin:0;padding:0;border:0;align-self:center}
 .recommendation-content>.candidate-samples{grid-template-columns:repeat(3,minmax(0,1fr));margin:0 0 18px;gap:10px}
 .recommendation-content>.candidate-samples .sample-tile{aspect-ratio:auto;min-height:200px;height:clamp(200px,19vw,300px);width:100%;flex:none}
-.exploration-chip{display:inline-block;margin-top:6px;background:#e8f2ea;color:#386348}
 @media(max-width:1150px){#artist-list .artist-card-body{grid-template-columns:minmax(160px,1fr) 310px}#artist-list .artist-actions{grid-column:2}#artist-list .tag-list{grid-column:1/-1;grid-row:3;max-height:24px}.recommendation-content>.candidate-samples .sample-tile{height:260px}}
 @media(max-width:767px){#artist-list .artist-card-body{grid-template-columns:1fr;gap:8px;padding:14px}#artist-list .artist-title-row{grid-column:1;grid-row:1}#artist-list .artist-id{grid-column:1;grid-row:2}#artist-list .tag-list{grid-column:1;grid-row:3;max-height:48px}#artist-list .artist-actions{grid-column:1;grid-row:4;grid-template-columns:repeat(4,minmax(0,1fr))}.recommendation-content>.candidate-samples{gap:6px}.recommendation-content>.candidate-samples .sample-tile{height:clamp(150px,40vw,230px);min-height:150px}}
 

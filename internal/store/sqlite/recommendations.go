@@ -55,6 +55,10 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 	if err != sql.ErrNoRows {
 		return "", "", err
 	}
+	budget, err = freezeRecommendationSeeds(ctx, tx, budget)
+	if err != nil {
+		return "", "", err
+	}
 	runID = randomID()
 	now := time.Now().UnixMilli()
 	if _, err = tx.ExecContext(ctx, `INSERT INTO recommendation_runs(id,state,input_version,budget_json,started_at) VALUES(?,'running','v1',?,?)`, runID, string(budget), now); err != nil {
@@ -111,6 +115,9 @@ func (s *Store) RecommendationRun(ctx context.Context, id string) (domain.Recomm
 	r.Budget = json.RawMessage(budget)
 	if err == sql.ErrNoRows {
 		err = domain.ErrNotFound
+	}
+	if err == nil {
+		r.ProgressPercent, err = s.recommendationProgress(ctx, r)
 	}
 	return r, err
 }

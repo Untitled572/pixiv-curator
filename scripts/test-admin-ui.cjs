@@ -26,6 +26,7 @@ const completedRunItems = Array.from({ length: 55 }, (_, index) => ({
 }));
 let newRunPolls = 0;
 let newRunActive = false;
+let failNextApprove = false;
 let activeNewPreviewRequests = 0, maxNewPreviewRequests = 0, newRunPreviewRequests = 0;
 let resolveFirstNewPreview;
 const firstNewPreviewSeen = new Promise((resolve) => { resolveFirstNewPreview = resolve; });
@@ -60,16 +61,20 @@ const server = http.createServer((req, res) => {
     payload = { run_id: "run-new" };
     return res.end(JSON.stringify(payload));
   }
+  if (/^\/admin\/api\/artists\/\d+\/approve$/.test(url.pathname) && req.method === "POST") {
+    if (failNextApprove) { failNextApprove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
+    return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ updated: true })); }, 100);
+  }
   if ((url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") && req.method === "GET") {
     if (url.searchParams.get("run_id") === "run-new" || (url.pathname === "/admin/api/recommendation-runs/latest" && newRunActive)) {
       newRunPolls++;
       const running = newRunPolls <= 2;
-      payload = { run: { id: "run-new", state: running ? "running" : "succeeded", request_count: newRunPolls }, items: running ? completedRunItems.slice(0, 3) : completedRunItems };
+      payload = { run: { id: "run-new", state: running ? "running" : "succeeded", request_count: newRunPolls, progress_percent: running ? newRunPolls * 10 : 100 }, items: running ? completedRunItems.slice(0, 3) : completedRunItems };
       return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify(payload)); }, 30);
     }
     const rating = url.searchParams.get("content_rating") || "all", ai = url.searchParams.get("ai_type") || "all";
     const filtered = recommendationItems.filter((item) => (rating === "all" || item.content_rating === rating) && (ai === "all" || item.ai_status === ai));
-    payload = { run: { id: "run-test", state: "succeeded", request_count: 2 }, items: filtered };
+    payload = { run: { id: "run-test", state: "succeeded", request_count: 2, progress_percent: 100 }, items: filtered };
     const delay = rating === "adult" ? 450 : 15;
     return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify(payload)); }, delay);
   }
@@ -224,7 +229,7 @@ const server = http.createServer((req, res) => {
 	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
 	const beforeNewRunPreviews = hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length;
 	await page.locator("#start-recommendations").click();
-	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "已发起 1 次上游请求");
+	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "10%");
 	assert.equal(await page.locator("#start-recommendations").isDisabled(), true, "a running recommendation job cannot be started again");
 	assert.equal(await page.locator(".recommendation-card").count(), 0, "running jobs must not display partial candidates");
 	const runningPlaceholderText = await page.locator("#recommendation-list").evaluate((list) => { window.__runningRecommendationPlaceholder = list.firstElementChild; return list.firstElementChild?.textContent || ""; });
@@ -233,7 +238,7 @@ const server = http.createServer((req, res) => {
 	assert.equal(hits.filter((hit) => hit === "/admin/api/recommendations").length, 1, "the new recommendation job should be submitted once");
 	await page.evaluate(() => document.querySelector("#start-recommendations").click());
 	assert.equal(hits.filter((hit) => hit === "/admin/api/recommendations").length, 1, "disabled start action must not submit a duplicate job");
-	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "已发起 2 次上游请求");
+	await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "20%");
 	assert.ok(await page.locator("#recommendation-list").evaluate((list) => list.firstElementChild.isSameNode(window.__runningRecommendationPlaceholder)), "polling running status must not rebuild the candidate list (old=" + await page.evaluate(() => window.__runningRecommendationPlaceholder?.textContent) + ", new=" + await page.locator("#recommendation-list").textContent() + ")");
 	assert.equal(await page.locator(".recommendation-card").count(), 0, "the second running response must still hide partial candidates");
 	assert.equal(hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length, beforeNewRunPreviews, "running partial samples must remain unfetched");
@@ -246,7 +251,33 @@ const server = http.createServer((req, res) => {
 	assert.equal(newRunPreviewRequests, 90, "only the first 30 candidates should load three previews each");
 	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
 	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
-    assert.equal(await page.locator(".exploration-chip").count(), 6);
+    assert.equal(await page.locator('.recommendation-card[data-exploration="true"]').count(), 6);
+    assert.equal(await page.locator(".exploration-chip").count(), 0, "exploration candidates share the normal recommendation presentation");
+    const failedExploration = page.locator('.recommendation-card[data-exploration="true"]').first();
+    failNextApprove = true;
+    await failedExploration.locator("[data-approve]").click();
+    await page.waitForFunction((card) => !card.querySelector("[data-approve]")?.disabled, await failedExploration.elementHandle());
+    assert.equal(await failedExploration.count(), 1, "failed approval keeps the exploration card");
+    assert.equal(await failedExploration.evaluate((card) => card.classList.contains("is-exploration-approved")), false, "failed approval has no success animation");
+    const successExploration = page.locator('.recommendation-card[data-exploration="true"]').nth(1);
+    const approveResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/artists/1026/approve"));
+    await successExploration.locator("[data-approve]").click();
+    assert.equal(await successExploration.locator("button").filter({ hasText: "不感兴趣" }).isDisabled(), true, "both decisions are locked while approval is pending");
+    assert.equal(await successExploration.locator("[data-approve]").isDisabled(), true);
+    await approveResponse;
+    await successExploration.locator(".exploration-confirmation").waitFor();
+    assert.equal(await successExploration.locator(".exploration-confirmation").textContent(), "已加入图库已加入采集名单");
+    assert.equal(await successExploration.count(), 1, "successful exploration approval shows a brief confirmation before removal");
+    const normalCard = page.locator('.recommendation-card[data-exploration="false"]').first();
+    const normalHandle = await normalCard.elementHandle();
+    await normalCard.locator("[data-approve]").click();
+    await page.waitForFunction((card) => !card.isConnected, normalHandle);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const reducedCard = page.locator('.recommendation-card[data-exploration="true"]').first();
+    const reducedHandle = await reducedCard.elementHandle();
+    await reducedCard.locator("[data-approve]").click();
+    await page.waitForFunction((card) => !card.isConnected, reducedHandle);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.screenshot({path:path.join(root,"data","discovery-three-previews.png"),fullPage:false});
 	await page.setViewportSize({ width: 1440, height: 900 });

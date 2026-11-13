@@ -3,6 +3,7 @@ package domain
 import "encoding/json"
 
 type RecommendationRun struct {
+	ProgressPercent int             `json:"progress_percent"`
 	ID              string          `json:"id"`
 	State           string          `json:"state"`
 	SeedCursor      int64           `json:"-"`

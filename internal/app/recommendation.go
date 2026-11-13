@@ -101,6 +101,11 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		return taskInvalid()
 	}
 	seeds, err := s.store.RecommendationSeeds(ctx, budget.SeedArtists)
+	if frozen, ok := s.store.(interface {
+		RecommendationSeedsForRun(context.Context, string, int) ([]domain.Artist, error)
+	}); ok {
+		seeds, err = frozen.RecommendationSeedsForRun(ctx, run.ID, budget.SeedArtists)
+	}
 	if err != nil {
 		return classify(err)
 	}
