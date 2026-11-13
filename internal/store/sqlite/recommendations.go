@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -60,6 +61,10 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 		return "", "", err
 	}
 	budget, err = freezeRecommendationSeeds(ctx, tx, budget)
+	if err != nil {
+		return "", "", err
+	}
+	budget, err = freezeExplorationPlan(budget)
 	if err != nil {
 		return "", "", err
 	}
@@ -185,11 +190,45 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 	if err != nil {
 		return err
 	}
+	var plan struct {
+		Independent  bool `json:"independent_exploration"`
+		Limit        int  `json:"independent_candidate_limit"`
+		RankingLimit int  `json:"ranking_candidate_limit"`
+		UniformLimit int  `json:"uniform_candidate_limit"`
+	}
+	if err = json.Unmarshal([]byte(budgetRaw), &plan); err != nil {
+		return err
+	}
 	ids := make([]int64, 0, len(candidates))
+	independentIDs := make([]int64, 0, len(candidates))
 	for id := range candidates {
-		ids = append(ids, id)
+		if plan.Independent && hasIndependentRecallSource(sources[id]) {
+			independentIDs = append(independentIDs, id)
+		} else {
+			ids = append(ids, id)
+		}
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	sort.Slice(independentIDs, func(i, j int) bool {
+		a, b := recommendationAdmissionHash(runID, independentIDs[i]), recommendationAdmissionHash(runID, independentIDs[j])
+		if a == b {
+			return independentIDs[i] < independentIDs[j]
+		}
+		return string(a[:]) < string(b[:])
+	})
+	ids = append(independentIDs, ids...)
+	var rankingCohort, uniformCohort, totalIndependent int
+	if plan.Independent {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recommendations r WHERE r.run_id=? AND COALESCE(json_extract(r.components_json,'$.carryover'),0)<>1 AND EXISTS(SELECT 1 FROM json_each(r.sources_json) WHERE value=?)`, runID, independentSource).Scan(&rankingCohort); err != nil {
+			return err
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recommendations r WHERE r.run_id=? AND COALESCE(json_extract(r.components_json,'$.carryover'),0)<>1 AND EXISTS(SELECT 1 FROM json_each(r.sources_json) WHERE value=?)`, runID, independentUniformSource).Scan(&uniformCohort); err != nil {
+			return err
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recommendations r WHERE r.run_id=? AND COALESCE(json_extract(r.components_json,'$.carryover'),0)<>1 AND EXISTS(SELECT 1 FROM json_each(r.sources_json) WHERE value IN (?,?))`, runID, independentSource, independentUniformSource).Scan(&totalIndependent); err != nil {
+			return err
+		}
+	}
 	for _, id := range ids {
 		if excluded[id] {
 			continue
@@ -214,6 +253,27 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 		if sourceErr == nil && carryover {
 			continue
 		}
+		var oldSources []string
+		if oldJSON != "" {
+			_ = json.Unmarshal([]byte(oldJSON), &oldSources)
+		}
+		mergedSources := dedupeStrings(append(oldSources, sources[id]...))
+		oldRanking := hasIndependentRankingSource(oldSources)
+		oldUniform := hasIndependentUniformSource(oldSources)
+		newRanking := hasIndependentRankingSource(mergedSources) && !oldRanking
+		newUniform := hasIndependentUniformSource(mergedSources) && !oldUniform
+		newIndependent := !oldRanking && !oldUniform && (newRanking || newUniform)
+		if eligible && plan.Independent && (newRanking || newUniform) {
+			if newRanking && rankingCohort >= plan.RankingLimit {
+				continue
+			}
+			if newUniform && uniformCohort >= plan.UniformLimit {
+				continue
+			}
+			if newIndependent && totalIndependent >= plan.Limit {
+				continue
+			}
+		}
 		if eligible && sourceErr == sql.ErrNoRows {
 			var count int
 			if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recommendations WHERE run_id=?`, runID).Scan(&count); err != nil {
@@ -237,16 +297,22 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 		if !eligible {
 			continue
 		}
-		var oldSources []string
-		if oldJSON != "" {
-			_ = json.Unmarshal([]byte(oldJSON), &oldSources)
-		}
-		sourceList := dedupeStrings(append(oldSources, sources[id]...))
-		srcJSON, _ := json.Marshal(sourceList)
+		srcJSON, _ := json.Marshal(mergedSources)
 		empty, _ := json.Marshal([]string{})
 		_, err = tx.ExecContext(ctx, `INSERT INTO recommendations(run_id,artist_id,score,reasons_json,sample_illust_ids_json,sources_json,confidence,score_version,components_json,created_at,updated_at) VALUES(?,?,0,'[]',?,?, 'low','', '{}',?,?) ON CONFLICT(run_id,artist_id) DO UPDATE SET sources_json=excluded.sources_json,updated_at=excluded.updated_at`, runID, id, string(empty), string(srcJSON), now, now)
 		if err != nil {
 			return err
+		}
+		if plan.Independent {
+			if newRanking {
+				rankingCohort++
+			}
+			if newUniform {
+				uniformCohort++
+			}
+			if newIndependent {
+				totalIndependent++
+			}
 		}
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE recommendation_runs SET seed_cursor=MAX(seed_cursor,?) WHERE id=?`, nextSeed, runID)
@@ -254,6 +320,22 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 		return err
 	}
 	return tx.Commit()
+}
+
+func recommendationAdmissionHash(runID string, artistID int64) [32]byte {
+	return sha256.Sum256([]byte(runID + ":" + strconv.FormatInt(artistID, 10)))
+}
+
+func hasIndependentRecallSource(sources []string) bool {
+	return hasIndependentRankingSource(sources) || hasIndependentUniformSource(sources)
+}
+
+func hasIndependentRankingSource(sources []string) bool {
+	return containsString(sources, independentSource)
+}
+
+func hasIndependentUniformSource(sources []string) bool {
+	return containsString(sources, independentUniformSource)
 }
 
 func dedupeStrings(in []string) []string {

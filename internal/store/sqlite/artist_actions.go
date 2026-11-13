@@ -5,8 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"time"
+
+	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
 // DecideArtist is the only path from pending to approved. Approval and task
@@ -42,9 +43,14 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 				return "", err
 			}
 		}
-	case "reject":
-		if state != "pending" && state != "rejected" {
+	case "reject", "remove":
+		if action == "remove" && state != "approved" && state != "rejected" {
 			return "", domain.ErrConflict
+		}
+		if state != "pending" && state != "rejected" {
+			if action != "remove" || state != "approved" {
+				return "", domain.ErrConflict
+			}
 		}
 		next = "rejected"
 		enabled = false
@@ -85,7 +91,7 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 		if err = cancelArtistJobs(ctx, tx, id); err != nil {
 			return "", err
 		}
-		if action == "block" || action == "reject" {
+		if action == "block" || action == "reject" || action == "remove" {
 			if err = cancelRemoteFollowJobs(ctx, tx, id); err != nil {
 				return "", err
 			}

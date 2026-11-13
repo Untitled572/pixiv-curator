@@ -130,6 +130,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 			httpapi.RegisterAccountOptions(mux, client, auth)
 			httpapi.RegisterHistory(mux, store, auth)
 			httpapi.RegisterLibrary(mux, store, auth)
+			httpapi.RegisterLibraryCleanup(mux, store, auth)
+			httpapi.RegisterImageFeedback(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.BrowserMiddleware(http.HandlerFunc(admin.Home)))

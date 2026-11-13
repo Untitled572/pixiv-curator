@@ -32,7 +32,7 @@ func DefaultBudget() Budget {
 	return Budget{
 		SeedArtists: 8, SeedSamplesPerArtist: 4,
 		CandidateArtists: 30, CandidateSamplesPerArtist: 3,
-		TotalRequests: 80, RecallArtists: 60, ExplorationArtists: 6,
+		TotalRequests: 80, RecallArtists: 60, ExplorationArtists: 13,
 	}
 }
 
@@ -58,6 +58,8 @@ type Candidate struct {
 // Profile weights each eligible seed artist equally, regardless of how many
 // works or tags that artist contributed.
 type Profile struct {
+	FeedbackTagCounts  map[string]float64 `json:"feedback_tag_counts,omitempty"`
+	Regression         *RegressionModel   `json:"regression,omitempty"`
 	TagWeights         map[string]float64
 	NegativeTagWeights map[string]float64
 	SeedArtistCount    int

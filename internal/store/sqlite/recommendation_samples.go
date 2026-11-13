@@ -11,7 +11,7 @@ func (s *Store) RecommendationSamples(ctx context.Context, id int64, limit int) 
 	if id <= 0 || limit < 1 || limit > 8 {
 		return nil, domain.ErrInvalid
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.bookmarks,0) DESC,COALESCE(a.published_at,0) DESC,a.id LIMIT ?`, id, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' AND NOT EXISTS(SELECT 1 FROM image_feedback f WHERE f.illust_id=a.id AND f.page_index=0 AND f.value='dislike') ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.bookmarks,0) DESC,COALESCE(a.published_at,0) DESC,a.id LIMIT ?`, id, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -36,7 +36,7 @@ func (s *Store) RecommendationSamples(ctx context.Context, id int64, limit int) 
 			args = append(args, v)
 		}
 		var recent int64
-		e := s.db.QueryRowContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' AND a.id NOT IN (`+placeholders(len(selected))+`) ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.published_at,0) DESC,a.id LIMIT 1`, args...).Scan(&recent)
+		e := s.db.QueryRowContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' AND NOT EXISTS(SELECT 1 FROM image_feedback f WHERE f.illust_id=a.id AND f.page_index=0 AND f.value='dislike') AND a.id NOT IN (`+placeholders(len(selected))+`) ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.published_at,0) DESC,a.id LIMIT 1`, args...).Scan(&recent)
 		if e != nil {
 			return nil, e
 		}

@@ -13,12 +13,16 @@ func selectRecommendationExploration(ctx context.Context, tx *sql.Tx, runID stri
 		return err
 	}
 	var b struct {
+		Independent        bool   `json:"independent_exploration"`
 		RefillParent       string `json:"refill_parent_run"`
 		CandidateArtists   int    `json:"candidate_artists"`
 		ExplorationArtists int    `json:"exploration_artists"`
 	}
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		return err
+	}
+	if b.Independent {
+		return selectIndependentRecommendations(ctx, tx, runID, []byte(raw))
 	}
 	if b.ExplorationArtists <= 0 && b.RefillParent == "" {
 		return nil

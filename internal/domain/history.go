@@ -16,6 +16,7 @@ type DistributionHistoryItem struct {
 	Width        int      `json:"width"`
 	Height       int      `json:"height"`
 	Available    bool     `json:"available"`
+	Feedback     string   `json:"feedback"`
 	ThumbnailURL string   `json:"thumbnail_url"`
 	FullURL      string   `json:"full_url"`
 }

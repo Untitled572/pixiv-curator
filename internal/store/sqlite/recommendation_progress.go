@@ -24,8 +24,13 @@ func (s *Store) recommendationProgress(ctx context.Context, run domain.Recommend
 	}
 	if stats == "{}" {
 		var budget struct {
-			SeedArtists   int     `json:"seed_artists"`
-			SeedArtistIDs []int64 `json:"seed_artist_ids"`
+			SeedArtists       int               `json:"seed_artists"`
+			SeedArtistIDs     []int64           `json:"seed_artist_ids"`
+			Independent       bool              `json:"independent_exploration"`
+			Queries           []json.RawMessage `json:"exploration_queries"`
+			ExplorationCursor int               `json:"exploration_cursor"`
+			UniformIDs        []int64           `json:"uniform_probe_ids"`
+			UniformCursor     int               `json:"uniform_cursor"`
 		}
 		if err := json.Unmarshal(run.Budget, &budget); err != nil {
 			return 0, err
@@ -44,6 +49,21 @@ func (s *Store) recommendationProgress(ctx context.Context, run domain.Recommend
 			for _, seed := range seeds {
 				seedIDs = append(seedIDs, seed.ID)
 			}
+		}
+		if budget.Independent {
+			if len(budget.Queries) > 0 && budget.ExplorationCursor < len(budget.Queries) {
+				return 1 + 15*max(0, budget.ExplorationCursor)/len(budget.Queries), nil
+			}
+			if len(budget.UniformIDs) > 0 && budget.UniformCursor < len(budget.UniformIDs) {
+				return 16 + 15*max(0, budget.UniformCursor)/len(budget.UniformIDs), nil
+			}
+			done := 0
+			for _, id := range seedIDs {
+				if id <= run.SeedCursor {
+					done++
+				}
+			}
+			return min(40, 31+9*done/max(1, len(seedIDs))), nil
 		}
 		if run.SeedCursor <= 0 {
 			return 1, nil

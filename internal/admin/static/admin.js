@@ -17,6 +17,8 @@
   let accountStatusLoading = false;
   let accountChoices = [];
   let historyPage = 1, historyPages = 0, historyController = null;
+  let libraryReviewController = null;
+  const historyFeedback = new Map(), historyFeedbackPending = new Set();
 
   function node(tag, className = "", text) {
     const item = document.createElement(tag);
@@ -187,7 +189,7 @@
     const name = node("h3", "artist-name");
     button(name, artist.name || "Pixiv UID " + id, "artist-detail-link", () => openArtistDetails(artist));
     title.append(name);
-    title.append(node("span", `status-pill ${artist.review_status || "pending"}`, statusText(artist.review_status)));
+    title.append(node("span", `status-pill ${artist.review_status || "pending"}${artist.review_status === "approved" && !artist.collection_enabled ? " is-paused" : ""}`, artist.review_status === "approved" && !artist.collection_enabled ? "已暂停" : statusText(artist.review_status)));
     body.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`));
     const tags = Array.isArray(artist.tags) ? artist.tags : [];
     const tagList = node("div", "tag-list");
@@ -233,6 +235,44 @@
     container.append(image);
   }
   function statusText(status) { return ({ approved: "已收录", pending: "正在加入", blocked: "已屏蔽", rejected: "未收录" })[status] || "已收录"; }
+  async function loadLibraryReview() {
+    libraryReviewController?.abort(); const controller = new AbortController(); libraryReviewController = controller;
+    const list = $("#library-review-list"); list.setAttribute("aria-busy", "true");
+    list.replaceChildren(node("p", "empty-cell", "正在读取…")); $("#reload-library-review").disabled = true;
+    try {
+      const result = await api("/admin/api/library/review", { signal: controller.signal });
+      if (controller.signal.aborted || !$("#library-review").open) return;
+      const fragment = document.createDocumentFragment();
+      (Array.isArray(result.items) ? result.items : []).slice(0, 5).forEach((item) => {
+        const artist = item.artist || {}, id = String(artist.id || "");
+        const card = node("article", "library-review-card"); card.dataset.artistId = id;
+        const heading = node("div", "library-review-heading");
+        const identity = node("div"); identity.append(node("h3", "artist-name", artist.name || "Pixiv UID " + id), node("p", "artist-id", "UID " + id)); heading.append(identity);
+        button(heading, "保留", "button button-quiet button-small", (event) => { event.currentTarget.closest(".library-review-card")?.remove(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); });
+        card.append(heading);
+        const samples = node("div", "library-review-samples");
+        (Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids : []).slice(0, 3).forEach((illustID) => {
+          const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 大图");
+          tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex: 0, title: "代表作 " + illustID, artistName: artist.name || "" }));
+          const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
+        });
+        if (samples.children.length) card.append(samples);
+        const actions = node("div", "library-review-actions");
+        actions.append(node("p", "field-help", "移出只从图库隐藏，保留本地目录，也不会取关。"));
+        button(actions, "移出图库", "button button-danger button-small", async (event) => {
+          const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true;
+          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST" }); card.remove(); showMessage("画师已移出图库；本地目录和关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
+          catch (error) { report(error, "移出图库"); trigger.disabled = false; }
+        });
+        card.append(actions); fragment.append(card);
+      });
+      if (!fragment.children.length) fragment.append(node("p", "empty-cell", "目前没有可整理的画师。"));
+      list.replaceChildren(fragment);
+    } catch (error) { if (!controller.signal.aborted) { report(error, "读取整理建议"); list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可换一组重试。")); } }
+    finally { if (!controller.signal.aborted) { list.setAttribute("aria-busy", "false"); $("#reload-library-review").disabled = false; } }
+  }
+  $("#library-review").addEventListener("toggle", () => { if ($("#library-review").open) loadLibraryReview(); else libraryReviewController?.abort(); });
+  $("#reload-library-review").addEventListener("click", loadLibraryReview);
   async function libraryArtistAction(id, action, trigger) {
     if (trigger?.disabled) return;
     if (trigger) trigger.disabled = true;
@@ -423,7 +463,6 @@
   function renderRecommendation(item) {
     const artist = item.artist || {}, id = String(artist.id || item.artist_id || "");
     const card = node("article", "recommendation-card");
-    card.dataset.exploration = String(!!item.exploration);
     card.dataset.artistId = id;
     const sampleIDs = Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids.slice(0, 3) : [];
     const title = node("h3", "candidate-name");
@@ -438,8 +477,9 @@
     const content = node("div", "recommendation-content");
     const heading = node("div", "candidate-heading");
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
-    const score = Number(item.score);
-    heading.append(node("span", "score-badge", Number.isFinite(score) ? `匹配度 ${score.toFixed(2)}` : "推荐候选")); content.append(heading);
+    const score = Number(item.components?.display_score ?? item.score);
+    const scoreBadge = node("span", "score-badge", Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
+    scoreBadge.title = "仅用于候选排序参考，不代表喜欢概率"; heading.append(scoreBadge); content.append(heading);
     const reasons = Array.isArray(item.reasons) ? item.reasons : [];
     const chips = node("div", "reason-list");
     if (reasons.length) reasons.slice(0, 5).forEach((reason) => chips.append(node("span", "reason-chip", reason)));
@@ -472,7 +512,7 @@
         showMessage("已加入图库，后台会自动安排采集。");
         if (exploring && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
           emitExplorationApprovalParticles(card);
-          setTimeout(() => card.remove(), 950);
+          setTimeout(() => card.remove(), 475);
         } else card.remove();
       } catch (error) {
         decisionPending = false; actionButton.disabled = false; rejectButton.disabled = false;
@@ -491,9 +531,10 @@
   }
   function emitExplorationApprovalParticles(card) {
     const bounds = card.getBoundingClientRect();
+    const zoom = Math.max(0.01, Number.parseFloat(getComputedStyle(document.body).zoom) || 1);
     const overlay = node("div", "exploration-particle-overlay");
     overlay.setAttribute("aria-hidden", "true");
-    Object.assign(overlay.style, { left: `${bounds.left}px`, top: `${bounds.top}px`, width: `${bounds.width}px`, height: `${bounds.height}px` });
+    Object.assign(overlay.style, { left: `${bounds.left / zoom}px`, top: `${bounds.top / zoom}px`, width: `${bounds.width / zoom}px`, height: `${bounds.height / zoom}px` });
     for (let index = 0; index < 96; index += 1) {
       const particle = node("span", "exploration-particle");
       const x = ((index % 12) + 0.5 + (Math.random() - 0.5) * 0.35) / 12;
@@ -504,11 +545,11 @@
       particle.style.top = `${y * 100}%`;
       particle.style.setProperty("--particle-x", `${Math.cos(angle) * distance}px`);
       particle.style.setProperty("--particle-y", `${Math.sin(angle) * distance}px`);
-      particle.style.setProperty("--particle-delay", `${Math.random() * 100}ms`);
+      particle.style.setProperty("--particle-delay", `${Math.random() * 50}ms`);
       overlay.append(particle);
     }
     document.body.append(overlay);
-    setTimeout(() => overlay.remove(), 1000);
+    setTimeout(() => overlay.remove(), 500);
   }
   function closeArtistDetails() {
     detailController?.abort(); detailController = null;
@@ -612,6 +653,22 @@
           title.append(titleButton);
         } else title.textContent = item.title || "作品 " + item.illust_id;
         card.append(cover, title, node("p", "artwork-meta", (item.artist_name || "UID " + item.artist_id) + " · 第 " + (Number(item.page_index) + 1) + " 页"), node("p", "artwork-meta", formatTime(item.selected_at)));
+        const key = `${item.illust_id}:${Number(item.page_index)}`;
+        if (!historyFeedbackPending.has(key)) historyFeedback.set(key, ["like", "dislike", "neutral"].includes(item.feedback) ? item.feedback : "neutral");
+        const controls = node("div", "history-feedback"); controls.dataset.feedbackKey = key;
+        const buttons = new Map();
+        const choices = [["like", "赞"], ["dislike", "踩"], ["neutral", "撤销"]];
+        const applyFeedback = (value) => { historyFeedback.set(key, value); document.querySelectorAll(`[data-feedback-key="${CSS.escape(key)}"]`).forEach((group) => group.querySelectorAll("button").forEach((control) => { const choice = control.dataset.feedback; control.setAttribute("aria-pressed", String(choice === value)); control.classList.toggle("is-selected", choice === value); })); };
+        const initialFeedback = historyFeedback.get(key);
+        choices.forEach(([value, label]) => { const control = button(controls, label, "button button-quiet button-small", async (event) => {
+          if (historyFeedbackPending.has(key)) return;
+          const previous = historyFeedback.get(key) || "neutral"; if (previous === value) return;
+          historyFeedbackPending.add(key); document.querySelectorAll(`[data-feedback-key="${CSS.escape(key)}"] button`).forEach((control) => { control.disabled = true; }); applyFeedback(value);
+          try { const result = await api("/admin/api/image-feedback", { method: "PUT", body: JSON.stringify({ illust_id: String(item.illust_id), page_index: Number(item.page_index), value }) }); const saved = ["like", "dislike", "neutral"].includes(result.value) ? result.value : value; applyFeedback(saved); }
+          catch (error) { applyFeedback(previous); report(error, "保存图片反馈"); }
+          finally { historyFeedbackPending.delete(key); document.querySelectorAll(`[data-feedback-key="${CSS.escape(key)}"] button`).forEach((entry) => { entry.disabled = false; }); }
+        }); control.disabled = historyFeedbackPending.has(key); control.dataset.feedback = value; control.setAttribute("aria-pressed", String(value === initialFeedback)); control.classList.toggle("is-selected", value === initialFeedback); buttons.set(value, control); });
+        card.append(controls);
         fragment.append(card);
       }
       if (!fragment.children.length) fragment.append(node("p", "empty-cell", "暂无选图记录。升级前已被清理的记录无法恢复。"));
@@ -632,19 +689,21 @@
         ["image_pages", "全部图片", "按作品分页计数，包含历史记录"],
         ["artworks", "全部作品", "一个作品可包含多张图片"],
         ["library_artists", "图库画师", "已收录与已屏蔽画师"],
-        ["artists", "全部画师", "包括推荐候选与历史记录"],
         ["accounts", "Pixiv 账号", "当前未删除的账号"],
         ["indexed_pages", "已索引图片", "不等同于符合当前供图规则"],
         ["unavailable_pages", "不可用图片", "已记录失效或不可用"],
         ["collecting_artists", "启用采集", "持续更新目录的画师"],
         ["blocked_artists", "已屏蔽画师", "始终排除公开供图"],
         ["unknown_rating_artworks", "分级未知作品", "默认不供图，可在偏好中允许"],
-        ["unknown_ai_artworks", "AI 状态未知作品", "默认不供图，可在偏好中允许"]
+        ["unknown_ai_artworks", "AI 状态未知作品", "默认不供图，可在偏好中允许"],
+        ["r18_image_pages", "R18 图片", "含 R18G 的已知 R18 图片分页"],
+        ["r18_image_ratio", "R18 占比", "含 R18G；分母为全部图片，包含未知分级"]
       ];
       list.replaceChildren();
       for (const [key, label, note] of metrics) {
         const card = node("article", "stat-card");
-        card.append(node("p", "muted", label), node("strong", "stat-value", Number(result[key] || 0).toLocaleString()), node("p", "field-help", note)); list.append(card);
+        const value = key === "r18_image_ratio" ? `${(Math.max(0, Math.min(1, Number(result[key]) || 0) * 100).toFixed(1))}%` : Number(result[key] || 0).toLocaleString();
+        card.append(node("p", "muted", label), node("strong", "stat-value", value), node("p", "field-help", note)); list.append(card);
       }
       $("#stats-updated").textContent = "更新于 " + new Date().toLocaleTimeString();
     } catch (error) { $("#stats-updated").textContent = "读取失败，可重新刷新。"; report(error, "读取统计"); }

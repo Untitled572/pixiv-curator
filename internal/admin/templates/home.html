@@ -22,12 +22,12 @@
     <div class="sidebar-footer"><span class="local-badge">私人图库 · 本地管理</span><p>关注画师自动收录<br>推荐画师由你选择加入</p></div>
   </aside>
   <div class="app-shell">
-  <header class="topbar"><div class="breadcrumb"><span>管理控制台</span><span aria-hidden="true">/</span><h1 id="current-page-title">统计与接口</h1></div><button id="logout-button" class="button button-secondary button-small" type="button">退出登录</button></header>
+  <header class="topbar"><div class="breadcrumb"><span>管理控制台</span><span aria-hidden="true">/</span><h1 id="current-page-title">统计与接口</h1></div><div class="topbar-actions"><div id="global-message" class="notice" role="status" aria-live="polite" hidden></div><button id="logout-button" class="button button-secondary button-small" type="button">退出登录</button></div></header>
   <main class="workspace" id="main-content" tabindex="-1">
-    <div id="global-message" class="notice" role="status" aria-live="polite" hidden></div>
 
     <section class="panel tab-panel" id="panel-library" data-panel="library" role="tabpanel" aria-labelledby="tab-library" hidden>
       <div class="panel-heading"><div><p class="eyebrow">本地采集名单</p><h2>画师图库</h2><p class="muted">分页浏览已收录画师。点击详情后才加载代表作；标签修正只影响本地目录。</p></div><button id="reload-library" class="button button-secondary" type="button">刷新图库</button></div>
+      <details id="library-review" class="library-review"><summary class="button button-secondary">整理图库</summary><div class="library-review-body"><div class="section-heading"><p class="muted">看看近期作品，决定是否移出图库。</p><button id="reload-library-review" class="button button-quiet button-small" type="button">换一组</button></div><div id="library-review-list" class="library-review-list"><p class="empty-cell">展开后读取建议。</p></div></div></details>
       <form id="manual-artist-form" class="manual-add"><label for="manual-artist-id">手动添加 Pixiv UID</label><div class="manual-add-row"><input id="manual-artist-id" name="id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="输入数字 UID" required><button class="button button-primary" type="submit">加入图库</button></div><p class="field-help">点击后会将画师加入图库并安排后台采集。</p></form>
       <div class="library-tools"><label>按标签筛选<input id="library-tag-search" type="search" autocomplete="off" placeholder="输入关键词搜索标签"><select id="library-tag"><option value="">所有标签</option></select><small id="library-tag-hint" class="field-help">搜索后选择标签，每次最多显示 30 个。</small></label><label>账号<select id="library-account"><option value="">所有账号</option></select></label><label>采集状态<select id="library-collection"><option value="">全部状态</option><option value="1">启用采集</option><option value="0">暂停采集</option></select></label><span id="library-summary" class="muted sr-only" aria-live="polite"></span></div>
       <div id="artist-list" class="artist-grid" aria-live="polite"><p class="empty-cell">正在读取图库…</p></div>

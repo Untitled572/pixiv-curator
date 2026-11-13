@@ -280,6 +280,15 @@ func (m *Manager) RelatedArtworks(ctx context.Context, id int64) ([]pixiv.RawArt
 	}
 	return c.RelatedArtworks(ctx, id)
 }
+func (m *Manager) ExplorationArtworks(ctx context.Context, mode, date string, offset int) ([]pixiv.RawArtwork, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, e := m.client(ctx)
+	if e != nil {
+		return nil, e
+	}
+	return c.ExplorationArtworks(ctx, mode, date, offset)
+}
 func (m *Manager) Status() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

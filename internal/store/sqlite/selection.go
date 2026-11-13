@@ -422,7 +422,19 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 		return selectionPage{}, nil
 	}
 	if rules.Strategy == "random" {
-		rows, err := selectionRows(ctx, tx, where, args, `random()`, 1)
+		counts, err := imageFeedbackInTx(ctx, tx)
+		if err != nil {
+			return selectionPage{}, err
+		}
+		limit := 1
+		if len(counts) > 0 {
+			limit = 64
+		}
+		rows, err := selectionRows(ctx, tx, where, args, `random()`, limit)
+		if err != nil {
+			return selectionPage{}, err
+		}
+		rows, err = feedbackOrderPages(ctx, tx, rows, counts, 1)
 		if err != nil {
 			return selectionPage{}, err
 		}
@@ -437,10 +449,26 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 	if err != nil {
 		return selectionPage{}, err
 	}
+	counts, err := imageFeedbackInTx(ctx, tx)
+	if err != nil {
+		return selectionPage{}, err
+	}
+	artistIDs, err = feedbackOrderArtists(ctx, tx, artistIDs, counts)
+	if err != nil {
+		return selectionPage{}, err
+	}
 	for _, id := range artistIDs {
 		artistWhere := appendAnd(where, `a.artist_id=?`)
 		artistArgs := append(append([]any(nil), args...), id)
-		rows, err := selectionRows(ctx, tx, artistWhere, artistArgs, `CASE WHEN EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='like') THEN 0 ELSE 1 END, random()`, 1)
+		limit := 1
+		if len(counts) > 0 {
+			limit = 20
+		}
+		rows, err := selectionRows(ctx, tx, artistWhere, artistArgs, `CASE WHEN EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='like') THEN 0 ELSE 1 END, random()`, limit)
+		if err != nil {
+			return selectionPage{}, err
+		}
+		rows, err = feedbackOrderPages(ctx, tx, rows, counts, .5)
 		if err != nil {
 			return selectionPage{}, err
 		}
@@ -455,6 +483,7 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 
 func selectionWhere(rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64) (string, []any, error) {
 	where := `ar.review_status='approved' AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
+	where = appendAnd(where, `NOT EXISTS(SELECT 1 FROM image_feedback f WHERE f.illust_id=a.id AND f.page_index=p.page_index AND f.value='dislike')`)
 	var args []any
 	if artistID > 0 {
 		where = appendAnd(where, `a.artist_id=?`)

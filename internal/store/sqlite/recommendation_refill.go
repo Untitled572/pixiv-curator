@@ -216,6 +216,10 @@ func (s *Store) StartRecommendationRefill(ctx context.Context, j domain.Job, bud
 	if err != nil {
 		return err
 	}
+	budget, err = freezeExplorationPlan(budget)
+	if err != nil {
+		return err
+	}
 	newRunID := randomID()
 	now := time.Now().UnixMilli()
 	if now <= latestStarted {

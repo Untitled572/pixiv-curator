@@ -10,6 +10,11 @@ const html = fs.readFileSync(path.join(root, "internal/admin/templates/home.html
   .replace("{{.CSS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/admin.css"), "utf8") + "\n" + fs.readFileSync(path.join(root, "internal/admin/static/viewer.css"), "utf8"))
   .replace("{{.JS}}", () => fs.readFileSync(path.join(root, "internal/admin/static/viewer.js"), "utf8") + "\n" + fs.readFileSync(path.join(root, "internal/admin/static/admin.js"), "utf8"));
 const artists = Array.from({ length: 57 }, (_, index) => ({ id: String(index + 1), name: "画师 " + (index + 1), account: "artist", review_status: "approved", collection_enabled: true, tags: ["风景"] }));
+artists[0].collection_enabled = false;
+const removedArtistIDs = new Set();
+const reviewItems = Array.from({ length: 7 }, (_, index) => ({ artist: { id: String(index + 1), name: "整理候选 " + (index + 1) }, sample_illust_ids: [String(8500 + index * 3), String(8501 + index * 3), String(8502 + index * 3), "ignored"] }));
+const reviewWrites = [], feedbackWrites = [];
+let failNextReviewRemove = false, failNextFeedback = false, delayNextFeedback = false;
 const tagCorpus = ["风景", "无结果", "搜索专用", ...Array.from({ length: 15139 }, (_, index) => `测试标签${String(index).padStart(5, "0")}`)];
 const hits = [];
 const preferenceWrites = [];
@@ -40,7 +45,7 @@ let accounts = [
   { id: "second", name: "副账号", status: "ready", sync_state: "succeeded", is_default: false, follow_on_approve: false, followed_artists: 2, pending_follows: 0 }
 ];
 const historyItems = [
-  { id: "event-2", selected_at: 1730000002000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, rating: "safe", ai_status: "ai", tags: ["AIイラスト"], available: true },
+  { id: "event-2", selected_at: 1730000002000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, rating: "safe", ai_status: "ai", tags: ["AIイラスト"], feedback: "neutral", available: true },
   { id: "event-1", selected_at: 1730000001000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, rating: "safe", ai_status: "ai", tags: ["AIイラスト"], available: true },
   { id: "event-blocked", selected_at: 1730000000000, illust_id: "7002", page_index: 0, artist_id: "71", artist_name: "已屏蔽画师", title: "不可预览作品", width: 800, height: 600, available: false }
 ];
@@ -69,6 +74,16 @@ const server = http.createServer((req, res) => {
     if (failNextApprove) { failNextApprove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
     return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ updated: true })); }, 100);
   }
+  if (url.pathname === "/admin/api/library/review" && req.method === "GET") { payload = { items: reviewItems }; return res.end(JSON.stringify(payload)); }
+  if (/^\/admin\/api\/library\/artists\/\d+\/remove$/.test(url.pathname) && req.method === "POST") {
+    reviewWrites.push(url.pathname);
+    if (failNextReviewRemove) { failNextReviewRemove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
+    removedArtistIDs.add(url.pathname.split("/").at(-2)); return res.end(JSON.stringify({ removed: true }));
+  }
+  if (url.pathname === "/admin/api/image-feedback" && req.method === "PUT") {
+    let body = ""; req.on("data", (chunk) => { body += chunk; });
+    return req.on("end", () => { const parsed = JSON.parse(body); feedbackWrites.push(parsed); if (failNextFeedback) { failNextFeedback = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); } const save = () => { historyItems.filter((item) => item.illust_id === parsed.illust_id && item.page_index === parsed.page_index).forEach((item) => { item.feedback = parsed.value; }); res.end(JSON.stringify({ value: parsed.value })); }; if (delayNextFeedback) { delayNextFeedback = false; return setTimeout(save, 500); } save(); });
+  }
   if ((url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") && req.method === "GET") {
     if (refillPhase) {
       const running = refillPhase === "running";
@@ -95,9 +110,9 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === "/admin/api/library/artists") {
     const page = Number(url.searchParams.get("page")), limit = Number(url.searchParams.get("limit"));
-    let source = url.searchParams.get("tag") === "无结果" ? [] : artists;
+    let source = url.searchParams.get("tag") === "无结果" ? [] : artists.filter((artist) => !removedArtistIDs.has(artist.id));
     if (url.searchParams.has("collection_enabled")) source = source.filter((artist) => artist.collection_enabled === (url.searchParams.get("collection_enabled") === "1"));
-    payload = { items: source.slice((page - 1) * limit, page * limit), total: source.length, library_total: artists.length, total_pages: Math.ceil(source.length / limit) };
+    payload = { items: source.slice((page - 1) * limit, page * limit), total: source.length, library_total: artists.length - removedArtistIDs.size, total_pages: Math.ceil(source.length / limit) };
   } else if (url.pathname === "/admin/api/library/tags") {
     const q = url.searchParams.get("q") || "", limit = Math.min(30, Math.max(1, Number(url.searchParams.get("limit")) || 30));
     payload = { items: tagCorpus.filter((tag) => tag.includes(q)).slice(0, limit) };
@@ -117,7 +132,7 @@ const server = http.createServer((req, res) => {
     payload = { items: historyItems, total: historyItems.length, page: Number(url.searchParams.get("page")) || 1, page_size: Number(url.searchParams.get("limit")) || 24, total_pages: 1 };
   }
   else if (url.pathname === "/admin/api/artworks") payload = { items: [{ id: "100", artist_id: url.searchParams.get("artist_id"), title: "测试代表作", visible: true, page_count: 1, rating: "safe", ai_status: "non_ai", tags: ["风景"], pages: [{ page_index: 0, media_state: "indexed" }] }], next_cursor: "" };
-  else if (url.pathname === "/admin/api/stats") payload = { image_pages: 1234, artworks: 999, library_artists: 57, accounts: 1, indexed_pages: 1200 };
+  else if (url.pathname === "/admin/api/stats") payload = { image_pages: 1234, artworks: 999, library_artists: 57, accounts: 1, indexed_pages: 1200, r18_image_pages: 200, r18_image_ratio: 0.16235, artists: 9999 };
   else if (url.pathname === "/random") {
     const format = url.searchParams.get("format") || "json";
     if (format === "image") { res.setHeader("Content-Type", "image/png"); return res.end(png); }
@@ -139,6 +154,7 @@ const server = http.createServer((req, res) => {
     await page.goto(base + "/admin/");
     await page.locator("#panel-stats .stat-value").first().waitFor();
     assert.equal(await page.locator("#current-page-title").textContent(), "统计与接口");
+    assert.equal(await page.locator("#global-message").evaluate((message) => message.parentElement.classList.contains("topbar-actions")), true, "global messages stay in the top bar row");
     assert.equal(await page.locator("#tab-stats").getAttribute("aria-selected"), "true");
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")), false, "default Stats page must not fetch library data");
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/previews/")), false, "default Stats page must not request image previews");
@@ -206,6 +222,17 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => !document.querySelector("#artwork-dialog").open && document.querySelectorAll("#artwork-list img").length === 0);
     assert.equal(await page.locator("img").count(), 1, "closing the viewer should keep its UI shell but clear the image request");
     assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), null, "closing the viewer must stop and clear the original-image request");
+    assert.equal(await page.locator(".skip-link").evaluate((el) => el.getBoundingClientRect().bottom <= 0), true, "mouse dialog close does not reveal skip link");
+    const sidebarBefore = await page.evaluate(() => ({ side: document.querySelector(".sidebar").getBoundingClientRect().toJSON(), brand: document.querySelector(".brand").getBoundingClientRect().toJSON(), scrollY }));
+    await page.evaluate(() => scrollTo(0, 400));
+    const sidebarAfter = await page.evaluate(() => ({ side: document.querySelector(".sidebar").getBoundingClientRect().toJSON(), brand: document.querySelector(".brand").getBoundingClientRect().toJSON(), scrollY }));
+    console.log("SIDEBAR", JSON.stringify({ before: sidebarBefore, after: sidebarAfter }));
+    assert.ok(sidebarAfter.scrollY > 0 && Math.abs(sidebarAfter.side.top) < 1 && Math.abs(sidebarAfter.brand.top - sidebarBefore.brand.top) < 1, "desktop sidebar stays fixed at the top while scrolling");
+    await page.screenshot({ path: path.join(root, "data", "recommendation-viewport-desktop.png"), fullPage: false });
+    await page.evaluate(() => { scrollTo(0, 0); document.body.tabIndex = -1; document.body.focus(); });
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator(".skip-link").evaluate((el) => document.activeElement === el && el.getBoundingClientRect().top >= 0), true, "keyboard navigation reveals skip link");
+    await page.locator("#tab-discover").click();
     const hitsBeforeDiscover = hits.length;
 
     // Filter before opening Discover so adult-only previews are never requested.
@@ -291,15 +318,18 @@ const server = http.createServer((req, res) => {
 	assert.equal(newRunPreviewRequests, 90, "only the first 30 candidates should load three previews each");
 	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
 	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
-    assert.equal(await page.locator('.recommendation-card[data-exploration="true"]').count(), 6);
-    assert.equal(await page.locator(".exploration-chip").count(), 0, "exploration candidates share the normal recommendation presentation");
-    const failedExploration = page.locator('.recommendation-card[data-exploration="true"]').first();
+    assert.equal(await page.locator('.recommendation-card[data-exploration]').count(), 0, "API order is shown without a special exploration marker");
+    assert.deepEqual(await page.locator(".recommendation-card").evaluateAll((cards) => cards.slice(0, 3).map((card) => card.dataset.artistId)), completedRunItems.slice(0, 3).map((item) => item.artist_id), "recommendations retain API order");
+    assert.equal(await page.locator(".exploration-chip").count(), 0, "candidates share the normal recommendation presentation");
+    assert.equal(await page.locator(".score-badge").first().textContent(), "推荐指数 0.90");
+    assert.match(await page.locator(".score-badge").first().getAttribute("title"), /不代表喜欢概率/);
+    const failedExploration = page.locator('.recommendation-card[data-artist-id="1025"]');
     failNextApprove = true;
     await failedExploration.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.querySelector("[data-approve]")?.disabled, await failedExploration.elementHandle());
     assert.equal(await failedExploration.count(), 1, "failed approval keeps the exploration card");
     assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "failed approval emits no particles");
-    const successExploration = page.locator('.recommendation-card[data-exploration="true"]').nth(1);
+    const successExploration = page.locator('.recommendation-card[data-artist-id="1026"]');
     const approveResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/artists/1026/approve"));
     const successCardBounds = await successExploration.boundingBox();
     await successExploration.locator("[data-approve]").click();
@@ -309,9 +339,11 @@ const server = http.createServer((req, res) => {
     const particleOverlay = page.locator(".exploration-particle-overlay");
     await particleOverlay.waitFor();
     assert.equal(await particleOverlay.locator(".exploration-particle").count(), 96, "successful exploration approval emits a 12 by 8 particle grid");
+    assert.equal(await particleOverlay.locator(".exploration-particle").first().evaluate((particle) => getComputedStyle(particle).boxShadow), "none", "particles have no glow");
     assert.equal(await page.locator(".exploration-card-glow").count(), 0, "exploration particle effect creates no green card glow node");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).position), "fixed");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).pointerEvents), "none");
+    assert.equal(await particleOverlay.locator(".exploration-particle").first().evaluate((particle) => getComputedStyle(particle).animationDuration), "0.425s");
     const overlayBounds = await particleOverlay.boundingBox();
     assert.ok(Math.abs(overlayBounds.width - successCardBounds.width) < 2 && Math.abs(overlayBounds.height - successCardBounds.height) < 2, "effect covers the whole artist card");
     const spread = await particleOverlay.locator(".exploration-particle").evaluateAll((particles) => {
@@ -321,13 +353,13 @@ const server = http.createServer((req, res) => {
     assert.ok(spread.x > 70 && spread.y > 70 && spread.minSize >= 8, "large particles span the card width and height");
     assert.equal(await successExploration.count(), 1, "successful exploration approval shows a brief confirmation before removal");
     await particleOverlay.waitFor({ state: "detached" });
-    const normalCard = page.locator('.recommendation-card[data-exploration="false"]').first();
+    const normalCard = page.locator('.recommendation-card[data-artist-id="1001"]');
     const normalHandle = await normalCard.elementHandle();
     await normalCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, normalHandle);
     assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "normal recommendations emit no particles");
     await page.emulateMedia({ reducedMotion: "reduce" });
-    const reducedCard = page.locator('.recommendation-card[data-exploration="true"]').first();
+    const reducedCard = page.locator('.recommendation-card[data-artist-id="1027"]');
     const reducedHandle = await reducedCard.elementHandle();
     await reducedCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, reducedHandle);
@@ -360,8 +392,9 @@ const server = http.createServer((req, res) => {
 
     await page.locator("#tab-library").click();
     await page.locator("#library-collection").selectOption("0");
-    await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 0"));
+    await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 1"));
     assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") && hit.includes("collection_enabled=0")));
+    assert.equal(await page.locator(".artist-card .status-pill").first().textContent(), "已暂停");
     await page.locator("#library-collection").selectOption("");
     await page.locator(".artist-card").first().waitFor();
     const positions = await page.locator(".artist-card").first().locator(".artist-actions > button, .artist-actions summary").evaluateAll((items) => items.map((item) => ({ y: item.getBoundingClientRect().y, right: item.getBoundingClientRect().right, left: item.getBoundingClientRect().left })));
@@ -374,10 +407,59 @@ const server = http.createServer((req, res) => {
     await page.locator("#library-tag").selectOption("无结果");
     await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 0"));
     assert.equal(await page.locator("#artist-count").textContent(), "57");
+    const reviewRequestsBefore = hits.filter((hit) => hit === "/admin/api/library/review").length;
+    assert.equal(await page.locator("#library-review").evaluate((element) => element.open), false, "library review starts closed");
+    assert.equal(hits.filter((hit) => hit === "/admin/api/library/review").length, reviewRequestsBefore, "closed review does not request suggestions");
+    await page.locator("#library-review > summary").click();
+    await page.waitForFunction(() => document.querySelectorAll(".library-review-card").length === 5);
+    assert.equal(hits.filter((hit) => hit === "/admin/api/library/review").length, reviewRequestsBefore + 1);
+    assert.equal(await page.locator(".library-review-samples img").count(), 15, "review shows up to three thumbnails for at most five artists");
+    const reviewCard = page.locator(".library-review-card").first();
+    await reviewCard.getByRole("button", { name: "保留" }).click();
+    assert.equal(await page.locator(".library-review-card").count(), 4, "keep removes only the current suggestion card");
+    assert.equal(reviewWrites.length, 0, "keep does not write to an API");
+    await page.locator("#reload-library-review").click();
+    await page.waitForFunction(() => document.querySelectorAll(".library-review-card").length === 5);
+    const failedReviewCard = page.locator('.library-review-card[data-artist-id="1"]');
+    failNextReviewRemove = true;
+    await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
+    await page.waitForFunction(() => document.querySelector("#global-message").textContent.includes("服务暂时不可用"));
+    assert.equal(await failedReviewCard.count(), 1, "failed removal keeps the suggestion card");
+    assert.match(await failedReviewCard.textContent(), /保留本地目录，也不会取关/);
+    await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
+    await page.waitForFunction(() => !document.querySelector('.library-review-card[data-artist-id="1"]'));
+    await page.waitForFunction(() => document.querySelector("#artist-count").textContent === "56");
+    assert.equal(reviewWrites.length, 2, "removal POST is sent only after explicit clicks");
+    assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/artists?")), "successful removal refreshes the current library");
     await page.locator("#tab-history").click();
     await page.waitForFunction(() => document.querySelectorAll(".history-card").length === 3);
     assert.ok(hits.some((hit) => hit === "/admin/api/history?page=1&limit=24"));
     assert.deepEqual(await page.locator(".history-card").evaluateAll((cards) => cards.map((card) => card.dataset.historyId)), ["event-2", "event-1", "event-blocked"], "duplicate selections must remain separate history events");
+    assert.equal(await page.locator("#history-list [data-feedback-key=\"7001:0\"]").count(), 2, "duplicate events share one image feedback identity");
+    const feedbackButton = page.locator('[data-history-id="event-2"] [data-feedback="like"]');
+    const likeResponse = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/admin/api/image-feedback"));
+    await feedbackButton.click();
+    await likeResponse;
+    await page.waitForFunction(() => document.querySelectorAll('[data-feedback-key="7001:0"] [data-feedback="like"][aria-pressed="true"]').length === 2);
+    assert.deepEqual(feedbackWrites.at(-1), { illust_id: "7001", page_index: 0, value: "like" });
+    failNextFeedback = true;
+    await page.locator('[data-history-id="event-1"] [data-feedback="dislike"]').click();
+    await page.waitForFunction(() => document.querySelector("#global-message").textContent.includes("服务暂时不可用"));
+    assert.equal(await page.locator('[data-history-id="event-2"] [data-feedback="like"]').getAttribute("aria-pressed"), "true", "failed feedback restores the prior value on repeated cards");
+    const neutralResponse = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/admin/api/image-feedback"));
+    await page.locator('[data-history-id="event-1"] [data-feedback="neutral"]').click();
+    await neutralResponse;
+    await page.waitForFunction(() => document.querySelectorAll('[data-feedback-key="7001:0"] [data-feedback="neutral"][aria-pressed="true"]').length === 2);
+    historyItems.filter((item) => item.illust_id === "7001").forEach((item) => { item.feedback = "dislike"; });
+    await page.locator("#reload-history").click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-feedback-key="7001:0"] [data-feedback="dislike"][aria-pressed="true"]').length === 2);
+    delayNextFeedback = true;
+    const pendingFeedbackResponse = page.waitForResponse((response) => response.request().method() === "PUT" && response.url().endsWith("/admin/api/image-feedback"));
+    await page.locator('[data-history-id="event-2"] [data-feedback="like"]').click();
+    await page.locator("#reload-history").click();
+    await page.waitForFunction(() => document.querySelectorAll('[data-feedback-key="7001:0"] [data-feedback="like"][aria-pressed="true"]:disabled').length === 2);
+    await pendingFeedbackResponse;
+    await page.waitForFunction(() => document.querySelectorAll('[data-feedback-key="7001:0"] [data-feedback="like"][aria-pressed="true"]:not(:disabled)').length === 2);
     const firstHistoryImage = page.locator('[data-history-id="event-2"] .history-preview img');
     const secondHistoryImage = page.locator('[data-history-id="event-1"] .history-preview img');
     await firstHistoryImage.waitFor(); await secondHistoryImage.waitFor();
@@ -401,6 +483,10 @@ const server = http.createServer((req, res) => {
     await page.locator("#tab-stats").click();
     await page.locator(".stat-value").first().waitFor();
     assert.equal(await page.locator(".stat-value").first().textContent(), "1,234");
+    assert.equal(await page.locator(".stat-card").filter({ hasText: "全部画师" }).count(), 0);
+    assert.equal(await page.locator(".stat-card").filter({ hasText: "图库画师" }).count(), 1);
+    assert.equal(await page.locator(".stat-card").filter({ hasText: "R18 图片" }).locator(".stat-value").textContent(), "200");
+    assert.equal(await page.locator(".stat-card").filter({ hasText: "R18 占比" }).locator(".stat-value").textContent(), "16.2%");
     await page.locator("#api-account").selectOption("test");
     await page.locator("#api-rating").selectOption("0");
     await page.locator("#api-ai").selectOption("0");
@@ -496,6 +582,7 @@ const server = http.createServer((req, res) => {
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "horizontal overflow at " + width);
+      assert.equal(await page.evaluate(() => getComputedStyle(document.body).zoom), width >= 1100 ? "1.25" : "1", "desktop-only 125% zoom at " + width);
     }
     assert.deepEqual(errors, []);
     console.log("PASS: count, pagination, no initial images/requests, details, filters, statistics, API builder/test, responsive layout");

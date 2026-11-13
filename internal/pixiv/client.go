@@ -158,8 +158,15 @@ func (c *Client) accessToken(ctx context.Context, rejected string) (string, erro
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var budgetErr *additionalRequestBudgetError
+	budgetRejected := errors.As(err, &budgetErr)
+	if budgetRejected {
+		err = budgetErr.err
+	}
 	c.refreshErr = err
-	if err == nil {
+	if budgetRejected {
+		// The refresh was not sent; retain the previous credential and state.
+	} else if err == nil {
 		c.access = token
 		c.expires = expiry
 		c.accountID = account
@@ -193,6 +200,9 @@ func (c *Client) refresh(ctx context.Context) (string, string, time.Time, int64,
 		hash := md5.Sum([]byte(now + c.oauth.HashSecret))
 		req.Header.Set("X-Client-Time", now)
 		req.Header.Set("X-Client-Hash", hex.EncodeToString(hash[:]))
+	}
+	if err := reserveAdditionalRequest(ctx); err != nil {
+		return "", "", time.Time{}, 0, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -250,6 +260,11 @@ func (c *Client) get(ctx context.Context, raw string, result any) error {
 		return ctx.Err()
 	}
 	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			if err := reserveAdditionalRequest(ctx); err != nil {
+				return err.(*additionalRequestBudgetError).err
+			}
+		}
 		if delay := time.Until(c.nextRequest); delay > 0 {
 			timer := time.NewTimer(delay)
 			select {

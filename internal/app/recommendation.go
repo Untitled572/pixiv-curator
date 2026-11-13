@@ -42,8 +42,7 @@ func NewRecommender(s RecommendationRepository, c RecommendationClient) *Recomme
 	return &Recommender{store: s, client: c}
 }
 func (s *Recommender) Start(ctx context.Context) (string, string, error) {
-	b, _ := json.Marshal(recommend.DefaultBudget())
-	return s.store.StartRecommendation(ctx, b)
+	return s.store.StartRecommendation(ctx, s.defaultRunBudget())
 }
 func (s *Recommender) Candidates(ctx context.Context, runID string) (domain.RecommendationRun, []domain.Recommendation, error) {
 	run, err := s.store.RecommendationRun(ctx, runID)
@@ -51,7 +50,17 @@ func (s *Recommender) Candidates(ctx context.Context, runID string) (domain.Reco
 		return run, nil, err
 	}
 	items, err := s.store.RecommendationCandidates(ctx, runID, 0)
+	order := func(item domain.Recommendation) *int {
+		var flags struct {
+			Order *int `json:"display_order"`
+		}
+		_ = json.Unmarshal(item.Components, &flags)
+		return flags.Order
+	}
 	sort.Slice(items, func(i, j int) bool {
+		if a, b := order(items[i]), order(items[j]); a != nil && b != nil && *a != *b {
+			return *a < *b
+		}
 		if items[i].Score != items[j].Score {
 			return items[i].Score > items[j].Score
 		}
@@ -100,6 +109,16 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	if recallLimit < budget.CandidateArtists || recallLimit > 60 || budget.ExplorationArtists < 0 || budget.ExplorationArtists > budget.CandidateArtists {
 		return taskInvalid()
 	}
+	ctx = pixiv.WithAdditionalRequestBudget(ctx, func(ctx context.Context) error {
+		allowed, err := s.store.ReserveRecommendationRequest(ctx, j, run.ID, budget.TotalRequests)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return &pixiv.Error{Code: "REQUEST_BUDGET_EXHAUSTED"}
+		}
+		return nil
+	})
 	excluded := map[int64]bool{}
 	if repo, ok := s.store.(interface {
 		RecommendationExcludedArtistIDs(context.Context, string) ([]int64, error)
@@ -111,6 +130,9 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		for _, id := range ids {
 			excluded[id] = true
 		}
+	}
+	if err = s.recallIndependent(ctx, j, run, recallLimit, budget.TotalRequests, excluded); err != nil {
+		return err
 	}
 	seeds, err := s.store.RecommendationSeeds(ctx, budget.SeedArtists)
 	if frozen, ok := s.store.(interface {
@@ -280,6 +302,30 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			return classify(err)
 		}
 		profile = recommend.BuildProfile(input, negatives, budget)
+		if repo, ok := s.store.(interface {
+			ImageFeedbackTags(context.Context) (map[string]float64, error)
+		}); ok {
+			profile.FeedbackTagCounts, err = repo.ImageFeedbackTags(ctx)
+			if err != nil {
+				return classify(err)
+			}
+		}
+		var mode struct {
+			Independent bool `json:"independent_exploration"`
+		}
+		_ = json.Unmarshal(run.Budget, &mode)
+		if mode.Independent {
+			if repo, ok := s.store.(interface {
+				RecommendationRegressionExamples(context.Context, string) ([]recommend.RegressionExample, error)
+			}); ok {
+				examples, e := repo.RecommendationRegressionExamples(ctx, run.ID)
+				if e != nil {
+					return classify(e)
+				}
+				model := recommend.TrainRegression(examples)
+				profile.Regression = &model
+			}
+		}
 		rawProfile, _ = json.Marshal(profile)
 		if err = s.store.SaveRecommendationProfile(ctx, j, run.ID, rawProfile); err != nil {
 			return classify(err)
@@ -306,7 +352,7 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		if err != nil {
 			return classify(err)
 		}
-		if len(samples) == 0 {
+		if len(samples) == 0 || hasIndependentSource(candidate.Sources) && len(samples) < budget.CandidateSamplesPerArtist {
 			ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
 			if err != nil {
 				return err
@@ -318,10 +364,12 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 						return classify(err)
 					}
 				} else {
-					samples, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
+					var fetched []domain.Artwork
+					fetched, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
 					if err != nil {
 						return classify(err)
 					}
+					samples = mergeRecommendationPreviewSamples(samples, fetched, budget.CandidateSamplesPerArtist)
 				}
 			}
 		}
@@ -332,6 +380,22 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		candidate.Confidence = scored.Confidence
 		candidate.Version = scored.Version
 		candidate.Components, _ = json.Marshal(scored.Components)
+		if hasIndependentSource(candidate.Sources) {
+			candidate.Score = 0
+			candidate.Version = "independent-v1"
+			candidate.Reasons = []string{"代表作供你参考"}
+		} else if profile.Regression != nil {
+			tags := []string{}
+			for _, work := range samples {
+				tags = append(tags, work.Tags...)
+			}
+			candidate.Score = profile.Regression.Predict(tags, candidate.Sources)
+			candidate.Version = "logistic-v1"
+			candidate.Reasons = []string{"根据标签和已确认的画师选择推荐"}
+			if !profile.Regression.Trained {
+				candidate.Reasons = []string{"选择样本不足，使用中性模型与图库类型分布"}
+			}
+		}
 		if err = s.store.CommitRecommendationSamples(ctx, j, run.ID, candidate.ArtistID, candidate.ArtistID, samples, candidate); err != nil {
 			return classify(err)
 		}
@@ -467,8 +531,7 @@ func (s *Recommender) Refill(ctx context.Context, j domain.Job) error {
 	if !ok {
 		return taskInvalid()
 	}
-	b, _ := json.Marshal(recommend.DefaultBudget())
-	return classify(repo.StartRecommendationRefill(ctx, j, b))
+	return classify(repo.StartRecommendationRefill(ctx, j, s.defaultRunBudget()))
 }
 func (s *Recommender) TouchActivity(ctx context.Context) error {
 	if repo, ok := s.store.(interface{ TouchRecommendationActivity(context.Context) error }); ok {

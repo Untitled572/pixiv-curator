@@ -84,7 +84,7 @@ def main():
                 stats = json.load(response)
                 assert stats["accounts"] == 0 and stats["image_pages"] == LEGACY_PAGE_COUNT
             with sqlite3.connect(work / "data/curator.db") as db:
-                assert db.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 12
+                assert db.execute("SELECT max(version) FROM schema_migrations").fetchone()[0] == 13
                 assert db.execute("SELECT count(*) FROM image_pages WHERE width<>0 OR height<>0").fetchone()[0] == 0
                 assert not db.execute("PRAGMA foreign_key_check").fetchall()
             print("PASS: Compose legacy migration, writable temporary directory, private mount, login and statistics")
