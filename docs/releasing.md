@@ -109,3 +109,6 @@ gh run list --workflow release.yml
 
 
 2026-11-12：[v0.2.1 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43216825294) 成功，源码 c3654f6，Windows/Linux amd64、arm64 二进制和 SHA256SUMS 已发布；GHCR 双架构 digest 为 `sha256:6b9786c7c5073b8b34c772b1e150c73eb9a7cb207c821519168494b68cf7842d`。服务器已校验 GHCR 导出归档、源码 revision 和镜像内容后升级，数据库迁移至 11。Compose 临时目录修复来自后续 98083b4，使用仓库最新模板；其 [CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43222679715) 已通过，不需要重建同一应用镜像。v0.2.0 发布失败且没有部分 Release，保留该标签，不重写历史。arm64 只有构建检查，未做原生运行验收。
+
+
+2026-11-13：v0.2.2 的[完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43236444267) 已成功，随后按用户要求将推荐从 48 减至 30 并补齐缺失样本处理。[v0.2.3 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43341365585) 全部成功，源码 `93fa6c9`，四个 Windows/Linux amd64、arm64 包和 SHA256SUMS 已发布；双架构 GHCR digest 为 `sha256:dd9d80fbc94b6ad667f98ef29f88bb634c2a708be208c83d9565b01736e67561`。服务器已备份并升级至 v0.2.3，30 位推荐全部有样本、暂停任务与接口过滤实测通过。arm64 未执行原生运行。
