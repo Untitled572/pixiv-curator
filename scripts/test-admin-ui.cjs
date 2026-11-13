@@ -20,7 +20,7 @@ const hits = [];
 const preferenceWrites = [];
 let savedPreferences = { version: 7, rules: { allowed_ratings: ["safe"], allowed_ai: ["non_ai"], exclude_manga: false, min_width: 0, min_height: 0, orientation: "any", strategy: "balanced", included_tags: [], excluded_tags: [] } };
 const recommendationItems = [
-  { artist_id: "801", artist: { id: "801", name: "全年龄非 AI" }, score: 0.91, reasons: ["本地兴趣匹配"], sample_illust_ids: ["91001", "91002"], content_rating: "safe", ai_status: "non_ai" },
+  { artist_id: "801", artist: { id: "801", name: "全年龄非 AI" }, tags: ["风景", "原创"], score: 0.91, reasons: ["根据标签和已确认的画师选择推荐"], sample_illust_ids: ["91001", "91002"], content_rating: "safe", ai_status: "non_ai" },
   { artist_id: "802", artist: { id: "802", name: "成人 AI" }, score: 0.82, reasons: ["分类组合"], sample_illust_ids: ["92001"], content_rating: "adult", ai_status: "ai" },
   { artist_id: "803", artist: { id: "803", name: "未知分类" }, score: 0.73, reasons: ["保留未知"], sample_illust_ids: ["93001"], content_rating: "unknown", ai_status: "unknown" },
   { artist_id: "804", artist: { id: "804", name: "成人 AI 未知" }, score: 0.64, reasons: ["交叉筛选"], sample_illust_ids: ["94001"], content_rating: "adult", ai_status: "unknown" }
@@ -244,6 +244,7 @@ const server = http.createServer((req, res) => {
     await page.locator("#tab-discover").click();
     await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "全年龄非 AI");
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["全年龄非 AI"]);
+    assert.deepEqual(await page.locator(".recommendation-card .reason-chip").allTextContents(), ["风景", "原创"], "first row shows the artist's main sample tags instead of generic recommendation reasons");
     assert.equal(hits.some((u) => u.startsWith("/admin/api/previews/92001/")), false, "safe filter must not request adult sample previews");
     assert.ok(hits.includes("/admin/api/previews/91001/0") && hits.includes("/admin/api/previews/91002/0"), "sample IDs should map directly to page-zero preview endpoints");
     assert.equal(hits.slice(hitsBeforeDiscover).some((u) => u.startsWith("/admin/api/artworks?")), false, "recommendation samples must not fetch artwork metadata");
@@ -582,7 +583,7 @@ const server = http.createServer((req, res) => {
     for (const width of [320, 390, 768, 1440]) {
       await page.setViewportSize({ width, height: 900 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "horizontal overflow at " + width);
-      assert.equal(await page.evaluate(() => getComputedStyle(document.body).zoom), width >= 1100 ? "1.25" : "1", "desktop-only 125% zoom at " + width);
+      assert.equal(await page.evaluate(() => getComputedStyle(document.body).zoom), width >= 1100 ? "1.1" : "1", "desktop-only 110% zoom at " + width);
     }
     assert.deepEqual(errors, []);
     console.log("PASS: count, pagination, no initial images/requests, details, filters, statistics, API builder/test, responsive layout");

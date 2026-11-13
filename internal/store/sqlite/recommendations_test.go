@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -335,8 +336,8 @@ func TestRecommendationCandidateContentRatingUsesOnlySamples(t *testing.T) {
 	}
 	artworks := []domain.Artwork{
 		{ID: 301, ArtistID: 201, Rating: "r18", AIStatus: "non_ai"},
-		{ID: 302, ArtistID: 202, Rating: "safe", AIStatus: "non_ai"},
-		{ID: 303, ArtistID: 202, Rating: "r18g", AIStatus: "ai"},
+		{ID: 302, ArtistID: 202, Rating: "safe", AIStatus: "non_ai", Tags: []string{"common", "a", "b", "c", "d", "e", "f", "g", "h"}},
+		{ID: 303, ArtistID: 202, Rating: "r18g", AIStatus: "ai", Tags: []string{"common", "h"}},
 		{ID: 304, ArtistID: 203, Rating: "safe", AIStatus: "non_ai"},
 		{ID: 305, ArtistID: 203, Rating: "safe", AIStatus: "non_ai"},
 		{ID: 306, ArtistID: 204, Rating: "unknown", AIStatus: "unknown"},
@@ -354,6 +355,7 @@ func TestRecommendationCandidateContentRatingUsesOnlySamples(t *testing.T) {
 	for _, art := range artworks {
 		art.Kind = "illust"
 		art.PageCount = 0
+		art.MetadataState = "complete"
 		if err := s.UpsertArtwork(ctx, art); err != nil {
 			t.Fatal(err)
 		}
@@ -371,6 +373,12 @@ func TestRecommendationCandidateContentRatingUsesOnlySamples(t *testing.T) {
 	want := map[int64]string{201: "adult", 202: "adult", 203: "safe", 204: "unknown", 205: "unknown", 206: "unknown", 207: "unknown", 208: "unknown", 209: "safe", 210: "unknown"}
 	wantAI := map[int64]string{201: "non_ai", 202: "ai", 203: "non_ai", 204: "unknown", 205: "unknown", 206: "unknown", 207: "unknown", 208: "unknown", 209: "non_ai", 210: "unknown"}
 	for _, item := range got {
+		if item.ArtistID == 202 && !reflect.DeepEqual(item.Tags, []string{"common", "h", "a", "b", "c", "d", "e", "f"}) {
+			t.Errorf("sample tags=%v, want top eight ordered by frequency then name", item.Tags)
+		}
+		if item.ArtistID == 207 && len(item.Tags) != 0 {
+			t.Errorf("another artist's sample supplied tags: %v", item.Tags)
+		}
 		if item.ContentRating != want[item.ArtistID] {
 			t.Errorf("artist %d rating=%q want %q", item.ArtistID, item.ContentRating, want[item.ArtistID])
 		}

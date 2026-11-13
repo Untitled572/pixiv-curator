@@ -480,10 +480,10 @@
     const score = Number(item.components?.display_score ?? item.score);
     const scoreBadge = node("span", "score-badge", Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
     scoreBadge.title = "仅用于候选排序参考，不代表喜欢概率"; heading.append(scoreBadge); content.append(heading);
-    const reasons = Array.isArray(item.reasons) ? item.reasons : [];
+    const tags = [item.tags, artist.tags, item.components?.matched_tags].find((value) => Array.isArray(value) && value.length) || [];
     const chips = node("div", "reason-list");
-    if (reasons.length) reasons.slice(0, 5).forEach((reason) => chips.append(node("span", "reason-chip", reason)));
-    else chips.append(node("span", "reason-chip", "根据图库兴趣发现"));
+    if (tags.length) tags.slice(0, 8).forEach((tag) => chips.append(node("span", "reason-chip", tag)));
+    else chips.append(node("span", "reason-chip", "暂无标签"));
     content.append(chips);
     const classification = node("p", "sample-classification");
     classification.append(node("span", "tag-chip", ({ adult: "含 R18 样本", safe: "样本均为全年龄", unknown: "分级未知" })[item.content_rating] || "分级未知"));

@@ -401,21 +401,33 @@ func (s *Store) RecommendationCandidates(ctx context.Context, runID string, afte
 	if err != nil {
 		return nil, err
 	}
-	sampleRows, err := s.db.QueryContext(ctx, `SELECT json_extract(c.value,'$.artist_id'),j.value,a.rating,a.ai_status
+	sampleRows, err := s.db.QueryContext(ctx, `SELECT json_extract(c.value,'$.artist_id'),j.value,a.rating,a.ai_status,COALESCE((SELECT json_group_array(t.display_name) FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id),'[]')
  FROM json_each(?) c JOIN json_each(json_extract(c.value,'$.ids')) j
  JOIN artworks a ON a.id=CAST(j.value AS INTEGER) AND a.artist_id=json_extract(c.value,'$.artist_id')`, string(encoded))
 	if err != nil {
 		return nil, err
 	}
 	resolved := make(map[int64]int, len(out))
+	tagCounts := make(map[int64]map[string]int, len(out))
 	for sampleRows.Next() {
 		var artistID int64
-		var sampleID, rating, aiStatus string
-		if err = sampleRows.Scan(&artistID, &sampleID, &rating, &aiStatus); err != nil {
+		var sampleID, rating, aiStatus, rawTags string
+		if err = sampleRows.Scan(&artistID, &sampleID, &rating, &aiStatus, &rawTags); err != nil {
 			sampleRows.Close()
 			return nil, err
 		}
 		r := byArtist[artistID]
+		var tags []string
+		if err = json.Unmarshal([]byte(rawTags), &tags); err != nil {
+			sampleRows.Close()
+			return nil, err
+		}
+		if tagCounts[artistID] == nil {
+			tagCounts[artistID] = map[string]int{}
+		}
+		for _, tag := range tags {
+			tagCounts[artistID][tag]++
+		}
 		resolved[artistID]++
 		switch rating {
 		case "r18", "r18g":
@@ -443,6 +455,20 @@ func (s *Store) RecommendationCandidates(ctx context.Context, runID string, afte
 	}
 	for i := range out {
 		r := &out[i]
+		r.Tags = []string{}
+		for tag := range tagCounts[r.ArtistID] {
+			r.Tags = append(r.Tags, tag)
+		}
+		sort.Slice(r.Tags, func(i, j int) bool {
+			a, b := r.Tags[i], r.Tags[j]
+			if tagCounts[r.ArtistID][a] != tagCounts[r.ArtistID][b] {
+				return tagCounts[r.ArtistID][a] > tagCounts[r.ArtistID][b]
+			}
+			return a < b
+		})
+		if len(r.Tags) > 8 {
+			r.Tags = r.Tags[:8]
+		}
 		r.UnknownCount += unknownSampleCount[r.ArtistID]
 		r.UnknownAICount += unknownSampleCount[r.ArtistID]
 		missing := len(r.SampleIDs) - resolved[r.ArtistID]

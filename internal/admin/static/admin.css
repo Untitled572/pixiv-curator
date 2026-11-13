@@ -1,6 +1,6 @@
 :root{font-family:"Noto Sans SC","Plus Jakarta Sans",system-ui,-apple-system,sans-serif;color:#22303c;background:#f4f6f8;font-synthesis:none;text-rendering:optimizeLegibility;--ink:#22303c;--muted:#687887;--line:#e1e7ee;--primary:#4a6b82;--primary-dark:#344e61;--primary-soft:#edf3f8;--paper:#ffffff;--gold:#9a7035;--red:#9c443b;--red-soft:#f9eae5;--shadow:0 4px 20px -2px rgba(74,107,130,.08)}
-@media(min-width:1100px){.app-page{zoom:1.25}}
-@media(min-width:1100px){.app-page dialog{zoom:.8}}
+@media(min-width:1100px){.app-page{zoom:1.1}}
+@media(min-width:1100px){.app-page dialog{zoom:.9090909091}}
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh}
 button,input,select,textarea{font:inherit}
