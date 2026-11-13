@@ -129,3 +129,6 @@ gh run list --workflow release.yml
 
 
 2026-11-13：[v0.3.0完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43427280405)成功，源码a7bc9e3，四个平台二进制、SHA256SUMS及Docker双架构镜像已发布。GHCR digest为 `sha256:20aa5675e510ac90c3e9672d4c635b12f9eba80c337c704e33842cc8bed7ba08`；服务器已从之前本地v0.2.7替换镜像切换到此正式GHCR构建，schema13，一致性备份为 `backups/pre-v0.3.0-20261113T125216Z`。实际一轮30位精确17/10/3、65次请求、模型323样本且混排固定；没有真实批准或反馈操作。ARM64仅构建验证，没有原生机器运行。测试与公开统计数据口径详见开发计划38节。
+
+
+同日按用户要求恢复发现卡片主要标签，并将桌面125%改为110%，手机原尺寸。01fe361的[CI43432111331](https://github.com/Untitled572/pixiv-curator/actions/runs/43432111331)全部成功；服务器以正式v0.3.0为基础运行本地修补镜像 `pixiv-curator:v0.3.0-ui-01fe361`，备份为 `backups/pre-v0.3.0-ui-20261113T131819Z`。运行程序SHA256、版本、就绪、服务界面及既有推荐标签读取核验通过；未重新生成实网推荐或分发图片。版本仍为v0.3.0，正式GHCR和Release资产保持a7bc9e3；这次本地部署替换不是新的GHCR发行。
