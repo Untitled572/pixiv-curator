@@ -112,3 +112,5 @@ gh run list --workflow release.yml
 
 
 2026-11-13：v0.2.2 的[完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43236444267) 已成功，随后按用户要求将推荐从 48 减至 30 并补齐缺失样本处理。[v0.2.3 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43341365585) 全部成功，源码 `93fa6c9`，四个 Windows/Linux amd64、arm64 包和 SHA256SUMS 已发布；双架构 GHCR digest 为 `sha256:dd9d80fbc94b6ad667f98ef29f88bb634c2a708be208c83d9565b01736e67561`。服务器已备份并升级至 v0.2.3，30 位推荐全部有样本、暂停任务与接口过滤实测通过。arm64 未执行原生运行。
+
+2026-11-13：[v0.2.4 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43348985885) 成功，源码 986c92b，四个平台包与 Docker 双架构发布通过；GHCR digest `sha256:ea873edffb96d88bb3bef0aab265529e814f918a1fbbe262f90661dd82f4fa83`。服务器已备份升级，实测取消一小时限制、活动任务去重、30 位候选及展示筛选隔离。arm64 仅构建验证。
