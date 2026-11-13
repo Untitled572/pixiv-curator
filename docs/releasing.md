@@ -121,3 +121,6 @@ gh run list --workflow release.yml
 
 
 2026-11-13：[v0.2.7完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43378510700) 成功，源码3b34ce9；四个平台二进制及双架构GHCR已发布，digest `sha256:e09b6a0071813c68677c98f2608ab77c614a99a73582bcbeea2e828a4d091af9`。服务器一致性备份后迁移至schema12，AI标签回填与22旧候选加8新候选的自动补池实网通过。arm64仅构建检查，未原生执行。
+
+
+同日按用户要求仅替换当前v0.2.7服务器部署的粒子效果，不新增Release、不移动标签。a093f50的[CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43382901948) 全部通过；服务器运行基于正式v0.2.7的本地镜像 `pixiv-curator:v0.2.7-ui-a093f50`，程序SHA256与源码revision均记录于部署元数据。版本仍为v0.2.7，GHCR和Release中的正式发行资产仍对应3b34ce9；不能把该次本地部署替换称为新的GHCR完整发行。
