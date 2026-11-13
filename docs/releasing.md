@@ -124,3 +124,5 @@ gh run list --workflow release.yml
 
 
 同日按用户要求仅替换当前v0.2.7服务器部署的粒子效果，不新增Release、不移动标签。a093f50的[CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43382901948) 全部通过；服务器运行基于正式v0.2.7的本地镜像 `pixiv-curator:v0.2.7-ui-a093f50`，程序SHA256与源码revision均记录于部署元数据。版本仍为v0.2.7，GHCR和Release中的正式发行资产仍对应3b34ce9；不能把该次本地部署替换称为新的GHCR完整发行。
+
+后续继续依用户要求替换为本地镜像 `pixiv-curator:v0.2.7-ui-77e7a1a`，版本保持v0.2.7，仍不更改正式发行资产。其[CI43393480609](https://github.com/Untitled572/pixiv-curator/actions/runs/43393480609)全部成功，服务器实际程序SHA256核验通过；实网上一轮仍有22位未处理时，换批生成完整30位且与前轮交集0。备份、源码revision及实际镜像ID保存在部署目录元数据，临时部署目录已清理。
