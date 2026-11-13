@@ -55,7 +55,7 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 	if err != sql.ErrNoRows {
 		return "", "", err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT r.id,j.id FROM recommendation_runs r JOIN jobs j ON j.kind='recommend_artists' AND json_extract(j.payload_json,'$.run_id')=r.id WHERE r.state='succeeded' AND r.finished_at>? AND COALESCE(json_extract(r.budget_json,'$.candidate_artists'),0)>=COALESCE(json_extract(?,'$.candidate_artists'),0) ORDER BY r.finished_at DESC LIMIT 1`, time.Now().Add(-time.Hour).UnixMilli(), string(budget)).Scan(&runID, &jobID)
+	err = tx.QueryRowContext(ctx, `SELECT r.id,j.id FROM recommendation_runs r JOIN jobs j ON j.kind='recommend_artists' AND json_extract(j.payload_json,'$.run_id')=r.id WHERE r.state='succeeded' AND r.finished_at>? AND COALESCE(json_extract(r.budget_json,'$.candidate_artists'),0)=COALESCE(json_extract(?,'$.candidate_artists'),0) ORDER BY r.finished_at DESC LIMIT 1`, time.Now().Add(-time.Hour).UnixMilli(), string(budget)).Scan(&runID, &jobID)
 	if err == nil {
 		return runID, jobID, tx.Commit()
 	}

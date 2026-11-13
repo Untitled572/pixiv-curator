@@ -11,8 +11,8 @@ import (
 func TestDefaultBudget(t *testing.T) {
 	want := Budget{
 		SeedArtists: 8, SeedSamplesPerArtist: 4,
-		CandidateArtists: 48, CandidateSamplesPerArtist: 2,
-		TotalRequests: 120,
+		CandidateArtists: 30, CandidateSamplesPerArtist: 2,
+		TotalRequests: 80,
 	}
 	if got := DefaultBudget(); got != want {
 		t.Fatalf("DefaultBudget() = %+v, want %+v", got, want)

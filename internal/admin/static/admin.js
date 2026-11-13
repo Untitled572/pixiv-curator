@@ -302,7 +302,7 @@
   }
   async function prepareRecommendationCards(items, signal) {
     const fragment = document.createDocumentFragment();
-    const cards = items.filter((item) => Array.isArray(item.sample_illust_ids) && item.sample_illust_ids.length).slice(0, 48).map(renderRecommendation);
+    const cards = items.filter((item) => Array.isArray(item.sample_illust_ids) && item.sample_illust_ids.length).slice(0, 30).map(renderRecommendation);
     cards.forEach((card) => fragment.append(card));
     const images = Array.from(fragment.querySelectorAll("img[data-preview-src]"));
     let index = 0; const deadline = Date.now() + 45000;
@@ -383,7 +383,7 @@
     try {
       const result = await api("/admin/api/recommendations", { method: "POST" });
       recommendationRunID = String(result.run_id || "");
-      showMessage(result.reused ? "一小时内已有推荐，已显示最近一次结果。" : "已开始发现画师，完成后统一展示最多 48 位候选及代表作。");
+      showMessage(result.reused ? "一小时内已有推荐，已显示最近一次结果。" : "已开始发现画师，完成后统一展示最多 30 位候选及代表作。");
       await readRecommendations(recommendationRunID, true);
     } catch (error) { trigger.disabled = false; trigger.textContent = "开始发现"; report(error, "开始发现"); }
   });

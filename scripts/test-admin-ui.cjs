@@ -238,10 +238,10 @@ const server = http.createServer((req, res) => {
 	await firstNewPreviewSeen;
 	assert.equal(newRunPolls, 3, "sample loading should only begin after the succeeded response");
 	assert.equal(await page.locator(".recommendation-card").count(), 0, "slow sample loading must not insert a partial batch");
-	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 48, null, { timeout: 10000 });
-	assert.equal(await page.locator(".recommendation-card").count(), 48, "completed results should cap rendered candidates at 48");
-	assert.equal(await page.locator(".sample-tile").count(), 96, "each rendered candidate may show at most two samples");
-	assert.equal(newRunPreviewRequests, 96, "only the first 48 candidates should load two previews each");
+	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30, null, { timeout: 10000 });
+	assert.equal(await page.locator(".recommendation-card").count(), 30, "completed results should cap rendered candidates at 30");
+	assert.equal(await page.locator(".sample-tile").count(), 60, "each rendered candidate may show at most two samples");
+	assert.equal(newRunPreviewRequests, 60, "only the first 30 candidates should load two previews each");
 	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
 	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
 	await page.setViewportSize({ width: 1440, height: 900 });

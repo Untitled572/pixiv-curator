@@ -266,22 +266,20 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			return classify(err)
 		}
 		if len(samples) == 0 {
-			if _, hasRelatedPreviews := s.client.(RelatedArtistPreviewClient); !hasRelatedPreviews {
-				ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
+			ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
+			if err != nil {
+				return err
+			}
+			if ok {
+				page, err := s.client.ArtistArtworks(ctx, candidate.ArtistID, "")
 				if err != nil {
-					return err
-				}
-				if ok {
-					page, err := s.client.ArtistArtworks(ctx, candidate.ArtistID, "")
+					if haltOptional(err) {
+						return classify(err)
+					}
+				} else {
+					samples, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
 					if err != nil {
-						if haltOptional(err) {
-							return classify(err)
-						}
-					} else {
-						samples, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
-						if err != nil {
-							return classify(err)
-						}
+						return classify(err)
 					}
 				}
 			}

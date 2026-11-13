@@ -103,3 +103,24 @@ func TestRequestDefaultsStillExcludeUnknown(t *testing.T) {
 		t.Fatalf("default unknown fixed page error=%v, want ErrNotFound", err)
 	}
 }
+
+func TestExplicitUnknownStillRequiresGlobalPermission(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 9800, "approved")
+	seedSelectionArtwork(t, s, 9810, 9800, "unknown", "unknown", nil, 1)
+	req := domain.SelectionRequest{SelectionRules: domain.SelectionRules{AllowedRatings: []string{"unknown"}, AllowedAI: []string{"unknown"}}, Overrides: map[string]bool{"r18": true, "ai_type": true}}
+	if _, err := s.Select(ctx, req); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("unknown relaxed defaults: %v", err)
+	}
+	if _, err := s.EligiblePageWithRequest(ctx, 9810, 0, req); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("fixed unknown relaxed defaults: %v", err)
+	}
+	rules := domain.DefaultRules()
+	rules.AllowedRatings = append(rules.AllowedRatings, "unknown")
+	rules.AllowedAI = append(rules.AllowedAI, "unknown")
+	putSelectionRules(t, s, rules)
+	if image, err := s.Select(ctx, req); err != nil || image.IllustID != 9810 {
+		t.Fatalf("explicitly permitted unknown: %+v %v", image, err)
+	}
+}

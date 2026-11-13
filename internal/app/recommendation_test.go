@@ -571,6 +571,64 @@ func TestRecommendationUsesRelatedPreviewSamplesWithoutCandidateArtworkFetch(t *
 	}
 }
 
+func TestRecommendationFetchesSamplesOnlyForPreviewCandidatesMissingThem(t *testing.T) {
+	ctx := context.Background()
+	s := openRecommendationAppStore(t)
+	const seedID int64 = 50500
+	addApprovedRecommendationSeed(t, s, seedID)
+	if err := s.UpsertArtwork(ctx, storedArtwork(50501, seedID, "seed-tag")); err != nil {
+		t.Fatal(err)
+	}
+	base := newFakeRecommendationClient()
+	base.relatedArtworks = func(context.Context, int64) ([]pixiv.RawArtwork, error) { return nil, nil }
+	base.artistArtworks = func(_ context.Context, id int64, cursor string) (pixiv.ArtworkPage, error) {
+		if cursor != "" {
+			t.Errorf("candidate %d cursor=%q, want initial page", id, cursor)
+		}
+		if id != 50502 {
+			t.Errorf("unexpected candidate artwork fetch for %d", id)
+		}
+		return pixiv.ArtworkPage{}, nil
+	}
+	client := &fakeRecommendationPreviewClient{fakeRecommendationClient: base, previews: func(context.Context, int64) ([]pixiv.UserPreview, error) {
+		return []pixiv.UserPreview{
+			{User: rawArtist(50502, "empty preview")},
+			{User: rawArtist(50503, "embedded sample"), Illusts: []pixiv.RawArtwork{recArtwork(505031, 50503, "seed-tag")}},
+		}, nil
+	}}
+	budget := recommend.Budget{SeedArtists: 1, SeedSamplesPerArtist: 1, CandidateArtists: 2, CandidateSamplesPerArtist: 2, TotalRequests: 10}
+	runID, job := createRecommendationJob(t, s, budget)
+	if err := NewRecommender(s, client).Handler(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	if base.countArtist(50502) != 1 || base.countArtist(50503) != 0 {
+		t.Fatalf("candidate requests missing=%d embedded=%d; want 1/0", base.countArtist(50502), base.countArtist(50503))
+	}
+	run, err := s.RecommendationRun(ctx, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.RequestCount != 3 || base.countAll() != 3 {
+		t.Fatalf("reserved/client requests=%d/%d; want 3", run.RequestCount, base.countAll())
+	}
+	candidates, err := s.RecommendationCandidates(ctx, runID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[int64]domain.Recommendation{}
+	for _, candidate := range candidates {
+		byID[candidate.ArtistID] = candidate
+	}
+	empty := byID[50502]
+	if empty.Artist.ReviewStatus != "pending" || empty.Artist.CollectionEnabled || len(empty.SampleIDs) != 0 || empty.Confidence != "low" {
+		t.Fatalf("empty-sample candidate should remain low-confidence and pending: %+v", empty)
+	}
+	embedded := byID[50503]
+	if embedded.Artist.ReviewStatus != "pending" || embedded.Artist.CollectionEnabled || !reflect.DeepEqual(embedded.SampleIDs, []string{"505031"}) {
+		t.Fatalf("embedded-sample candidate=%+v", embedded)
+	}
+}
+
 func TestRecommendationPreviewErrorsKeepCancelAnd429Classification(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

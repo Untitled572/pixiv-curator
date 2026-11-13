@@ -290,10 +290,10 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 	// Explicit API options replace defaults for that field. Blocked artists and
 	// disliked artworks remain unconditional eligibility constraints.
 	if req.Overrides["r18"] {
-		result.AllowedRatings = req.AllowedRatings
+		result.AllowedRatings = apiAllowedCategories(global.AllowedRatings, req.AllowedRatings)
 	}
 	if req.Overrides["ai_type"] {
-		result.AllowedAI = req.AllowedAI
+		result.AllowedAI = apiAllowedCategories(global.AllowedAI, req.AllowedAI)
 	}
 	if req.Overrides["exclude_manga"] {
 		result.ExcludeManga = req.ExcludeManga
@@ -315,6 +315,23 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 		result.ExcludeTags = uniqueStrings(req.ExcludeTags)
 	}
 	return result, impossible, nil
+}
+
+// Known categories may override defaults; unknown still needs explicit global permission.
+func apiAllowedCategories(global, request []string) []string {
+	allowUnknown := false
+	for _, value := range global {
+		if value == "unknown" {
+			allowUnknown = true
+		}
+	}
+	result := make([]string, 0, len(request))
+	for _, value := range request {
+		if value != "unknown" || allowUnknown {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func intersectStrings(global, request []string) []string {
