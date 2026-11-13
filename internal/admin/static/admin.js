@@ -294,13 +294,13 @@
     if (status.dataset.stateKey === key) return;
     status.dataset.stateKey = key;
     const parts = document.createDocumentFragment();
-    parts.append(node("span", "run-state", loadingSamples ? "正在加载代表作，完成后统一显示" : "为你发现的画师"));
-    parts.append(node("span", `run-pill state-${run.state || "unknown"}`, runLabel(run.state)));
+    parts.append(node("span", "run-state", loadingSamples ? "推荐已生成，正在加载代表作" : "为你发现的画师"));
+    parts.append(node("span", `run-pill state-${run.state || "unknown"}`, loadingSamples ? "预览准备中" : runLabel(run.state)));
     parts.append(node("span", "run-meta", `${displayProgress}%`));
     status.replaceChildren(parts);
     const running = ["pending", "running", "retry_wait"].includes(run.state);
-    $("#start-recommendations").disabled = running || loadingSamples;
-    $("#start-recommendations").textContent = running ? "正在发现…" : loadingSamples ? "正在加载…" : "开始发现";
+    $("#start-recommendations").disabled = running;
+    $("#start-recommendations").textContent = running ? "正在发现…" : "换一批";
   }
   async function prepareRecommendationCards(items, signal) {
     const fragment = document.createDocumentFragment();
@@ -311,8 +311,8 @@
       return renderRecommendation(item);
     });
     cards.forEach((card) => fragment.append(card));
-    const images = Array.from(fragment.querySelectorAll("img[data-preview-src]"));
-    let index = 0; const deadline = Date.now() + 45000;
+    const images = Array.from(fragment.querySelectorAll("img[data-preview-src]")).sort((a, b) => Number(a.dataset.sampleIndex || 0) - Number(b.dataset.sampleIndex || 0));
+    let index = 0; const deadline = Date.now() + 15000;
     async function next() {
       while (!signal.aborted && index < images.length) {
         const image = images[index++];
@@ -324,7 +324,7 @@
           const cancel = () => { image.removeAttribute("src"); finish(); };
           const loaded = () => { if (typeof image.decode === "function") image.decode().catch(() => {}).then(finish); else finish(); };
           image.addEventListener("load", loaded, { once: true }); image.addEventListener("error", fail, { once: true }); signal.addEventListener("abort", cancel, { once: true });
-          timer = setTimeout(fail, Math.max(1, deadline - Date.now()));
+          timer = setTimeout(fail, Math.max(1, Math.min(5000, deadline - Date.now())));
           image.loading = "eager"; image.src = image.dataset.previewSrc; delete image.dataset.previewSrc;
         });
       }
@@ -351,7 +351,7 @@
       recommendationRunID = String(run.id || runID || "");
       if (!recommendationRunID) throw new Error("NOT_FOUND");
       if (recommendationPollError) { recommendationPollError = false; showMessage(""); }
-      updateRecommendationStatus(run, run.state === "succeeded");
+      updateRecommendationStatus(run);
       if (["pending", "running", "retry_wait"].includes(run.state)) {
         if (!list.querySelector(".recommendation-card") && (recommendationPendingID !== recommendationRunID || !list.children.length || invalidate)) {
           list.replaceChildren(node("p", "empty-cell", "正在收集候选与代表作，完成后一次展示；候选不会自动加入图库。"));
@@ -392,6 +392,7 @@
   $("#recommendation-ai").addEventListener("change", () => readRecommendations("", true));
   $("#start-recommendations").addEventListener("click", async (event) => {
     const trigger = event.currentTarget; if (trigger.disabled) return;
+    stopRecommendationPolling(); recommendationController?.abort();
     trigger.disabled = true; trigger.textContent = "正在提交…";
     try {
       const result = await api("/admin/api/recommendations", { method: "POST" });
@@ -449,11 +450,11 @@
     classification.append(node("span", "tag-chip", ({ ai: "含 AI 样本", non_ai: "样本均为非 AI", unknown: "AI 状态未知" })[item.ai_status] || "AI 状态未知"));
     content.append(classification);
     if (sampleIDs.length) {
-      for (const workID of sampleIDs) {
+      for (const [sampleIndex, workID] of sampleIDs.entries()) {
         const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + workID + " 大图");
         tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: workID, artistId: artist.id, pageIndex: 0, title: "代表作 " + workID, artistName: artist.name || "" }));
         const image = node("img", "cover-image"); image.alt = "代表作 " + workID; image.decoding = "async";
-        image.dataset.previewSrc = `/admin/api/previews/${encodeURIComponent(workID)}/0`; tile.append(image);
+        image.dataset.sampleIndex = String(sampleIndex); image.dataset.previewSrc = `/admin/api/previews/${encodeURIComponent(workID)}/0`; tile.append(image);
         tile.append(node("span", "sample-caption", "作品 " + workID));
         samples.append(tile);
       }
@@ -493,11 +494,10 @@
     const overlay = node("div", "exploration-particle-overlay");
     overlay.setAttribute("aria-hidden", "true");
     Object.assign(overlay.style, { left: `${bounds.left}px`, top: `${bounds.top}px`, width: `${bounds.width}px`, height: `${bounds.height}px` });
-    overlay.append(node("span", "exploration-card-glow"));
-    for (let index = 0; index < 36; index += 1) {
+    for (let index = 0; index < 96; index += 1) {
       const particle = node("span", "exploration-particle");
-      const x = ((index % 6) + 0.5 + (Math.random() - 0.5) * 0.35) / 6;
-      const y = (Math.floor(index / 6) + 0.5 + (Math.random() - 0.5) * 0.35) / 6;
+      const x = ((index % 12) + 0.5 + (Math.random() - 0.5) * 0.35) / 12;
+      const y = (Math.floor(index / 12) + 0.5 + (Math.random() - 0.5) * 0.35) / 8;
       const angle = Math.atan2(y - 0.5, x - 0.5);
       const distance = 46 + Math.random() * 48;
       particle.style.left = `${x * 100}%`;
@@ -576,6 +576,12 @@
   $("#previous-artworks").addEventListener("click", () => { detailPage--; loadArtistDetails(); });
   $("#next-artworks").addEventListener("click", () => { detailPage++; loadArtistDetails(); });
   $("#close-artworks").addEventListener("click", () => { closeArtistDetails(); $("#artwork-dialog").close(); });
+  $("#artwork-dialog").addEventListener("click", (event) => {
+    const dialog = event.currentTarget;
+    if (event.target !== dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) { closeArtistDetails(); dialog.close(); }
+  });
   $("#artwork-dialog").addEventListener("cancel", closeArtistDetails);
   $("#artwork-dialog").addEventListener("close", () => { if (!$("#artwork-dialog").open) closeArtistDetails(); });
 

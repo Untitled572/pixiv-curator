@@ -111,6 +111,12 @@
 
     shell.append(header, collectionStatus, metadata, frame, footer);
     dialog.append(shell);
+    dialog.addEventListener("click", (event) => {
+      if (event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      const outside = event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom;
+      if (outside) closeViewer();
+    });
     dialog.addEventListener("cancel", () => stopImage());
     dialog.addEventListener("close", () => {
       stopImage();

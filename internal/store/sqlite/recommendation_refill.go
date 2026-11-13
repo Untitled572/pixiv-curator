@@ -208,6 +208,10 @@ func (s *Store) StartRecommendationRefill(ctx context.Context, j domain.Job, bud
 	if err != nil {
 		return err
 	}
+	budget, err = freezeRecommendationExclusions(ctx, tx, budget, latestID)
+	if err != nil {
+		return err
+	}
 	budget, err = freezeRecommendationSeeds(ctx, tx, budget)
 	if err != nil {
 		return err

@@ -98,13 +98,11 @@ textarea{resize:vertical;line-height:1.55}
 .recommendation-list{display:grid;gap:14px}
 .recommendation-card{display:grid;grid-template-columns:minmax(220px,.72fr) minmax(0,1.28fr);overflow:hidden;border:1px solid var(--line);border-radius:15px;background:#fff}
 .exploration-particle-overlay{position:fixed;z-index:1000;overflow:visible;pointer-events:none;border-radius:15px}
-.exploration-card-glow{position:absolute;inset:0;border:2px solid #8cbd83;border-radius:inherit;background:rgba(153,202,130,.12);box-shadow:0 0 0 6px rgba(140,189,131,.14);animation:exploration-card-glow .95s ease-out both}
-@keyframes exploration-card-glow{0%{opacity:0}20%{opacity:1}100%{opacity:0}}
 .exploration-particle{position:absolute;width:10px;height:10px;border-radius:50%;background:#83b865;box-shadow:0 0 0 2px rgba(131,184,101,.16);animation:exploration-particle-burst .85s cubic-bezier(.16,.72,.32,1) var(--particle-delay) both}
 .exploration-particle:nth-child(3n){width:8px;height:8px;background:#e1bd58}
 .exploration-particle:nth-child(3n + 1){background:#73b9ae}
 @keyframes exploration-particle-burst{0%{opacity:0;transform:translate(-50%,-50%) scale(.35)}18%{opacity:1}100%{opacity:0;transform:translate(calc(-50% + var(--particle-x)),calc(-50% + var(--particle-y))) scale(.7)}}
-@media(prefers-reduced-motion:reduce){.exploration-particle,.exploration-card-glow{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.exploration-particle{animation:none!important}}
 .recommendation-cover{min-height:310px}
 .recommendation-content{min-width:0;padding:19px}
 .candidate-heading{align-items:center;margin-bottom:11px}

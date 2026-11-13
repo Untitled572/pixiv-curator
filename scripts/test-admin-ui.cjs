@@ -187,14 +187,22 @@ const server = http.createServer((req, res) => {
     const artworkTitleViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/100/0?size=original"));
     await page.locator("#artwork-list .artwork-title-button").click(); await artworkTitleViewerRequest;
     assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/100/0?size=original", "library artwork title opens the same viewer");
-    await page.locator(".pixiv-viewer-close").click();
+    await page.locator(".pixiv-viewer-image").click();
+    assert.equal(await page.locator(".pixiv-viewer-dialog").evaluate((dialog) => dialog.open), true, "clicking the image inside the viewer does not close it");
+    const viewerBounds = await page.locator(".pixiv-viewer-dialog").boundingBox();
+    await page.mouse.click(Math.max(0, viewerBounds.x - 10), viewerBounds.y + viewerBounds.height / 2);
+    await page.waitForFunction(() => !document.querySelector(".pixiv-viewer-dialog").open);
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), null, "backdrop close stops and clears the viewer image request");
     const detailViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/100/0?size=original"));
     await page.locator("#artwork-list .artist-cover").click();
     await detailViewerRequest;
     assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/100/0?size=original");
     assert.equal(page.url(), base + "/admin/", "viewer thumbnail click must stay inside Curator");
     await page.locator(".pixiv-viewer-close").click();
-    await page.locator("#close-artworks").click();
+    await page.locator("#artist-detail-info").click();
+    assert.equal(await page.locator("#artwork-dialog").evaluate((dialog) => dialog.open), true, "clicking inside the artist detail dialog does not close it");
+    const artworkDialogBounds = await page.locator("#artwork-dialog").boundingBox();
+    await page.mouse.click(Math.max(0, artworkDialogBounds.x - 10), artworkDialogBounds.y + artworkDialogBounds.height / 2);
     await page.waitForFunction(() => !document.querySelector("#artwork-dialog").open && document.querySelectorAll("#artwork-list img").length === 0);
     assert.equal(await page.locator("img").count(), 1, "closing the viewer should keep its UI shell but clear the image request");
     assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), null, "closing the viewer must stop and clear the original-image request");
@@ -239,6 +247,8 @@ const server = http.createServer((req, res) => {
 	await page.locator("#tab-discover").click(); await sameRunRefresh;
 	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
 	assert.ok(await page.locator(".recommendation-card").first().evaluate((card) => card.isSameNode(window.__originalRecommendationCard)), "refreshing identical recommendations must preserve existing card nodes");
+	assert.equal(await page.locator("#recommendation-status .run-meta").textContent(), "100%", "a completed run refresh keeps the final progress at 100 percent");
+	assert.equal(await page.locator("#start-recommendations").isDisabled(), false, "completed discovery re-enables the start button");
 
     assert.equal(hits.some((u) => /recommendation.*[?&](content_rating|ai_type)=/.test(u)), false, "display filters must never be sent to discovery or polling");
     // An older, slower response must not replace the latest filter result.
@@ -298,7 +308,8 @@ const server = http.createServer((req, res) => {
     await approveResponse;
     const particleOverlay = page.locator(".exploration-particle-overlay");
     await particleOverlay.waitFor();
-    assert.equal(await particleOverlay.locator(".exploration-particle").count(), 36, "successful exploration approval emits 36 particles");
+    assert.equal(await particleOverlay.locator(".exploration-particle").count(), 96, "successful exploration approval emits a 12 by 8 particle grid");
+    assert.equal(await page.locator(".exploration-card-glow").count(), 0, "exploration particle effect creates no green card glow node");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).position), "fixed");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).pointerEvents), "none");
     const overlayBounds = await particleOverlay.boundingBox();

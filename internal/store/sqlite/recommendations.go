@@ -55,6 +55,10 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 	if err != sql.ErrNoRows {
 		return "", "", err
 	}
+	budget, err = freezeRecommendationExclusions(ctx, tx, budget, "")
+	if err != nil {
+		return "", "", err
+	}
 	budget, err = freezeRecommendationSeeds(ctx, tx, budget)
 	if err != nil {
 		return "", "", err
@@ -173,12 +177,23 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 	if runState != "running" {
 		return domain.ErrConflict
 	}
+	var budgetRaw string
+	if err = tx.QueryRowContext(ctx, `SELECT budget_json FROM recommendation_runs WHERE id=?`, runID).Scan(&budgetRaw); err != nil {
+		return err
+	}
+	excluded, err := recommendationExclusionSet(json.RawMessage(budgetRaw))
+	if err != nil {
+		return err
+	}
 	ids := make([]int64, 0, len(candidates))
 	for id := range candidates {
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	for _, id := range ids {
+		if excluded[id] {
+			continue
+		}
 		a := candidates[id]
 		if id <= 0 || a.ID != id {
 			return domain.ErrInvalid

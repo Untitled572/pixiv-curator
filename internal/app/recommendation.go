@@ -100,6 +100,18 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	if recallLimit < budget.CandidateArtists || recallLimit > 60 || budget.ExplorationArtists < 0 || budget.ExplorationArtists > budget.CandidateArtists {
 		return taskInvalid()
 	}
+	excluded := map[int64]bool{}
+	if repo, ok := s.store.(interface {
+		RecommendationExcludedArtistIDs(context.Context, string) ([]int64, error)
+	}); ok {
+		ids, err := repo.RecommendationExcludedArtistIDs(ctx, run.ID)
+		if err != nil {
+			return classify(err)
+		}
+		for _, id := range ids {
+			excluded[id] = true
+		}
+	}
 	seeds, err := s.store.RecommendationSeeds(ctx, budget.SeedArtists)
 	if frozen, ok := s.store.(interface {
 		RecommendationSeedsForRun(context.Context, string, int) ([]domain.Artist, error)
@@ -145,6 +157,9 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		candidates := map[int64]domain.Artist{}
 		sources := map[int64][]string{}
 		add := func(raw pixiv.RawArtist, source string) {
+			if excluded[raw.ID] {
+				return
+			}
 			if _, exists := candidates[raw.ID]; !exists && len(candidates) >= recallLimit {
 				return
 			}
