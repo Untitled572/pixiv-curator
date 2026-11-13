@@ -126,3 +126,6 @@ gh run list --workflow release.yml
 同日按用户要求仅替换当前v0.2.7服务器部署的粒子效果，不新增Release、不移动标签。a093f50的[CI](https://github.com/Untitled572/pixiv-curator/actions/runs/43382901948) 全部通过；服务器运行基于正式v0.2.7的本地镜像 `pixiv-curator:v0.2.7-ui-a093f50`，程序SHA256与源码revision均记录于部署元数据。版本仍为v0.2.7，GHCR和Release中的正式发行资产仍对应3b34ce9；不能把该次本地部署替换称为新的GHCR完整发行。
 
 后续继续依用户要求替换为本地镜像 `pixiv-curator:v0.2.7-ui-77e7a1a`，版本保持v0.2.7，仍不更改正式发行资产。其[CI43393480609](https://github.com/Untitled572/pixiv-curator/actions/runs/43393480609)全部成功，服务器实际程序SHA256核验通过；实网上一轮仍有22位未处理时，换批生成完整30位且与前轮交集0。备份、源码revision及实际镜像ID保存在部署目录元数据，临时部署目录已清理。
+
+
+2026-11-13：[v0.3.0完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43427280405)成功，源码a7bc9e3，四个平台二进制、SHA256SUMS及Docker双架构镜像已发布。GHCR digest为 `sha256:20aa5675e510ac90c3e9672d4c635b12f9eba80c337c704e33842cc8bed7ba08`；服务器已从之前本地v0.2.7替换镜像切换到此正式GHCR构建，schema13，一致性备份为 `backups/pre-v0.3.0-20261113T125216Z`。实际一轮30位精确17/10/3、65次请求、模型323样本且混排固定；没有真实批准或反馈操作。ARM64仅构建验证，没有原生机器运行。测试与公开统计数据口径详见开发计划38节。
