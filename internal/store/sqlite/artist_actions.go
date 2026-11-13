@@ -91,6 +91,11 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 			}
 		}
 	}
+	if action == "approve" || action == "reject" {
+		if err = scheduleRecommendationRefill(ctx, tx, id); err != nil {
+			return "", err
+		}
+	}
 	return jobID, tx.Commit()
 }
 

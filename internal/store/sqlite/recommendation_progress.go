@@ -61,7 +61,7 @@ func (s *Store) recommendationProgress(ctx context.Context, run domain.Recommend
 	}
 
 	var total, processed int
-	if err := s.db.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(CASE WHEN score_version<>'' THEN 1 ELSE 0 END),0) FROM recommendations WHERE run_id=?`, run.ID).Scan(&total, &processed); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(CASE WHEN score_version<>'' THEN 1 ELSE 0 END),0) FROM recommendations WHERE run_id=? AND COALESCE(json_extract(components_json,'$.carryover'),0)=0`, run.ID).Scan(&total, &processed); err != nil {
 		return 0, err
 	}
 	if total == 0 {

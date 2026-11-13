@@ -191,9 +191,13 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 		}
 		eligible := statusErr == sql.ErrNoRows || status != "approved" && status != "rejected" && status != "blocked"
 		var oldJSON string
-		sourceErr := tx.QueryRowContext(ctx, `SELECT sources_json FROM recommendations WHERE run_id=? AND artist_id=?`, runID, id).Scan(&oldJSON)
+		var carryover bool
+		sourceErr := tx.QueryRowContext(ctx, `SELECT sources_json,COALESCE(json_extract(components_json,'$.carryover'),0) FROM recommendations WHERE run_id=? AND artist_id=?`, runID, id).Scan(&oldJSON, &carryover)
 		if sourceErr != nil && sourceErr != sql.ErrNoRows {
 			return sourceErr
+		}
+		if sourceErr == nil && carryover {
+			continue
 		}
 		if eligible && sourceErr == sql.ErrNoRows {
 			var count int
@@ -547,6 +551,20 @@ func (s *Store) CompleteRecommendation(ctx context.Context, j domain.Job, runID 
 	}
 	if n != 1 {
 		return domain.ErrConflict
+	}
+	var handledCarryover int64
+	err = tx.QueryRowContext(ctx, `
+		SELECT r.artist_id FROM recommendations r
+		JOIN artists a ON a.id=r.artist_id
+		WHERE r.run_id=? AND COALESCE(json_extract(r.components_json,'$.carryover'),0)=1
+		AND a.review_status!='pending' ORDER BY r.artist_id LIMIT 1`, runID).Scan(&handledCarryover)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if err == nil {
+		if err = scheduleRecommendationRefill(ctx, tx, handledCarryover); err != nil {
+			return err
+		}
 	}
 	if err = completeJob(ctx, tx, j); err != nil {
 		return err

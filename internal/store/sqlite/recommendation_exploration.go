@@ -13,20 +13,21 @@ func selectRecommendationExploration(ctx context.Context, tx *sql.Tx, runID stri
 		return err
 	}
 	var b struct {
-		CandidateArtists   int `json:"candidate_artists"`
-		ExplorationArtists int `json:"exploration_artists"`
+		RefillParent       string `json:"refill_parent_run"`
+		CandidateArtists   int    `json:"candidate_artists"`
+		ExplorationArtists int    `json:"exploration_artists"`
 	}
 	if err := json.Unmarshal([]byte(raw), &b); err != nil {
 		return err
 	}
-	if b.ExplorationArtists <= 0 {
+	if b.ExplorationArtists <= 0 && b.RefillParent == "" {
 		return nil
 	}
 	limit := min(30, b.CandidateArtists)
 	if limit < 1 {
 		return nil
 	}
-	base := ` FROM recommendations r JOIN artists a ON a.id=r.artist_id WHERE r.run_id=? AND a.review_status='pending' AND EXISTS(SELECT 1 FROM json_each(r.sample_illust_ids_json) sample JOIN artworks w ON w.id=CAST(sample.value AS INTEGER) JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=a.id AND w.visible=1 AND p.media_state='indexed' AND NOT EXISTS(SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=w.id AND pref.value='dislike'))`
+	base := ` FROM recommendations r JOIN artists a ON a.id=r.artist_id WHERE r.run_id=? AND a.review_status='pending' AND COALESCE(json_extract(r.components_json,'$.carryover'),0)=0 AND EXISTS(SELECT 1 FROM json_each(r.sample_illust_ids_json) sample JOIN artworks w ON w.id=CAST(sample.value AS INTEGER) JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=a.id AND w.visible=1 AND p.media_state='indexed' AND NOT EXISTS(SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=w.id AND pref.value='dislike'))`
 	var count int
 	if err := tx.QueryRowContext(ctx, `SELECT count(*)`+base, runID).Scan(&count); err != nil {
 		return err
@@ -79,13 +80,13 @@ func selectRecommendationExploration(ctx context.Context, tx *sql.Tx, runID stri
 	}
 	ids := append(normal, random...)
 	if len(ids) == 0 {
-		_, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=?`, runID)
+		_, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=? AND COALESCE(json_extract(components_json,'$.carryover'),0)=0`, runID)
 		return err
 	}
 	args = []any{runID}
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	_, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=? AND artist_id NOT IN (`+placeholders(len(ids))+`)`, args...)
+	_, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=? AND COALESCE(json_extract(components_json,'$.carryover'),0)=0 AND artist_id NOT IN (`+placeholders(len(ids))+`)`, args...)
 	return err
 }

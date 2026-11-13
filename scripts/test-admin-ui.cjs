@@ -26,6 +26,10 @@ const completedRunItems = Array.from({ length: 55 }, (_, index) => ({
 }));
 let newRunPolls = 0;
 let newRunActive = false;
+let refillPhase = "";
+const refillCarryIDs = completedRunItems.slice(1, 16).map((item) => item.artist_id);
+const refillCarryItems = completedRunItems.slice(1, 16).map((item) => ({ ...item, components: { carryover: true } }));
+const refillNewItems = completedRunItems.slice(30, 45);
 let failNextApprove = false;
 let activeNewPreviewRequests = 0, maxNewPreviewRequests = 0, newRunPreviewRequests = 0;
 let resolveFirstNewPreview;
@@ -36,8 +40,8 @@ let accounts = [
   { id: "second", name: "副账号", status: "ready", sync_state: "succeeded", is_default: false, follow_on_approve: false, followed_artists: 2, pending_follows: 0 }
 ];
 const historyItems = [
-  { id: "event-2", selected_at: 1730000002000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, available: true },
-  { id: "event-1", selected_at: 1730000001000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, available: true },
+  { id: "event-2", selected_at: 1730000002000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, rating: "safe", ai_status: "ai", tags: ["AIイラスト"], available: true },
+  { id: "event-1", selected_at: 1730000001000, illust_id: "7001", page_index: 0, artist_id: "70", artist_name: "历史画师", title: "重复身份作品", width: 1200, height: 900, rating: "safe", ai_status: "ai", tags: ["AIイラスト"], available: true },
   { id: "event-blocked", selected_at: 1730000000000, illust_id: "7002", page_index: 0, artist_id: "71", artist_name: "已屏蔽画师", title: "不可预览作品", width: 800, height: 600, available: false }
 ];
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/CukAAAAASUVORK5CYII=", "base64");
@@ -66,6 +70,11 @@ const server = http.createServer((req, res) => {
     return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ updated: true })); }, 100);
   }
   if ((url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") && req.method === "GET") {
+    if (refillPhase) {
+      const running = refillPhase === "running";
+      payload = { run: { id: "run-refilled", state: running ? "running" : "succeeded", request_count: running ? 2 : 3, progress_percent: running ? 35 : 100 }, items: running ? refillCarryItems : [...refillCarryItems, ...refillNewItems] };
+      return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify(payload)); }, 30);
+    }
     if (url.searchParams.get("run_id") === "run-new" || (url.pathname === "/admin/api/recommendation-runs/latest" && newRunActive)) {
       newRunPolls++;
       const running = newRunPolls <= 2;
@@ -128,11 +137,18 @@ const server = http.createServer((req, res) => {
     await page.route("**/*", (route) => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
     const base = "http://127.0.0.1:" + server.address().port;
     await page.goto(base + "/admin/");
+    await page.locator("#panel-stats .stat-value").first().waitFor();
+    assert.equal(await page.locator("#current-page-title").textContent(), "统计与接口");
+    assert.equal(await page.locator("#tab-stats").getAttribute("aria-selected"), "true");
+    assert.equal(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")), false, "default Stats page must not fetch library data");
+    assert.equal(hits.some((hit) => hit.startsWith("/admin/api/previews/")), false, "default Stats page must not request image previews");
+    assert.equal(await page.locator("img").count(), 0, "default Stats page should not create image elements");
+    await page.locator("#tab-library").click();
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
     assert.equal(tagCorpus.length, 15142);
-    assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/tags?limit=30&q=")), "initial tag options should use bounded q/limit lookup");
-    assert.ok(await page.locator("#library-tag option").count() <= 32, "initial tag options should be capped at 30 plus the all/current entries");
+    assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/tags?limit=30&q=")), "library tag options should use bounded q/limit lookup");
+    assert.ok(await page.locator("#library-tag option").count() <= 32, "tag options should be capped at 30 plus the all/current entries");
     assert.ok(await page.locator("body *").count() < 1500, "large tag corpus must not expand the DOM");
     assert.equal(await page.locator("img").count(), 0);
     assert.equal(hits.filter((u) => /artworks|previews/.test(u)).length, 0);
@@ -144,9 +160,15 @@ const server = http.createServer((req, res) => {
     assert.ok(hits.includes("/admin/api/library/tags?limit=30&q=%E6%90%9C%E7%B4%A2%E4%B8%93%E7%94%A8"));
     const allTags = page.waitForResponse((response) => response.url().includes("/admin/api/library/tags?") && new URL(response.url()).searchParams.get("q") === "");
     await page.locator("#library-tag-search").fill(""); await allTags;
+    const libraryHitsBeforeReload = hits.filter((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")).length;
     await page.reload();
+    await page.locator("#panel-stats .stat-value").first().waitFor();
+    assert.equal(hits.filter((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")).length, libraryHitsBeforeReload, "reloaded admin page returns to Stats without loading the library");
+    const libraryHitsBeforeReloadVisit = libraryHitsBeforeReload;
+    await page.locator("#tab-library").click();
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
+    assert.ok(hits.filter((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")).length > libraryHitsBeforeReloadVisit, "library data loads after navigating back to its tab");
     assert.equal(hits.filter((u) => /artworks|previews/.test(u)).length, 0);
     await page.locator("#next-artists").click();
     await page.waitForFunction(() => document.querySelector(".artist-card")?.dataset.artistId === "25");
@@ -162,6 +184,10 @@ const server = http.createServer((req, res) => {
     await page.locator("#artwork-list img").waitFor();
     assert.match(await page.locator("#artist-detail-info").textContent(), /UID 49/);
     assert.equal(await page.locator("#artwork-list img").count(), 1);
+    const artworkTitleViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/100/0?size=original"));
+    await page.locator("#artwork-list .artwork-title-button").click(); await artworkTitleViewerRequest;
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/100/0?size=original", "library artwork title opens the same viewer");
+    await page.locator(".pixiv-viewer-close").click();
     const detailViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/100/0?size=original"));
     await page.locator("#artwork-list .artist-cover").click();
     await detailViewerRequest;
@@ -187,6 +213,10 @@ const server = http.createServer((req, res) => {
     assert.ok(hits.includes("/admin/api/previews/91001/0") && hits.includes("/admin/api/previews/91002/0"), "sample IDs should map directly to page-zero preview endpoints");
     assert.equal(hits.slice(hitsBeforeDiscover).some((u) => u.startsWith("/admin/api/artworks?")), false, "recommendation samples must not fetch artwork metadata");
     assert.equal(await page.locator(".recommendation-cover").count(), 0);
+    const discoveryTitleRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/91001/0?size=original"));
+    await page.locator(".recommendation-card .candidate-title-button").click(); await discoveryTitleRequest;
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/91001/0?size=original", "discovery artist name opens the first sample in the same viewer");
+    await page.locator(".pixiv-viewer-close").click();
     const desktopCard = page.locator(".recommendation-card").first();
     const desktopSamples = page.locator(".candidate-samples").first();
     assert.ok((await desktopSamples.boundingBox()).y < (await desktopCard.locator(".candidate-name").boundingBox()).y, "samples should appear above the artist name");
@@ -258,26 +288,53 @@ const server = http.createServer((req, res) => {
     await failedExploration.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.querySelector("[data-approve]")?.disabled, await failedExploration.elementHandle());
     assert.equal(await failedExploration.count(), 1, "failed approval keeps the exploration card");
-    assert.equal(await failedExploration.evaluate((card) => card.classList.contains("is-exploration-approved")), false, "failed approval has no success animation");
+    assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "failed approval emits no particles");
     const successExploration = page.locator('.recommendation-card[data-exploration="true"]').nth(1);
     const approveResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/artists/1026/approve"));
     await successExploration.locator("[data-approve]").click();
     assert.equal(await successExploration.locator("button").filter({ hasText: "不感兴趣" }).isDisabled(), true, "both decisions are locked while approval is pending");
     assert.equal(await successExploration.locator("[data-approve]").isDisabled(), true);
     await approveResponse;
-    await successExploration.locator(".exploration-confirmation").waitFor();
-    assert.equal(await successExploration.locator(".exploration-confirmation").textContent(), "已加入图库已加入采集名单");
+    const particleOverlay = page.locator(".exploration-particle-overlay");
+    await particleOverlay.waitFor();
+    assert.equal(await particleOverlay.locator(".exploration-particle").count(), 12, "successful exploration approval emits 12 particles");
+    assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).position), "fixed");
+    assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).pointerEvents), "none");
     assert.equal(await successExploration.count(), 1, "successful exploration approval shows a brief confirmation before removal");
+    await particleOverlay.waitFor({ state: "detached" });
     const normalCard = page.locator('.recommendation-card[data-exploration="false"]').first();
     const normalHandle = await normalCard.elementHandle();
     await normalCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, normalHandle);
+    assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "normal recommendations emit no particles");
     await page.emulateMedia({ reducedMotion: "reduce" });
     const reducedCard = page.locator('.recommendation-card[data-exploration="true"]').first();
     const reducedHandle = await reducedCard.elementHandle();
     await reducedCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, reducedHandle);
+    assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "reduced-motion approval emits no particles");
     await page.emulateMedia({ reducedMotion: "no-preference" });
+    const carrySampleIDs = completedRunItems.slice(1, 16).flatMap((item) => item.sample_illust_ids);
+    const carryPreviewHits = hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length;
+    await page.locator(".recommendation-card").evaluateAll((cards) => {
+      window.__refillCarryCards = cards.slice(0, 15);
+      cards.slice(15).forEach((card) => card.remove());
+    });
+    assert.equal(await page.locator(".recommendation-card").count(), 15, "refill test starts with 15 existing cards");
+    refillPhase = "running";
+    await page.locator("#tab-discover").click();
+    await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "35%");
+    assert.equal(await page.locator(".recommendation-card").count(), 15, "running refill keeps the existing cards visible");
+    assert.ok(await page.evaluate(() => window.__refillCarryCards.every((card) => card.isConnected && document.querySelector(`.recommendation-card[data-artist-id="${CSS.escape(card.dataset.artistId)}"]`) === card)), "running refill preserves the original card nodes");
+    assert.equal(hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length, carryPreviewHits, "running refill does not reload previews for existing cards");
+    refillPhase = "succeeded";
+    await page.locator("#tab-discover").click();
+    await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30, null, { timeout: 10000 });
+    const carriedCardStatus = await page.evaluate(() => ({ original: window.__refillCarryCards.map((card) => [card.dataset.artistId, card.isConnected]), current: Array.from(document.querySelectorAll(".recommendation-card")).map((card) => card.dataset.artistId) }));
+    assert.ok(await page.evaluate(() => window.__refillCarryCards.every((card) => card.isConnected && document.querySelector(`.recommendation-card[data-artist-id="${CSS.escape(card.dataset.artistId)}"]`) === card)), "completed refill reuses the original carried card nodes: " + JSON.stringify(carriedCardStatus));
+    assert.deepEqual(await page.locator(".recommendation-card").evaluateAll((cards) => cards.map((card) => card.dataset.artistId)), [...refillCarryIDs, ...refillNewItems.map((item) => item.artist_id)], "completed refill combines carried and new candidates");
+    assert.equal(hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length, carryPreviewHits, "completed refill does not reload previews for carried cards");
+    refillPhase = "";
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.screenshot({path:path.join(root,"data","discovery-three-previews.png"),fullPage:false});
 	await page.setViewportSize({ width: 1440, height: 900 });
@@ -307,6 +364,13 @@ const server = http.createServer((req, res) => {
     await firstHistoryImage.waitFor(); await secondHistoryImage.waitFor();
     assert.equal(await firstHistoryImage.getAttribute("src"), "/admin/api/previews/7001/0");
     assert.equal(await secondHistoryImage.getAttribute("src"), "/admin/api/previews/7001/0", "separate history events may share one fixed image identity");
+    const historyTitleViewerRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/7001/0?size=original"));
+    await page.locator('[data-history-id="event-2"] .artwork-title-button').click(); await historyTitleViewerRequest;
+    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/7001/0?size=original", "history title opens the same viewer");
+    assert.ok((await page.locator(".pixiv-viewer-classification").textContent()).includes("AI"), "history title passes the known AI classification");
+    assert.ok((await page.locator(".pixiv-viewer-classification").textContent()).includes("全年龄"), "history title passes the known rating");
+    assert.deepEqual(await page.locator(".pixiv-viewer-tag").allTextContents(), ["AIイラスト"], "history title passes known tags");
+    await page.locator(".pixiv-viewer-close").click();
     const blockedHistory = page.locator('[data-history-id="event-blocked"] .history-preview');
     assert.equal(await blockedHistory.isDisabled(), true, "blocked history item cannot be previewed");
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/previews/7002/")), false, "blocked history metadata must not request preview bytes");
@@ -384,13 +448,18 @@ const server = http.createServer((req, res) => {
     await page.locator(".account-card[data-account-id='second'] [data-follow-on-approve]").check();
 	const followResponse = await followRequest;
 	assert.deepEqual(followResponse.request().postDataJSON(), { follow_on_approve: true }, "follow-on-approve changes only after explicit checkbox action");
-    const copyButton = page.locator(".account-card[data-account-id='second'] button", { hasText: "复制关注到此账号" });
+    const copyForm = page.locator("#copy-following-form");
+    await copyForm.waitFor();
     const writesBeforeEmptyCopy = accountWrites.length;
-    await copyButton.click();
+    await copyForm.locator("button[type='submit']").click();
     assert.equal(accountWrites.length, writesBeforeEmptyCopy, "copy-following must wait for an explicit source account choice");
-    await page.locator(".account-card[data-account-id='second'] select").selectOption("test");
+    await page.locator("#copy-following-source").selectOption("test");
+    await page.locator("#copy-following-target").selectOption("test");
+    await copyForm.locator("button[type='submit']").click();
+    assert.equal(accountWrites.length, writesBeforeEmptyCopy, "copy-following rejects matching source and target accounts");
+    await page.locator("#copy-following-target").selectOption("second");
 	const copyRequest = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/accounts/second/copy-following"));
-    await copyButton.click();
+	await copyForm.locator("button[type='submit']").click();
 	const copyFollowingResponse = await copyRequest;
 	assert.deepEqual(copyFollowingResponse.request().postDataJSON(), { source_account_id: "test" }, "copy-following sends only the selected source after explicit click");
     await page.locator('#preferences-form input[name="rating"][value="r18"]').check();

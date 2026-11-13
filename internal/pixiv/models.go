@@ -2,6 +2,7 @@ package pixiv
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
@@ -103,6 +104,15 @@ func NormalizeArtwork(raw RawArtwork) (domain.Artwork, error) {
 		}
 	}
 
+	// Explicit generation labels are positive evidence even when the uploader/API
+	// leaves the structured flag unset or marks it non-AI. Never infer non-AI from absence.
+	for _, tag := range raw.Tags {
+		if explicitAITag(tag.Name) {
+			aiStatus = "ai"
+			break
+		}
+	}
+
 	artwork := domain.Artwork{
 		ID: raw.ID, ArtistID: raw.User.ID, Title: raw.Title, Caption: raw.Caption,
 		Kind: kind, Rating: rating, AIStatus: aiStatus, PageCount: raw.PageCount,
@@ -163,4 +173,13 @@ func NormalizeArtwork(raw RawArtwork) (domain.Artwork, error) {
 		artwork.MetadataState = "complete"
 	}
 	return artwork, nil
+}
+
+func explicitAITag(tag string) bool {
+	tag = strings.ToLower(strings.TrimSpace(strings.NewReplacer("ＡＩ", "AI", "Ａｉ", "AI", "ａｉ", "ai").Replace(tag)))
+	switch tag {
+	case "ai生成", "aiイラスト", "ai绘画", "ai繪畫", "ai绘图", "ai繪圖", "ai-generated", "ai generated", "ai-generated art", "aiart", "ai artwork", "ai画像", "ai絵":
+		return true
+	}
+	return false
 }

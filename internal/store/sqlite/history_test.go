@@ -243,3 +243,20 @@ func findMigrationContaining(t *testing.T, fragment string) (int, string) {
 	t.Fatalf("no migration contains %q", fragment)
 	return 0, ""
 }
+
+func TestHistoryIncludesCurrentAIClassificationAndTags(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1, "approved")
+	seedSelectionArtwork(t, s, 150593377, 1, "safe", "ai", []string{"AIイラスト"}, 1)
+	if _, err := s.db.Exec(`INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES('ai','preferred',150593377,0,1,'ai')`); err != nil {
+		t.Fatal(err)
+	}
+	page, err := s.History(ctx, 1, 24)
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("history=%+v %v", page, err)
+	}
+	if page.Items[0].AIStatus != "ai" || page.Items[0].Rating != "safe" || len(page.Items[0].Tags) != 1 {
+		t.Fatalf("missing viewer metadata: %+v", page.Items[0])
+	}
+}

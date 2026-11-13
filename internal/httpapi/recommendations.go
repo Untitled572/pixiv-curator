@@ -9,6 +9,17 @@ import (
 )
 
 func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth) {
+	mux.Handle("POST /admin/api/recommendations/activity", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		if err := s.TouchActivity(r.Context()); err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})))
 	mux.Handle("GET /admin/api/recommendation-runs/latest", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := recommendationQuery(r.URL.RawQuery, false)
 		if err != nil {

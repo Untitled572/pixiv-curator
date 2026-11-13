@@ -221,6 +221,13 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			}
 			admittedIDs := make(map[int64]bool, len(admitted))
 			for _, candidate := range admitted {
+				var carry struct {
+					Carryover bool `json:"carryover"`
+				}
+				_ = json.Unmarshal(candidate.Components, &carry)
+				if carry.Carryover {
+					continue
+				}
 				admittedIDs[candidate.ArtistID] = true
 			}
 			ids := make([]int64, 0, len(previewSamples))
@@ -270,6 +277,13 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		return classify(err)
 	}
 	for _, candidate := range candidates {
+		var carry struct {
+			Carryover bool `json:"carryover"`
+		}
+		_ = json.Unmarshal(candidate.Components, &carry)
+		if carry.Carryover {
+			continue
+		}
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -429,4 +443,28 @@ func filterRecommendationCandidates(items []domain.Recommendation, contentRating
 		}
 	}
 	return filtered
+}
+
+func (s *Recommender) Refill(ctx context.Context, j domain.Job) error {
+	repo, ok := s.store.(interface {
+		StartRecommendationRefill(context.Context, domain.Job, json.RawMessage) error
+	})
+	if !ok {
+		return taskInvalid()
+	}
+	b, _ := json.Marshal(recommend.DefaultBudget())
+	return classify(repo.StartRecommendationRefill(ctx, j, b))
+}
+func (s *Recommender) TouchActivity(ctx context.Context) error {
+	if repo, ok := s.store.(interface{ TouchRecommendationActivity(context.Context) error }); ok {
+		return repo.TouchRecommendationActivity(ctx)
+	}
+	return nil
+}
+
+func (s *Recommender) PrepareRefill(ctx context.Context) error {
+	if repo, ok := s.store.(interface{ PrepareRecommendationRefill(context.Context) error }); ok {
+		return repo.PrepareRecommendationRefill(ctx)
+	}
+	return nil
 }

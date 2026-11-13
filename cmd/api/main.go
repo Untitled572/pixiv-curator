@@ -104,8 +104,12 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	}()
 	ingestion := app.NewIngest(store, client)
 	recommender := app.NewRecommender(store, client)
+	if err := recommender.PrepareRefill(workerCtx); err != nil {
+		logger.Warn("recommendation refill bootstrap failed")
+	}
 	handlers := ingestion.Handlers()
 	handlers["recommend_artists"] = recommender.Handler
+	handlers["recommendation_refill"] = recommender.Refill
 	handlers["follow_artist"] = app.NewRemoteFollows(store, client).Handler
 	worker := jobs.NewWorker(store, handlers)
 	go func() { defer close(workerDone); _ = worker.Run(workerCtx) }()

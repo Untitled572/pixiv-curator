@@ -196,3 +196,23 @@ func TestNormalizeMultiPageUsesArtworkPreviewForFirstPage(t *testing.T) {
 		t.Fatal("a preview for a different page must not be invented")
 	}
 }
+
+func TestExplicitAIGenerationTagsOverrideMissingOrNonAIFlags(t *testing.T) {
+	for _, tag := range []string{"AIイラスト", "AI生成", " ai-generated ", "ＡＩ生成"} {
+		for _, flag := range []*int{nil, func() *int { v := 0; return &v }(), func() *int { v := 1; return &v }(), func() *int { v := 2; return &v }()} {
+			raw := RawArtwork{ID: 1, User: RawArtist{ID: 2}, IllustAIType: flag}
+			raw.Tags = append(raw.Tags, struct {
+				Name string `json:"name"`
+			}{tag})
+			a, err := NormalizeArtwork(raw)
+			if err != nil || a.AIStatus != "ai" {
+				t.Fatalf("tag=%s flag=%v status=%s err=%v", tag, flag, a.AIStatus, err)
+			}
+		}
+	}
+	for _, tag := range []string{"AI", "非AI", "AI生成禁止", "AI不使用"} {
+		if explicitAITag(tag) {
+			t.Fatalf("ambiguous/negative tag accepted: %s", tag)
+		}
+	}
+}

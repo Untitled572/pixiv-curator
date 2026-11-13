@@ -60,7 +60,7 @@ func (s *Store) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
 	if err != nil {
 		return domain.Job{}, err
 	}
-	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0 ORDER BY CASE WHEN kind='sync_following' THEN 0 WHEN kind='follow_artist' THEN 1 WHEN kind='recommend_artists' THEN 2 WHEN json_extract(payload_json,'$.phase')='history' THEN 4 ELSE 3 END,available_at,id LIMIT 1`, now.UnixMilli()))
+	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0 ORDER BY CASE WHEN kind='sync_following' THEN 0 WHEN kind='follow_artist' THEN 1 WHEN kind IN ('recommend_artists','recommendation_refill') THEN 2 WHEN json_extract(payload_json,'$.phase')='history' THEN 4 ELSE 3 END,available_at,id LIMIT 1`, now.UnixMilli()))
 	if err != nil {
 		if err == domain.ErrNotFound {
 			if commitErr := tx.Commit(); commitErr != nil {
