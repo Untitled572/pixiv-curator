@@ -470,8 +470,8 @@
         await api(`/admin/api/artists/${encodeURIComponent(id)}/approve`, { method: "POST" });
         showMessage("已加入图库，后台会自动安排采集。");
         if (exploring && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-          emitExplorationApprovalParticles(actionButton);
-          setTimeout(() => card.remove(), 650);
+          emitExplorationApprovalParticles(card);
+          setTimeout(() => card.remove(), 950);
         } else card.remove();
       } catch (error) {
         decisionPending = false; actionButton.disabled = false; rejectButton.disabled = false;
@@ -488,25 +488,27 @@
     });
     content.append(actions); card.append(content); return card;
   }
-  function emitExplorationApprovalParticles(button) {
-    const bounds = button.getBoundingClientRect();
-    const originX = bounds.left + bounds.width / 2;
-    const originY = bounds.top + bounds.height / 2;
+  function emitExplorationApprovalParticles(card) {
+    const bounds = card.getBoundingClientRect();
     const overlay = node("div", "exploration-particle-overlay");
     overlay.setAttribute("aria-hidden", "true");
-    for (let index = 0; index < 12; index += 1) {
+    Object.assign(overlay.style, { left: `${bounds.left}px`, top: `${bounds.top}px`, width: `${bounds.width}px`, height: `${bounds.height}px` });
+    overlay.append(node("span", "exploration-card-glow"));
+    for (let index = 0; index < 36; index += 1) {
       const particle = node("span", "exploration-particle");
-      const angle = (Math.PI * 2 * index) / 12 + (Math.random() - 0.5) * 0.35;
-      const distance = 28 + Math.random() * 34;
-      particle.style.left = `${originX}px`;
-      particle.style.top = `${originY}px`;
+      const x = ((index % 6) + 0.5 + (Math.random() - 0.5) * 0.35) / 6;
+      const y = (Math.floor(index / 6) + 0.5 + (Math.random() - 0.5) * 0.35) / 6;
+      const angle = Math.atan2(y - 0.5, x - 0.5);
+      const distance = 46 + Math.random() * 48;
+      particle.style.left = `${x * 100}%`;
+      particle.style.top = `${y * 100}%`;
       particle.style.setProperty("--particle-x", `${Math.cos(angle) * distance}px`);
       particle.style.setProperty("--particle-y", `${Math.sin(angle) * distance}px`);
-      particle.style.setProperty("--particle-delay", `${Math.random() * 70}ms`);
+      particle.style.setProperty("--particle-delay", `${Math.random() * 100}ms`);
       overlay.append(particle);
     }
     document.body.append(overlay);
-    setTimeout(() => overlay.remove(), 700);
+    setTimeout(() => overlay.remove(), 1000);
   }
   function closeArtistDetails() {
     detailController?.abort(); detailController = null;

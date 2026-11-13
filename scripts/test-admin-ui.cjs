@@ -291,15 +291,23 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "failed approval emits no particles");
     const successExploration = page.locator('.recommendation-card[data-exploration="true"]').nth(1);
     const approveResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/artists/1026/approve"));
+    const successCardBounds = await successExploration.boundingBox();
     await successExploration.locator("[data-approve]").click();
     assert.equal(await successExploration.locator("button").filter({ hasText: "不感兴趣" }).isDisabled(), true, "both decisions are locked while approval is pending");
     assert.equal(await successExploration.locator("[data-approve]").isDisabled(), true);
     await approveResponse;
     const particleOverlay = page.locator(".exploration-particle-overlay");
     await particleOverlay.waitFor();
-    assert.equal(await particleOverlay.locator(".exploration-particle").count(), 12, "successful exploration approval emits 12 particles");
+    assert.equal(await particleOverlay.locator(".exploration-particle").count(), 36, "successful exploration approval emits 36 particles");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).position), "fixed");
     assert.equal(await particleOverlay.evaluate((overlay) => getComputedStyle(overlay).pointerEvents), "none");
+    const overlayBounds = await particleOverlay.boundingBox();
+    assert.ok(Math.abs(overlayBounds.width - successCardBounds.width) < 2 && Math.abs(overlayBounds.height - successCardBounds.height) < 2, "effect covers the whole artist card");
+    const spread = await particleOverlay.locator(".exploration-particle").evaluateAll((particles) => {
+      const xs = particles.map((p) => parseFloat(p.style.left)), ys = particles.map((p) => parseFloat(p.style.top));
+      return { x: Math.max(...xs) - Math.min(...xs), y: Math.max(...ys) - Math.min(...ys), minSize: Math.min(...particles.map((p) => parseFloat(getComputedStyle(p).width))) };
+    });
+    assert.ok(spread.x > 70 && spread.y > 70 && spread.minSize >= 8, "large particles span the card width and height");
     assert.equal(await successExploration.count(), 1, "successful exploration approval shows a brief confirmation before removal");
     await particleOverlay.waitFor({ state: "detached" });
     const normalCard = page.locator('.recommendation-card[data-exploration="false"]').first();

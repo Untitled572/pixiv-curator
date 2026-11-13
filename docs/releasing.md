@@ -118,3 +118,6 @@ gh run list --workflow release.yml
 2026-11-13：[v0.2.5 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43352220491) 成功，源码6207077，四个平台包与双架构镜像已发布。GHCR digest `sha256:96f02a83f17fa4d870b2d14f0d4768ae7fe38642e11a0e06ee7d33e0830605df`；服务器已升级，实网30位均有3件样本，24常规与6探索名单刷新稳定。GUI布局使用隔离浏览器验证，未进行arm64原生运行。
 
 2026-11-13：[v0.2.6 完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43355928823) 成功，源码4e6d693；GHCR digest `sha256:f3761e60c262a03ac690e5a372940452fa014631b185a5e1d4d194e75ca79e24`。服务器已备份升级；实网验证阶段百分比及固定多样种子，30候选中出现1位含成人样本。探索批准动画/无专属徽标经隔离浏览器验证；未自动批准任何真实画师。
+
+
+2026-11-13：[v0.2.7完整发行](https://github.com/Untitled572/pixiv-curator/actions/runs/43378510700) 成功，源码3b34ce9；四个平台二进制及双架构GHCR已发布，digest `sha256:e09b6a0071813c68677c98f2608ab77c614a99a73582bcbeea2e828a4d091af9`。服务器一致性备份后迁移至schema12，AI标签回填与22旧候选加8新候选的自动补池实网通过。arm64仅构建检查，未原生执行。
