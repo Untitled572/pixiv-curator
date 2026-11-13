@@ -3,6 +3,17 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing version to rebuild
+        required: true
+        type: string
+      replace_existing:
+        description: Explicitly replace the published assets and tag
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -18,14 +29,14 @@ jobs:
     steps:
       - name: Require a version tag
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           [[ "$VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || { echo 'Expected vMAJOR.MINOR.PATCH[-prerelease]'; exit 1; }
   build:
     needs: validate
     uses: ./.github/workflows/ci.yml
     with:
-      version: ${{ github.ref_name }}
+      version: ${{ inputs.version || github.ref_name }}
     permissions:
       contents: read
 
@@ -45,7 +56,7 @@ jobs:
       - name: Compute image name and tags
         id: meta
         env:
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "image=$image" >> "$GITHUB_OUTPUT"
@@ -77,13 +88,13 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           build-args: |
             GO_VERSION=${{ steps.meta.outputs.go_version }}
-            VERSION=${{ github.ref_name }}
+            VERSION=${{ inputs.version || github.ref_name }}
 
       - name: Verify GHCR manifest and export deployment image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           DIGEST: ${{ steps.push.outputs.digest }}
-          VERSION: ${{ github.ref_name }}
+          VERSION: ${{ inputs.version || github.ref_name }}
         run: |
           mkdir -p image-deploy
           docker buildx imagetools inspect "$IMAGE@$DIGEST" --raw > image-deploy/manifest.json
@@ -112,9 +123,11 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
-      VERSION: ${{ github.ref_name }}
+      VERSION: ${{ inputs.version || github.ref_name }}
       IMAGE: ${{ needs.image.outputs.image }}
       DIGEST: ${{ needs.image.outputs.digest }}
+      REPLACE_EXISTING: ${{ inputs.replace_existing || false }}
+      SOURCE_SHA: ${{ github.sha }}
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -132,9 +145,14 @@ jobs:
       - name: Create or resume draft, upload all assets, then publish
         run: |
           if gh release view "$VERSION" --json isDraft --jq .isDraft > draft-state; then
-            test "$(cat draft-state)" = true || { echo 'Release already published; use a new version tag.'; exit 1; }
+            if [[ "$(cat draft-state)" != true && "$REPLACE_EXISTING" != true ]]; then
+              echo 'Release already published; use a new version or explicit replacement dispatch.'; exit 1
+            fi
           else
             gh release create "$VERSION" --verify-tag --draft --title "$VERSION" --notes-file release-notes.md
+          fi
+          if [[ "$REPLACE_EXISTING" == true ]]; then
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/$VERSION" -f sha="$SOURCE_SHA" -F force=true --silent
           fi
           gh release upload "$VERSION" dist/* --clobber
           if [[ "$VERSION" == *-* ]]; then

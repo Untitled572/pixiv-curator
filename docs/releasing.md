@@ -132,3 +132,6 @@ gh run list --workflow release.yml
 
 
 同日按用户要求恢复发现卡片主要标签，并将桌面125%改为110%，手机原尺寸。01fe361的[CI43432111331](https://github.com/Untitled572/pixiv-curator/actions/runs/43432111331)全部成功；服务器以正式v0.3.0为基础运行本地修补镜像 `pixiv-curator:v0.3.0-ui-01fe361`，备份为 `backups/pre-v0.3.0-ui-20261113T131819Z`。运行程序SHA256、版本、就绪、服务界面及既有推荐标签读取核验通过；未重新生成实网推荐或分发图片。版本仍为v0.3.0，正式GHCR和Release资产保持a7bc9e3；这次本地部署替换不是新的GHCR发行。
+
+
+明确要求替换同版本正式资产时，手动运行Release工作流并填写version与replace_existing=true。全部构建成功后才将该版本标签指向构建提交、覆盖四个平台包及校验和；默认发布仍拒绝覆盖已发布版本。替换会改变同版本资产与镜像digest，消费端应重新下载或拉取。
