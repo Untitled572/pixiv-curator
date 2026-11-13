@@ -135,3 +135,6 @@ gh run list --workflow release.yml
 
 
 明确要求替换同版本正式资产时，手动运行Release工作流并填写version与replace_existing=true。全部构建成功后才将该版本标签指向构建提交、覆盖四个平台包及校验和；默认发布仍拒绝覆盖已发布版本。替换会改变同版本资产与镜像digest，消费端应重新下载或拉取。
+
+
+2026-11-13：用户明确要求替换同版本正式资产后，[发行43434848927](https://github.com/Untitled572/pixiv-curator/actions/runs/43434848927)全部成功。v0.3.0标签及四个正式包、SHA256SUMS已更新为0d4506d，GHCR v0.3.0/latest双架构digest更新为 `sha256:e0fe8d04f96a669e19dcc6ac31f911221da1923afd081702ce6d8ca23a0d0d0f`，取代此前a7bc9e3构建。服务器已从本地修补镜像切换为新正式构建，备份 `backups/pre-v0.3.0-replace-20261113T134506Z`；实际程序、版本与就绪检查通过，不重复推荐验收。已经下载或拉取旧v0.3.0的用户需要重新获取资产。
