@@ -337,7 +337,7 @@
     if (invalidate) { recommendationRenderedKey = ""; list.replaceChildren(node("p", "empty-cell", "正在读取推荐…")); }
     try {
       const path = runID ? "/admin/api/recommendations?" : "/admin/api/recommendation-runs/latest?";
-      const result = await api(path + recommendationQuery(runID), { signal: controller.signal });
+      const result = await api(path + new URLSearchParams(runID ? { run_id: runID } : {}), { signal: controller.signal });
       if (controller.signal.aborted || activeTab !== "discover") return;
       const run = result.run || {};
       recommendationRunID = String(run.id || runID || "");
@@ -355,7 +355,8 @@
       if (run.state !== "succeeded") {
         list.replaceChildren(node("p", "empty-cell", run.state === "paused_auth" ? "请先在设置中检查账号，恢复任务后再查看。" : "本轮发现未完成，可以稍后重新开始。")); return;
       }
-      const items = Array.isArray(result.items) ? result.items : [];
+      const rating = $("#recommendation-rating").value, ai = $("#recommendation-ai").value;
+      const items = (Array.isArray(result.items) ? result.items : []).filter((item) => (rating === "all" || item.content_rating === rating) && (ai === "all" || item.ai_status === ai));
       const key = JSON.stringify([run.id, recommendationQuery().toString(), items]);
       if (key === recommendationRenderedKey) return;
       updateRecommendationStatus(run, true);
@@ -383,7 +384,7 @@
     try {
       const result = await api("/admin/api/recommendations", { method: "POST" });
       recommendationRunID = String(result.run_id || "");
-      showMessage(result.reused ? "一小时内已有推荐，已显示最近一次结果。" : "已开始发现画师，完成后统一展示最多 30 位候选及代表作。");
+      showMessage("已提交发现任务，生成完整候选后再按当前筛选展示。");
       await readRecommendations(recommendationRunID, true);
     } catch (error) { trigger.disabled = false; trigger.textContent = "开始发现"; report(error, "开始发现"); }
   });

@@ -196,16 +196,17 @@ const server = http.createServer((req, res) => {
     await page.locator("#recommendation-ai").selectOption("unknown");
     await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["未知分类"]);
-    const unknownRequest = hits.findLast((u) => u.startsWith("/admin/api/recommendation-runs/latest?") && u.includes("content_rating=unknown") && u.includes("ai_type=unknown"));
-    assert.ok(unknownRequest, "unknown rating and AI filters should be sent together");
+    const unknownRequest = hits.findLast((u) => u === "/admin/api/recommendation-runs/latest");
+    assert.ok(unknownRequest, "result reads must remain unfiltered; filtering happens in the browser");
 	await page.locator(".recommendation-card").first().evaluate((card) => { window.__originalRecommendationCard = card; });
-	const sameRunRefresh = page.waitForRequest((request) => request.url().includes("/admin/api/recommendation-runs/latest?") && request.url().includes("content_rating=unknown") && request.url().includes("ai_type=unknown"));
+	const sameRunRefresh = page.waitForRequest((request) => request.url().includes("/admin/api/recommendation-runs/latest"));
 	await page.locator("#tab-discover").click(); await sameRunRefresh;
 	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
 	assert.ok(await page.locator(".recommendation-card").first().evaluate((card) => card.isSameNode(window.__originalRecommendationCard)), "refreshing identical recommendations must preserve existing card nodes");
 
+    assert.equal(hits.some((u) => /recommendation.*[?&](content_rating|ai_type)=/.test(u)), false, "display filters must never be sent to discovery or polling");
     // An older, slower response must not replace the latest filter result.
-    const adultRequest = page.waitForRequest((request) => request.url().includes("content_rating=adult"));
+    const adultRequest = page.waitForRequest((request) => request.url().includes("/admin/api/recommendation-runs/latest"));
     await page.locator("#recommendation-rating").selectOption("adult");
     await adultRequest;
     await page.locator("#recommendation-rating").selectOption("safe");

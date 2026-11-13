@@ -106,8 +106,8 @@ func TestRecommendationRunBudgetLeaseAndCandidateSamplesStayPending(t *testing.T
 	if err = s.CompleteRecommendation(ctx, j, runID); err != nil {
 		t.Fatal(err)
 	}
-	if reused, reusedJob, e := s.StartRecommendation(ctx, json.RawMessage(`{}`)); e != nil || reused != runID || reusedJob != j.ID {
-		t.Fatalf("recent completed run should be reused: %s %s %v", reused, reusedJob, e)
+	if reused, reusedJob, e := s.StartRecommendation(ctx, json.RawMessage(`{}`)); e != nil || reused == runID || reusedJob == j.ID {
+		t.Fatalf("completed run must not prevent a new run: %s %s %v", reused, reusedJob, e)
 	}
 }
 
@@ -414,5 +414,19 @@ func TestLargerRecommendationBudgetDoesNotReuseSmallCachedRun(t *testing.T) {
 	current, _, err := s.StartRecommendation(ctx, json.RawMessage(`{"candidate_artists":48}`))
 	if err != nil || current == old {
 		t.Fatalf("larger request must start a new run: %s %v", current, err)
+	}
+}
+
+func TestRecommendationOnlyReusesActiveJob(t *testing.T) {
+	s := openRecommendationStore(t)
+	ctx := context.Background()
+	budget := json.RawMessage(`{}`)
+	first, job, err := s.StartRecommendation(ctx, budget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, againJob, err := s.StartRecommendation(ctx, budget)
+	if err != nil || again != first || againJob != job {
+		t.Fatalf("active task not deduplicated: %s %s %v", again, againJob, err)
 	}
 }
