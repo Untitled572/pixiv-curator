@@ -264,6 +264,11 @@ func (s *Store) RecommendationCandidates(ctx context.Context, runID string, afte
 		_ = json.Unmarshal([]byte(sources), &r.Sources)
 		r.SampleIDs, invalidSamples[r.ArtistID], unknownSampleCount[r.ArtistID] = parseRecommendationSampleIDs(samples)
 		r.Components = json.RawMessage(components)
+		var flags struct {
+			Exploration bool `json:"exploration"`
+		}
+		_ = json.Unmarshal(r.Components, &flags)
+		r.Exploration = flags.Exploration
 		out = append(out, r)
 	}
 	if err = rows.Err(); err != nil {
@@ -519,6 +524,9 @@ func (s *Store) CompleteRecommendation(ctx context.Context, j domain.Job, runID 
 	}
 	defer tx.Rollback()
 	if err = checkRecommendationLease(ctx, tx, j, runID); err != nil {
+		return err
+	}
+	if err = selectRecommendationExploration(ctx, tx, runID); err != nil {
 		return err
 	}
 	now := time.Now().UnixMilli()

@@ -19,6 +19,8 @@ const (
 // Budget limits all recommendation inputs and upstream request work. It is a
 // pure value so a job can persist and replay the exact run parameters.
 type Budget struct {
+	RecallArtists             int `json:"recall_artists,omitempty"`
+	ExplorationArtists        int `json:"exploration_artists,omitempty"`
 	SeedArtists               int `json:"seed_artists"`
 	SeedSamplesPerArtist      int `json:"seed_samples_per_artist"`
 	CandidateArtists          int `json:"candidate_artists"`
@@ -29,8 +31,8 @@ type Budget struct {
 func DefaultBudget() Budget {
 	return Budget{
 		SeedArtists: 8, SeedSamplesPerArtist: 4,
-		CandidateArtists: 30, CandidateSamplesPerArtist: 2,
-		TotalRequests: 80,
+		CandidateArtists: 30, CandidateSamplesPerArtist: 3,
+		TotalRequests: 80, RecallArtists: 60, ExplorationArtists: 6,
 	}
 }
 

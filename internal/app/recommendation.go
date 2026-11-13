@@ -93,6 +93,13 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	if json.Unmarshal(run.Budget, &budget) != nil || budget.SeedArtists < 1 || budget.SeedArtists > 30 || budget.SeedSamplesPerArtist < 1 || budget.SeedSamplesPerArtist > 8 || budget.CandidateSamplesPerArtist < 1 || budget.CandidateSamplesPerArtist > 4 || budget.CandidateArtists < 1 || budget.CandidateArtists > 60 || budget.TotalRequests < 1 || budget.TotalRequests > 300 {
 		return taskInvalid()
 	}
+	recallLimit := budget.RecallArtists
+	if recallLimit == 0 {
+		recallLimit = budget.CandidateArtists
+	}
+	if recallLimit < budget.CandidateArtists || recallLimit > 60 || budget.ExplorationArtists < 0 || budget.ExplorationArtists > budget.CandidateArtists {
+		return taskInvalid()
+	}
 	seeds, err := s.store.RecommendationSeeds(ctx, budget.SeedArtists)
 	if err != nil {
 		return classify(err)
@@ -133,7 +140,7 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		candidates := map[int64]domain.Artist{}
 		sources := map[int64][]string{}
 		add := func(raw pixiv.RawArtist, source string) {
-			if _, exists := candidates[raw.ID]; !exists && len(candidates) >= budget.CandidateArtists {
+			if _, exists := candidates[raw.ID]; !exists && len(candidates) >= recallLimit {
 				return
 			}
 			a, err := pixiv.NormalizeArtist(raw)
@@ -199,7 +206,7 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 				}
 			}
 		}
-		if err = s.store.CommitRecommendationRecall(ctx, j, run.ID, seed.ID, candidates, sources, budget.CandidateArtists); err != nil {
+		if err = s.store.CommitRecommendationRecall(ctx, j, run.ID, seed.ID, candidates, sources, recallLimit); err != nil {
 			return classify(err)
 		}
 		if len(previewSamples) > 0 {
@@ -314,19 +321,11 @@ func mergeRecommendationPreviewSamples(existing, incoming []domain.Artwork, max 
 			byID[artwork.ID] = artwork
 		}
 	}
-	ids := make([]int64, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
+	result := make([]domain.Artwork, 0, len(byID))
+	for _, work := range byID {
+		result = append(result, work)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	if max > 0 && len(ids) > max {
-		ids = ids[:max]
-	}
-	result := make([]domain.Artwork, 0, len(ids))
-	for _, id := range ids {
-		result = append(result, byID[id])
-	}
-	return result
+	return rankRepresentativeSamples(result, max)
 }
 func (s *Recommender) reserve(ctx context.Context, j domain.Job, run string, max int) (bool, error) {
 	ok, err := s.store.ReserveRecommendationRequest(ctx, j, run, max)
@@ -345,9 +344,6 @@ func haltOptional(err error) bool {
 func normalizeSamples(raw []pixiv.RawArtwork, id int64, max int) ([]domain.Artwork, error) {
 	result := []domain.Artwork{}
 	for _, work := range raw {
-		if len(result) >= max {
-			break
-		}
 		if work.User.ID != id {
 			continue
 		}
@@ -357,7 +353,39 @@ func normalizeSamples(raw []pixiv.RawArtwork, id int64, max int) ([]domain.Artwo
 		}
 		result = append(result, a)
 	}
-	return result, nil
+	return rankRepresentativeSamples(result, max), nil
+}
+
+func rankRepresentativeSamples(works []domain.Artwork, max int) []domain.Artwork {
+	value := func(p *int64) int64 {
+		if p == nil {
+			return 0
+		}
+		return *p
+	}
+	sort.SliceStable(works, func(i, j int) bool {
+		if a, b := value(works[i].Bookmarks), value(works[j].Bookmarks); a != b {
+			return a > b
+		}
+		if a, b := value(works[i].PublishedAt), value(works[j].PublishedAt); a != b {
+			return a > b
+		}
+		return works[i].ID < works[j].ID
+	})
+	if max <= 0 || len(works) <= max {
+		return works
+	}
+	chosen := append([]domain.Artwork(nil), works[:max]...)
+	if max >= 3 {
+		recent := max - 1
+		for i := max; i < len(works); i++ {
+			if value(works[i].PublishedAt) > value(works[recent].PublishedAt) {
+				recent = i
+			}
+		}
+		chosen[max-1] = works[recent]
+	}
+	return chosen
 }
 
 func (s *Recommender) Latest(ctx context.Context) (domain.RecommendationRun, []domain.Recommendation, error) {

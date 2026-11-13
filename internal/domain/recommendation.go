@@ -11,6 +11,7 @@ type RecommendationRun struct {
 	Budget          json.RawMessage `json:"budget"`
 }
 type Recommendation struct {
+	Exploration    bool            `json:"exploration"`
 	RunID          string          `json:"run_id"`
 	ArtistID       int64           `json:"artist_id,string"`
 	Artist         Artist          `json:"artist"`

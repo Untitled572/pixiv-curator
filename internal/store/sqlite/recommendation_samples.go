@@ -11,7 +11,7 @@ func (s *Store) RecommendationSamples(ctx context.Context, id int64, limit int) 
 	if id <= 0 || limit < 1 || limit > 8 {
 		return nil, domain.ErrInvalid
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND COALESCE(p.value,'neutral')<>'dislike' ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,a.id LIMIT ?`, id, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.bookmarks,0) DESC,COALESCE(a.published_at,0) DESC,a.id LIMIT ?`, id, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -28,6 +28,19 @@ func (s *Store) RecommendationSamples(ctx context.Context, id int64, limit int) 
 	rows.Close()
 	if err != nil {
 		return nil, err
+	}
+	if limit >= 3 && len(ids) >= 3 {
+		selected := ids[:len(ids)-1]
+		args := []any{id}
+		for _, v := range selected {
+			args = append(args, v)
+		}
+		var recent int64
+		e := s.db.QueryRowContext(ctx, `SELECT a.id FROM artworks a LEFT JOIN artwork_preferences p ON p.illust_id=a.id WHERE a.artist_id=? AND a.visible=1 AND a.metadata_state<>'unavailable' AND COALESCE(p.value,'neutral')<>'dislike' AND a.id NOT IN (`+placeholders(len(selected))+`) ORDER BY CASE WHEN p.value='like' THEN 0 ELSE 1 END,COALESCE(a.published_at,0) DESC,a.id LIMIT 1`, args...).Scan(&recent)
+		if e != nil {
+			return nil, e
+		}
+		ids[len(ids)-1] = recent
 	}
 	samples := []domain.Artwork{}
 	for _, workID := range ids {

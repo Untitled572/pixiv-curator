@@ -22,7 +22,7 @@ const recommendationItems = [
 ];
 const completedRunItems = Array.from({ length: 55 }, (_, index) => ({
   artist_id: String(1001 + index), artist: { id: String(1001 + index), name: `完成候选 ${index + 1}` },
-  score: 0.9 - index / 100, reasons: ["本地兴趣匹配"], sample_illust_ids: [String(100001 + index * 2), String(100002 + index * 2)], content_rating: "unknown", ai_status: "unknown"
+  exploration: index >= 24, score: 0.9 - index / 100, reasons: ["本地兴趣匹配"], sample_illust_ids: [String(100001 + index * 3), String(100002 + index * 3), String(100003 + index * 3)], content_rating: "unknown", ai_status: "unknown"
 }));
 let newRunPolls = 0;
 let newRunActive = false;
@@ -184,7 +184,8 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator(".recommendation-cover").count(), 0);
     const desktopCard = page.locator(".recommendation-card").first();
     const desktopSamples = page.locator(".candidate-samples").first();
-    assert.ok((await desktopSamples.boundingBox()).y >= (await desktopCard.locator(".sample-classification").boundingBox()).y, "samples should follow recommendation text");
+    assert.ok((await desktopSamples.boundingBox()).y < (await desktopCard.locator(".candidate-name").boundingBox()).y, "samples should appear above the artist name");
+    assert.ok((await desktopSamples.locator(".sample-tile").first().boundingBox()).height >= 200, "discovery previews should be larger");
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "recommendation horizontal overflow at " + width);
@@ -241,10 +242,13 @@ const server = http.createServer((req, res) => {
 	assert.equal(await page.locator(".recommendation-card").count(), 0, "slow sample loading must not insert a partial batch");
 	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30, null, { timeout: 10000 });
 	assert.equal(await page.locator(".recommendation-card").count(), 30, "completed results should cap rendered candidates at 30");
-	assert.equal(await page.locator(".sample-tile").count(), 60, "each rendered candidate may show at most two samples");
-	assert.equal(newRunPreviewRequests, 60, "only the first 30 candidates should load two previews each");
+	assert.equal(await page.locator(".sample-tile").count(), 90, "each rendered candidate may show at most three samples");
+	assert.equal(newRunPreviewRequests, 90, "only the first 30 candidates should load three previews each");
 	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
 	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
+    assert.equal(await page.locator(".exploration-chip").count(), 6);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({path:path.join(root,"data","discovery-three-previews.png"),fullPage:false});
 	await page.setViewportSize({ width: 1440, height: 900 });
 
     await page.locator("#tab-library").click();
@@ -255,6 +259,8 @@ const server = http.createServer((req, res) => {
     await page.locator(".artist-card").first().waitFor();
     const positions = await page.locator(".artist-card").first().locator(".artist-actions > button, .artist-actions summary").evaluateAll((items) => items.map((item) => ({ y: item.getBoundingClientRect().y, right: item.getBoundingClientRect().right, left: item.getBoundingClientRect().left })));
     assert.equal(positions.length, 4);
+    assert.ok((await page.locator(".artist-card").first().boundingBox()).height < 105, "desktop library rows should remain compact");
+    await page.screenshot({path:path.join(root,"data","library-compact-rows.png"),fullPage:false});
     assert.ok(positions.every((p) => Math.abs(p.y - positions[0].y) < 2), "tag editor and three actions should share one row");
     await page.locator("#library-page-size").selectOption("48");
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 48);

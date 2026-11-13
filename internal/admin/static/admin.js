@@ -402,11 +402,12 @@
     const artist = item.artist || {}, id = String(artist.id || item.artist_id || "");
     const card = node("article", "recommendation-card");
     const title = node("h3", "candidate-name", artist.name || "Pixiv UID " + id);
-    const sampleIDs = Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids.slice(0, 2) : [];
+    const sampleIDs = Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids.slice(0, 3) : [];
     const samples = node("div", "candidate-samples");
     const content = node("div", "recommendation-content");
     const heading = node("div", "candidate-heading");
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
+    if (item.exploration) identity.append(node("span", "reason-chip exploration-chip", "随机探索"));
     const score = Number(item.score);
     heading.append(node("span", "score-badge", Number.isFinite(score) ? `匹配度 ${score.toFixed(2)}` : "推荐候选")); content.append(heading);
     const reasons = Array.isArray(item.reasons) ? item.reasons : [];
@@ -427,7 +428,7 @@
         tile.append(node("span", "sample-caption", "作品 " + workID));
         samples.append(tile);
       }
-      content.append(samples);
+      content.prepend(samples);
     } else content.append(node("p", "field-help no-samples", "尚无代表作样本，分类保持未知。"));
     const actions = node("div", "candidate-actions");
     const approve = button(actions, "加入图库", "button button-primary", async (event) => {
