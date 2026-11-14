@@ -138,3 +138,6 @@ gh run list --workflow release.yml
 
 
 2026-11-13：用户明确要求替换同版本正式资产后，[发行43434848927](https://github.com/Untitled572/pixiv-curator/actions/runs/43434848927)全部成功。v0.3.0标签及四个正式包、SHA256SUMS已更新为0d4506d，GHCR v0.3.0/latest双架构digest更新为 `sha256:e0fe8d04f96a669e19dcc6ac31f911221da1923afd081702ce6d8ca23a0d0d0f`，取代此前a7bc9e3构建。服务器已从本地修补镜像切换为新正式构建，备份 `backups/pre-v0.3.0-replace-20261113T134506Z`；实际程序、版本与就绪检查通过，不重复推荐验收。已经下载或拉取旧v0.3.0的用户需要重新获取资产。
+
+
+2026-11-14：[v0.3.1完整发行43532956594](https://github.com/Untitled572/pixiv-curator/actions/runs/43532956594)成功，源码d3e0b13。四个平台二进制包、SHA256SUMS及GHCR双架构镜像已发布，digest `sha256:7c40f7ee5ae053cc9cfe2bc9db5e8e7723d2de04974a5d29b8f662ce523243ab`。包含暂停/移出图库清理作品与缓存、空间回收、014迁移及画师名称跳转Pixiv主页。ARM64仅构建验证。用户报告停电后服务器SSH和公网均超时，部署尚未开始，不能宣称线上已升级；恢复后先检查旧库完整性、备份，再升级。
