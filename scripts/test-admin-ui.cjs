@@ -78,7 +78,7 @@ const server = http.createServer((req, res) => {
   if (/^\/admin\/api\/library\/artists\/\d+\/remove$/.test(url.pathname) && req.method === "POST") {
     reviewWrites.push(url.pathname);
     if (failNextReviewRemove) { failNextReviewRemove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
-    removedArtistIDs.add(url.pathname.split("/").at(-2)); return res.end(JSON.stringify({ removed: true }));
+    const artist = artists.find((item) => item.id === url.pathname.split("/").at(-2)); if (artist) artist.collection_enabled = false; return res.end(JSON.stringify({ review_status: "approved", collection_enabled: false }));
   }
   if (url.pathname === "/admin/api/image-feedback" && req.method === "PUT") {
     let body = ""; req.on("data", (chunk) => { body += chunk; });
@@ -249,10 +249,8 @@ const server = http.createServer((req, res) => {
     assert.ok(hits.includes("/admin/api/previews/91001/0") && hits.includes("/admin/api/previews/91002/0"), "sample IDs should map directly to page-zero preview endpoints");
     assert.equal(hits.slice(hitsBeforeDiscover).some((u) => u.startsWith("/admin/api/artworks?")), false, "recommendation samples must not fetch artwork metadata");
     assert.equal(await page.locator(".recommendation-cover").count(), 0);
-    const discoveryTitleRequest = page.waitForRequest((request) => request.url().includes("/admin/api/previews/91001/0?size=original"));
-    await page.locator(".recommendation-card .candidate-title-button").click(); await discoveryTitleRequest;
-    assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), "/admin/api/previews/91001/0?size=original", "discovery artist name opens the first sample in the same viewer");
-    await page.locator(".pixiv-viewer-close").click();
+    assert.equal(await page.locator(".recommendation-card .candidate-title-button").getAttribute("href"), "https://www.pixiv.net/users/801");
+    assert.equal(await page.locator(".recommendation-card .candidate-title-button").getAttribute("target"), "_blank");
     const desktopCard = page.locator(".recommendation-card").first();
     const desktopSamples = page.locator(".candidate-samples").first();
     assert.ok((await desktopSamples.boundingBox()).y < (await desktopCard.locator(".candidate-name").boundingBox()).y, "samples should appear above the artist name");
@@ -416,6 +414,7 @@ const server = http.createServer((req, res) => {
     assert.equal(hits.filter((hit) => hit === "/admin/api/library/review").length, reviewRequestsBefore + 1);
     assert.equal(await page.locator(".library-review-samples img").count(), 15, "review shows up to three thumbnails for at most five artists");
     const reviewCard = page.locator(".library-review-card").first();
+    assert.equal(await reviewCard.locator(".artist-name a").getAttribute("href"), "https://www.pixiv.net/users/1");
     await reviewCard.getByRole("button", { name: "保留" }).click();
     assert.equal(await page.locator(".library-review-card").count(), 4, "keep removes only the current suggestion card");
     assert.equal(reviewWrites.length, 0, "keep does not write to an API");
@@ -426,10 +425,10 @@ const server = http.createServer((req, res) => {
     await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
     await page.waitForFunction(() => document.querySelector("#global-message").textContent.includes("服务暂时不可用"));
     assert.equal(await failedReviewCard.count(), 1, "failed removal keeps the suggestion card");
-    assert.match(await failedReviewCard.textContent(), /保留本地目录，也不会取关/);
+    assert.match(await failedReviewCard.textContent(), /停止采集和供图/);
     await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
     await page.waitForFunction(() => !document.querySelector('.library-review-card[data-artist-id="1"]'));
-    await page.waitForFunction(() => document.querySelector("#artist-count").textContent === "56");
+    assert.equal(await page.locator("#artist-count").textContent(), "57", "pausing retains the artist record");
     assert.equal(reviewWrites.length, 2, "removal POST is sent only after explicit clicks");
     assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/artists?")), "successful removal refreshes the current library");
     await page.locator("#tab-history").click();

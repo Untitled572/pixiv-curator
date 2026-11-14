@@ -331,3 +331,5 @@ input[type=radio]{min-height:0;padding:0;border:0;box-shadow:none}
 @media(max-width:767px){#artist-list .artist-card-body{grid-template-columns:1fr;gap:8px;padding:14px}#artist-list .artist-title-row{grid-column:1;grid-row:1}#artist-list .artist-id{grid-column:1;grid-row:2}#artist-list .tag-list{grid-column:1;grid-row:3;max-height:48px}#artist-list .artist-actions{grid-column:1;grid-row:4;grid-template-columns:repeat(4,minmax(0,1fr))}.recommendation-content>.candidate-samples{gap:6px}.recommendation-content>.candidate-samples .sample-tile{height:clamp(150px,40vw,230px);min-height:150px}}
 
 @media(max-width:767px){.recommendation-content>.candidate-samples{grid-template-columns:repeat(3,minmax(180px,1fr));overflow-x:auto;scroll-snap-type:x proximity;padding-bottom:5px}.recommendation-content>.candidate-samples .sample-tile{height:240px;scroll-snap-align:start}}
+
+.candidate-title-button{text-decoration:none;color:inherit}

@@ -78,8 +78,7 @@ func freezeRecommendationSeeds(ctx context.Context, tx *sql.Tx, raw json.RawMess
 	ids := []int64{}
 	selected := map[int64]bool{}
 	if limit > 0 {
-		// Current approved artists, including paused ones, are eligible. Remote
-		// followed artists retain their historical compatibility eligibility.
+		// Active approved artists and pending followed artists are eligible.
 		const eligible = `WITH ranked AS (
 			SELECT artist_id,rating,row_number() OVER(PARTITION BY artist_id ORDER BY COALESCE(published_at,0) DESC,id DESC) rn FROM artworks WHERE visible=1
 		), per_artist AS (
@@ -88,7 +87,7 @@ func freezeRecommendationSeeds(ctx context.Context, tx *sql.Tx, raw json.RawMess
 		), eligible AS (
 			SELECT a.id,a.review_status,a.collection_enabled,COALESCE(p.content_class,'unknown') content_class
 			FROM artists a LEFT JOIN per_artist p ON p.artist_id=a.id
-			WHERE (a.review_status='approved' OR a.remote_followed=1) AND a.review_status NOT IN ('blocked','rejected')
+			WHERE ((a.review_status='approved' AND a.collection_enabled=1) OR (a.review_status='pending' AND a.remote_followed=1))
 		)`
 		queryIDs := func(class string, excludeRecent bool, n int) ([]int64, error) {
 			if n <= 0 {
@@ -260,7 +259,7 @@ func (s *Store) RecommendationSeedsForRun(ctx context.Context, runID string, lim
 	for _, id := range b.IDs {
 		args = append(args, id)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM artists WHERE id IN (`+placeholders(len(b.IDs))+`) AND (review_status='approved' OR remote_followed=1) AND review_status NOT IN ('blocked','rejected') ORDER BY id`, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM artists WHERE id IN (`+placeholders(len(b.IDs))+`) AND ((review_status='approved' AND collection_enabled=1) OR (review_status='pending' AND remote_followed=1)) ORDER BY id`, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -300,7 +300,7 @@ func TestEligiblePageUsesFixedIdentityAndAdminPreviewHonorsVisibilityAndBlocks(t
 func seedEligibleArtist(t *testing.T, s *Store, id int64, status string) {
 	t.Helper()
 	seedArtist(t, s, id)
-	if _, err := s.db.ExecContext(context.Background(), `UPDATE artists SET review_status=? WHERE id=?`, status, id); err != nil {
+	if _, err := s.db.ExecContext(context.Background(), `UPDATE artists SET review_status=?,collection_enabled=CASE WHEN ?='approved' THEN 1 ELSE 0 END WHERE id=?`, status, status, id); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -483,7 +483,7 @@ func TestPageDimensionsMigrationClearsUnverifiedSecondaryPages(t *testing.T) {
 		}
 	}
 	for _, statement := range []string{
-		`INSERT INTO artists(id,name,review_status,created_at,updated_at) VALUES(1830,'dimensions artist','approved',1,1)`,
+		`INSERT INTO artists(id,name,review_status,collection_enabled,created_at,updated_at) VALUES(1830,'dimensions artist','approved',1,1,1)`,
 		`INSERT INTO artworks(id,artist_id,title,kind,page_count,rating,ai_status,metadata_state,created_at,updated_at) VALUES(1831,1830,'dimensions','illust',2,'safe','non_ai','complete',1,1)`,
 		`INSERT INTO image_pages(illust_id,page_index,original_url,width,height,media_state,created_at,updated_at) VALUES(1831,0,'https://i.pximg.net/img-original/1831_p0.jpg',1600,900,'indexed',1,1),(1831,1,'https://i.pximg.net/img-original/1831_p1.jpg',1600,900,'indexed',1,1)`,
 	} {

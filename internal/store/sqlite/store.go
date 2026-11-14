@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -18,7 +19,11 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db               *sql.DB
+	hookMu           sync.RWMutex
+	previewPurgeHook func([]string) error
+}
 
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
@@ -52,6 +57,9 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	s := &Store{db: db}
 	if err = db.PingContext(ctx); err == nil {
 		err = s.Migrate(ctx)
+	}
+	if err == nil {
+		err = s.enableIncrementalVacuum(ctx)
 	}
 	if err != nil {
 		db.Close()
@@ -132,5 +140,53 @@ func (s *Store) Backup(ctx context.Context, path string) error {
 	if err != nil {
 		os.Remove(path)
 	}
+	return err
+}
+
+// SetPreviewPurgeHook sets the post-commit thumbnail cleanup callback.
+func (s *Store) SetPreviewPurgeHook(hook func([]string) error) {
+	s.hookMu.Lock()
+	defer s.hookMu.Unlock()
+	s.previewPurgeHook = hook
+}
+
+// LivePreviewURLs returns catalog references for cache pruning at startup.
+func (s *Store) LivePreviewURLs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT preview_url FROM image_pages WHERE preview_url<>''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var urls []string
+	for rows.Next() {
+		var u string
+		if err = rows.Scan(&u); err != nil {
+			return nil, err
+		}
+		urls = append(urls, u)
+	}
+	return urls, rows.Err()
+}
+
+func (s *Store) enableIncrementalVacuum(ctx context.Context) error {
+	var mode int
+	if err := s.db.QueryRowContext(ctx, `PRAGMA auto_vacuum`).Scan(&mode); err != nil {
+		return err
+	}
+	if mode == 2 {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `PRAGMA auto_vacuum=INCREMENTAL`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `VACUUM`)
+	return err
+}
+
+func (s *Store) reclaimFreePages(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
 	return err
 }

@@ -146,6 +146,7 @@
     if (!state?.artist) return;
     collectionButton.disabled = state.artist.review_status !== "approved";
     collectionButton.textContent = collectionButton.disabled ? "作者尚未加入图库" : state.artist.collection_enabled ? "暂停该作者采集" : "恢复该作者采集";
+    collectionButton.title = state.artist.collection_enabled ? "暂停会删除该作者的作品、图片链接和相关历史，恢复后重新采集" : "恢复后重新采集作品";
     collectionButton.setAttribute("aria-pressed", String(!!state.artist.collection_enabled));
   }
   async function toggleCollection() {
@@ -159,7 +160,7 @@
       await collectionAPI.setCollection(current.artistId, enabled);
       if (state !== current) return;
       current.artist.collection_enabled = enabled;
-      collectionStatus.textContent = enabled ? "已恢复该作者采集" : "已暂停该作者采集";
+      collectionStatus.textContent = enabled ? "已恢复该作者采集" : "已停止采集和供图，并清理作品与链接";
       collectionAPI.onChange?.(current.artist);
     } catch (_) {
       if (state !== current) return;

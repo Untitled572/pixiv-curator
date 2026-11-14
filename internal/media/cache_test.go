@@ -292,3 +292,78 @@ func TestForwardPreviewAllowsFourMissesAndCancelsQueuedMiss(t *testing.T) {
 		}
 	}
 }
+
+func TestPurgeAndPrunePreviewURLs(t *testing.T) {
+	p := NewProxy(nil)
+	if err := p.EnablePreviewCache(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	a := "https://i.pximg.net/a.jpg"
+	b := "https://i.pximg.net/b.jpg"
+	for _, u := range []string{a, b} {
+		if err := p.previewCache.put(previewCacheKey(u), "image/jpeg", []byte("image")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := p.PurgePreviewURLs([]string{a}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(a)); ok {
+		t.Fatal("purged entry remains")
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(b)); !ok {
+		t.Fatal("other entry removed")
+	}
+	if err := p.previewCache.put(previewCacheKey(a), "image/jpeg", []byte("image")); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.PrunePreviewURLs([]string{b}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(a)); ok {
+		t.Fatal("orphan remains")
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(b)); !ok {
+		t.Fatal("live entry removed")
+	}
+}
+
+func TestPurgeBlocksInflightAndPreviouslyResolvedPreviewCacheFill(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	p := NewProxy(roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"image/jpeg"}}, Body: io.NopCloser(strings.NewReader("image")), ContentLength: 5}, nil
+	}))
+	if err := p.EnablePreviewCache(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	target := "https://i.pximg.net/test.jpg"
+	generation := p.PreviewCacheGeneration()
+	done := make(chan error, 1)
+	go func() {
+		done <- p.ForwardPreviewAtGeneration(httptest.NewRecorder(), request(http.MethodGet), target, generation)
+	}()
+	<-started
+	if err := p.PurgePreviewURLs([]string{target}); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(target)); ok {
+		t.Fatal("inflight request refilled cache")
+	}
+	// A caller can resolve a URL before purge yet enter ForwardPreview afterwards.
+	p.http.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"image/jpeg"}}, Body: io.NopCloser(strings.NewReader("image")), ContentLength: 5}, nil
+	})
+	if err := p.ForwardPreviewAtGeneration(httptest.NewRecorder(), request(http.MethodGet), target, generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.previewCache.get(previewCacheKey(target)); ok {
+		t.Fatal("stale resolution refilled cache")
+	}
+}

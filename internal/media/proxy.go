@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,11 +26,13 @@ type Error struct {
 func (e *Error) Error() string { return "media: " + e.Code }
 
 type Proxy struct {
-	http         *http.Client
-	previewCache *PreviewCache
-	streamSlots  chan struct{}
-	previewMiss  chan struct{}
-	previewLocks [16]chan struct{}
+	http                *http.Client
+	previewCache        *PreviewCache
+	streamSlots         chan struct{}
+	previewMiss         chan struct{}
+	previewLocks        [16]chan struct{}
+	previewGenerationMu sync.Mutex
+	previewGeneration   uint64
 }
 
 func (p *Proxy) CloseIdleConnections() { p.http.CloseIdleConnections() }
@@ -213,6 +216,18 @@ func (p *Proxy) EnablePreviewCache(dir string) error {
 // ForwardPreview serves a cached thumbnail or buffers a complete small image
 // before atomically caching it. Original-image fallback must continue using Forward.
 func (p *Proxy) ForwardPreview(w http.ResponseWriter, r *http.Request, target string) error {
+	return p.ForwardPreviewAtGeneration(w, r, target, p.PreviewCacheGeneration())
+}
+
+// PreviewCacheGeneration must be captured before resolving a preview from the catalog.
+func (p *Proxy) PreviewCacheGeneration() uint64 {
+	p.previewGenerationMu.Lock()
+	defer p.previewGenerationMu.Unlock()
+	return p.previewGeneration
+}
+
+// ForwardPreviewAtGeneration prevents a request resolved before a purge from refilling the cache.
+func (p *Proxy) ForwardPreviewAtGeneration(w http.ResponseWriter, r *http.Request, target string, generation uint64) error {
 	if !domain.ValidImageURL(target) {
 		return &Error{Code: "INVALID_TARGET"}
 	}
@@ -310,7 +325,11 @@ func (p *Proxy) ForwardPreview(w http.ResponseWriter, r *http.Request, target st
 			return &Error{Code: "UPSTREAM_UNAVAILABLE"}
 		}
 		if _, ok := allowedPreviewType(contentType); ok && r.Context().Err() == nil {
-			_ = p.previewCache.put(key, contentType, prefix)
+			p.previewGenerationMu.Lock()
+			if generation == p.previewGeneration {
+				_ = p.previewCache.put(key, contentType, prefix)
+			}
+			p.previewGenerationMu.Unlock()
 		}
 		writePreviewResponseHeaders(w, contentType, int64(len(prefix)), true)
 		if _, err := w.Write(prefix); err != nil {
@@ -360,4 +379,38 @@ func (p *Proxy) forwardPreviewStream(w http.ResponseWriter, resp *http.Response,
 		return &Error{Code: "STREAM_FAILED", Started: true}
 	}
 	return nil
+}
+
+// PurgePreviewURLs removes cached thumbnails for URLs no longer referenced by the catalog.
+func (p *Proxy) PurgePreviewURLs(urls []string) error {
+	p.previewGenerationMu.Lock()
+	defer p.previewGenerationMu.Unlock()
+	p.previewGeneration++
+	if p.previewCache == nil {
+		return nil
+	}
+	keys := make(map[string]bool, len(urls))
+	for _, u := range urls {
+		if u != "" {
+			keys[previewCacheKey(u)] = true
+		}
+	}
+	return p.previewCache.removeKeys(keys, false)
+}
+
+// PrunePreviewURLs removes cached thumbnails not referenced by any live catalog page.
+func (p *Proxy) PrunePreviewURLs(urls []string) error {
+	p.previewGenerationMu.Lock()
+	defer p.previewGenerationMu.Unlock()
+	p.previewGeneration++
+	if p.previewCache == nil {
+		return nil
+	}
+	keys := make(map[string]bool, len(urls))
+	for _, u := range urls {
+		if u != "" {
+			keys[previewCacheKey(u)] = true
+		}
+	}
+	return p.previewCache.removeKeys(keys, true)
 }

@@ -13,6 +13,9 @@ import (
 // DecideArtist is the only path from pending to approved. Approval and task
 // creation commit together. Blocked artists must first be explicitly restored.
 func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (string, error) {
+	if action == "remove" {
+		return "", s.SetCollection(ctx, id, false)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -43,14 +46,9 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 				return "", err
 			}
 		}
-	case "reject", "remove":
-		if action == "remove" && state != "approved" && state != "rejected" {
-			return "", domain.ErrConflict
-		}
+	case "reject":
 		if state != "pending" && state != "rejected" {
-			if action != "remove" || state != "approved" {
-				return "", domain.ErrConflict
-			}
+			return "", domain.ErrConflict
 		}
 		next = "rejected"
 		enabled = false
@@ -171,8 +169,45 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 	if n != 1 {
 		return domain.ErrConflict
 	}
+	var urls []string
 	if !enabled {
+		rows, queryErr := tx.QueryContext(ctx, `SELECT DISTINCT p.preview_url FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE w.artist_id=? AND p.preview_url<>''`, id)
+		if queryErr != nil {
+			return queryErr
+		}
+		for rows.Next() {
+			var u string
+			if queryErr = rows.Scan(&u); queryErr != nil {
+				rows.Close()
+				return queryErr
+			}
+			urls = append(urls, u)
+		}
+		queryErr = rows.Err()
+		rows.Close()
+		if queryErr != nil {
+			return queryErr
+		}
 		err = cancelArtistJobs(ctx, tx, id)
+		if err == nil {
+			err = cancelRemoteFollowJobs(ctx, tx, id)
+		}
+		if err == nil {
+			err = purgeArtistCatalog(ctx, tx, id)
+		}
+		if err == nil {
+			unique := urls[:0]
+			for _, u := range urls {
+				var referenced bool
+				if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_pages WHERE preview_url=?)`, u).Scan(&referenced); err != nil {
+					break
+				}
+				if !referenced {
+					unique = append(unique, u)
+				}
+			}
+			urls = unique
+		}
 	} else {
 		payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "recent"})
 		_, err = enqueue(ctx, tx, "sync_artist", fmt.Sprintf("artist:%d", id), payload)
@@ -180,7 +215,44 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if !enabled {
+		s.hookMu.RLock()
+		hook := s.previewPurgeHook
+		s.hookMu.RUnlock()
+		var hookErr error
+		if hook != nil {
+			hookErr = hook(urls)
+		}
+		reclaimCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		reclaimErr := s.reclaimFreePages(reclaimCtx)
+		cancel()
+		if hookErr != nil {
+			return hookErr
+		}
+		return reclaimErr
+	}
+	return nil
+}
+
+// purgeArtistCatalog removes dependent rows before deleting the artist's artwork.
+// The caller first cancels jobs while their artwork references still exist.
+func purgeArtistCatalog(ctx context.Context, tx *sql.Tx, id int64) error {
+	for _, table := range []string{"distribution_history", "selection_history", "image_feedback", "feedback_events", "artwork_preferences", "artwork_tags", "image_pages"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE illust_id IN (SELECT id FROM artworks WHERE artist_id=?)`, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM artworks WHERE artist_id=?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM artist_sync_state WHERE artist_id=?`, id); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE artists SET last_synced_at=NULL WHERE id=?`, id)
+	return err
 }
 
 // CommitArtistBatch validates the live lease and current user decision before

@@ -90,6 +90,14 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	if err := previewProxy.EnablePreviewCache(filepath.Join(filepath.Dir(cfg.DatabasePath), "preview-cache")); err != nil {
 		slog.Warn("preview cache disabled", "error", err)
 	}
+	store.SetPreviewPurgeHook(previewProxy.PurgePreviewURLs)
+	livePreviewURLs, err := store.LivePreviewURLs(ctx)
+	if err != nil {
+		return fmt.Errorf("read preview references: %w", err)
+	}
+	if err := previewProxy.PrunePreviewURLs(livePreviewURLs); err != nil {
+		slog.Warn("preview cache prune failed", "error", err)
+	}
 	defer previewProxy.CloseIdleConnections()
 	client, err := accounts.Open(ctx, store, filepath.Join(filepath.Dir(cfg.DatabasePath), "private", "accounts"), cfg.PixivTokenFile, oauth, apiTransport)
 	if err != nil {

@@ -358,3 +358,18 @@ func (c *PreviewCache) removeLocked(key string) bool {
 	delete(c.entries, key)
 	return true
 }
+
+func (c *PreviewCache) removeKeys(keys map[string]bool, inverse bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	failed := false
+	for key := range c.entries {
+		if keys[key] != inverse && !c.removeLocked(key) {
+			failed = true
+		}
+	}
+	if failed {
+		return errors.New("could not remove preview cache entries")
+	}
+	return nil
+}

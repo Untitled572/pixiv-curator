@@ -155,7 +155,7 @@ func TestRecommendationSeedsPrioritizeRecentFollowsThenCreationButReturnIDOrder(
 	ctx := context.Background()
 	for _, id := range []int64{5, 10, 20, 30, 40} {
 		insertArtist(t, s, id, "seed")
-		if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved',remote_followed=1,created_at=? WHERE id=?`, id*10, id); err != nil {
+		if _, err := s.db.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1,remote_followed=1,created_at=? WHERE id=?`, id*10, id); err != nil {
 			t.Fatal(err)
 		}
 	}

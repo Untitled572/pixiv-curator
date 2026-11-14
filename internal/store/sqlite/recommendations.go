@@ -94,7 +94,7 @@ func (s *Store) RecommendationSeeds(ctx context.Context, limit int) ([]domain.Ar
 		FROM artists a
 		LEFT JOIN account_artists aa ON aa.artist_id=a.id
 		LEFT JOIN accounts ac ON ac.id=aa.account_id
-		WHERE (a.review_status='approved' OR a.remote_followed=1) AND a.review_status NOT IN ('blocked','rejected')
+		WHERE ((a.review_status='approved' AND a.collection_enabled=1) OR (a.review_status='pending' AND a.remote_followed=1))
 		GROUP BY a.id
 	), chosen AS (
 		SELECT * FROM eligible
@@ -629,7 +629,7 @@ func (s *Store) CommitSeedSamples(ctx context.Context, j domain.Job, artistID in
 	}
 	var allowed bool
 	if err = tx.QueryRowContext(ctx, `SELECT
-		((a.review_status='approved' OR a.remote_followed=1) OR
+		(((a.review_status='approved' AND a.collection_enabled=1) OR (a.review_status='pending' AND a.remote_followed=1)) OR
 		 (a.review_status='pending' AND EXISTS (
 			SELECT 1 FROM recommendations r JOIN recommendation_runs rr ON rr.id=r.run_id
 			WHERE r.run_id=? AND r.artist_id=a.id AND rr.state='running'

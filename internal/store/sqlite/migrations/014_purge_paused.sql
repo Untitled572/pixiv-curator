@@ -1,0 +1,14 @@
+CREATE INDEX idx_image_pages_preview_url ON image_pages(preview_url);
+UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END WHERE state IN ('pending','running','retry_wait','paused_auth') AND ((kind='sync_artist' AND json_extract(payload_json,'$.artist_id') IN (SELECT id FROM artists WHERE (review_status='approved' AND collection_enabled=0) OR review_status='rejected')) OR (kind IN ('hydrate_artwork','repair_media') AND json_extract(payload_json,'$.illust_id') IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected')));
+DELETE FROM distribution_history WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM selection_history WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM image_feedback WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM feedback_events WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM artwork_preferences WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM artwork_tags WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM image_pages WHERE illust_id IN (SELECT w.id FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE (a.review_status='approved' AND a.collection_enabled=0) OR a.review_status='rejected');
+DELETE FROM artworks WHERE artist_id IN (SELECT id FROM artists WHERE (review_status='approved' AND collection_enabled=0) OR review_status='rejected');
+DELETE FROM artist_sync_state WHERE artist_id IN (SELECT id FROM artists WHERE (review_status='approved' AND collection_enabled=0) OR review_status='rejected');
+UPDATE artists SET last_synced_at=NULL WHERE (review_status='approved' AND collection_enabled=0) OR review_status='rejected';
+
+UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END WHERE kind='follow_artist' AND state IN ('pending','running','retry_wait','paused_auth') AND json_extract(payload_json,'$.artist_id') IN (SELECT id FROM artists WHERE (review_status='approved' AND collection_enabled=0) OR review_status='rejected');

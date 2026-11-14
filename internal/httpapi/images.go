@@ -13,7 +13,7 @@ import (
 )
 
 func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Auth) {
-	forward := func(w http.ResponseWriter, r *http.Request, page domain.SelectedPage, preview, original bool) {
+	forward := func(w http.ResponseWriter, r *http.Request, page domain.SelectedPage, preview, original bool, generation uint64) {
 		if p == nil {
 			writeAPIError(w, http.StatusServiceUnavailable, "NOT_READY")
 			return
@@ -23,7 +23,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		var err error
 		if preview && !original && page.PreviewIsThumbnail {
-			err = p.ForwardPreview(w, r, page.PreviewURL)
+			err = p.ForwardPreviewAtGeneration(w, r, page.PreviewURL, generation)
 		} else {
 			target := page.OriginalURL
 			if preview && !original {
@@ -64,7 +64,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 		}
 		switch r.URL.Query().Get("format") {
 		case "image":
-			forward(w, r, out.SelectedPage, false, false)
+			forward(w, r, out.SelectedPage, false, false, 0)
 		case "redirect":
 			http.Redirect(w, r, out.URL, http.StatusFound)
 		default:
@@ -125,6 +125,10 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				return
 			}
 			original := preview && size == "original"
+			var generation uint64
+			if p != nil {
+				generation = p.PreviewCacheGeneration()
+			}
 			var page domain.SelectedPage
 			if preview {
 				page, err = s.AdminPreviewPage(r.Context(), id, index, original)
@@ -136,7 +140,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				return
 			}
 			if format == "stream" || format == "image" {
-				forward(w, r, page, preview, original)
+				forward(w, r, page, preview, original, generation)
 				return
 			}
 			if preview {

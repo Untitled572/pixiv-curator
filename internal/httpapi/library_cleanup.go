@@ -48,6 +48,6 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			apiError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": strconv.FormatInt(id, 10), "review_status": "rejected", "collection_enabled": false})
+		writeJSON(w, http.StatusOK, map[string]any{"id": strconv.FormatInt(id, 10), "review_status": "approved", "collection_enabled": false})
 	})))
 }

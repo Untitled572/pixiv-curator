@@ -482,7 +482,7 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 }
 
 func selectionWhere(rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64) (string, []any, error) {
-	where := `ar.review_status='approved' AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
+	where := `ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
 	where = appendAnd(where, `NOT EXISTS(SELECT 1 FROM image_feedback f WHERE f.illust_id=a.id AND f.page_index=p.page_index AND f.value='dislike')`)
 	var args []any
 	if artistID > 0 {

@@ -62,11 +62,11 @@ func TestLibraryCleanupReviewBoundAndRemove(t *testing.T) {
 	if err = s.db.QueryRow(`SELECT review_status,collection_enabled FROM artists WHERE id=1`).Scan(&state, &enabled); err != nil {
 		t.Fatal(err)
 	}
-	if state != "rejected" || enabled {
+	if state != "approved" || enabled {
 		t.Fatalf("state=%q enabled=%v", state, enabled)
 	}
 	var active, sources int
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE dedupe_key IN ('cleanup-hydrate','cleanup-repair','cleanup-follow') AND state IN ('pending','running','retry_wait','paused_auth')`).Scan(&active); err != nil {
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE dedupe_key IN ('cleanup-hydrate','cleanup-repair') AND state IN ('pending','running','retry_wait','paused_auth')`).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
 	if err = s.db.QueryRow(`SELECT COUNT(*) FROM artist_sources WHERE artist_id=1`).Scan(&sources); err != nil {
@@ -99,5 +99,45 @@ func TestCatalogStatsR18ImagePageRatioIncludesUnknownDenominator(t *testing.T) {
 	}
 	if stats.ImagePages != 3 || stats.R18ImagePages != 2 || stats.R18ImageRatio < 0.6666 || stats.R18ImageRatio > 0.6667 {
 		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestPausePurgesCatalogAndPreservesArtist(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedArtist(t, s, 991)
+	if _, err := s.DecideArtist(ctx, 991, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertArtwork(ctx, domain.Artwork{ID: 992, ArtistID: 991, PageCount: 1, Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/a.jpg", PreviewURL: "https://i.pximg.net/preview.jpg", Width: 10, Height: 10}}}); err != nil {
+		t.Fatal(err)
+	}
+	var purged []string
+	s.SetPreviewPurgeHook(func(urls []string) error { purged = urls; return nil })
+	if err := s.SetCollection(ctx, 991, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(purged) != 1 || purged[0] != "https://i.pximg.net/preview.jpg" {
+		t.Fatalf("purged previews: %v", purged)
+	}
+	var state string
+	var enabled bool
+	var artworks, sources int
+	if err := s.db.QueryRow(`SELECT review_status,collection_enabled,(SELECT COUNT(*) FROM artworks WHERE artist_id=991),(SELECT COUNT(*) FROM artist_sources WHERE artist_id=991) FROM artists WHERE id=991`).Scan(&state, &enabled, &artworks, &sources); err != nil {
+		t.Fatal(err)
+	}
+	if state != "approved" || enabled || artworks != 0 || sources == 0 {
+		t.Fatalf("state=%s enabled=%v artworks=%d sources=%d", state, enabled, artworks, sources)
+	}
+	urls, err := s.LivePreviewURLs(ctx)
+	if err != nil || len(urls) != 0 {
+		t.Fatalf("live previews=%v err=%v", urls, err)
+	}
+	if err = s.SetCollection(ctx, 991, true); err != nil {
+		t.Fatal(err)
+	}
+	var lastSynced bool
+	if err = s.db.QueryRow(`SELECT last_synced_at IS NULL FROM artists WHERE id=991`).Scan(&lastSynced); err != nil || !lastSynced {
+		t.Fatalf("last synced reset=%v err=%v", lastSynced, err)
 	}
 }

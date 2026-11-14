@@ -247,7 +247,7 @@
         const artist = item.artist || {}, id = String(artist.id || "");
         const card = node("article", "library-review-card"); card.dataset.artistId = id;
         const heading = node("div", "library-review-heading");
-        const identity = node("div"); identity.append(node("h3", "artist-name", artist.name || "Pixiv UID " + id), node("p", "artist-id", "UID " + id)); heading.append(identity);
+        const identity = node("div"), name = node("h3", "artist-name"), profile = node("a", "candidate-title-button", artist.name || "Pixiv UID " + id); profile.href = `https://www.pixiv.net/users/${encodeURIComponent(id)}`; profile.target = "_blank"; profile.rel = "noopener noreferrer"; name.append(profile); identity.append(name, node("p", "artist-id", "UID " + id)); heading.append(identity);
         button(heading, "保留", "button button-quiet button-small", (event) => { event.currentTarget.closest(".library-review-card")?.remove(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); });
         card.append(heading);
         const samples = node("div", "library-review-samples");
@@ -258,10 +258,10 @@
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
-        actions.append(node("p", "field-help", "移出只从图库隐藏，保留本地目录，也不会取关。"));
+        actions.append(node("p", "field-help", "移出与暂停相同：停止采集和供图，删除作品、链接及相关历史；不会取关。"));
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
           const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true;
-          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST" }); card.remove(); showMessage("画师已移出图库；本地目录和关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
+          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST" }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
           catch (error) { report(error, "移出图库"); trigger.disabled = false; }
         });
         card.append(actions); fragment.append(card);
@@ -294,7 +294,7 @@
   async function toggleCollection(id, enabled, trigger) {
     if (trigger?.disabled) return;
     if (trigger) trigger.disabled = true;
-    try { await api(`/admin/api/artists/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ collection_enabled: enabled }) }); showMessage(enabled ? "已恢复后续采集。" : "已暂停后续采集，已入库作品仍保留。"); await loadLibrary(); }
+    try { await api(`/admin/api/artists/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ collection_enabled: enabled }) }); showMessage(enabled ? "已恢复后续采集。" : "已停止采集和供图，并清理作品与链接。"); await loadLibrary(); }
     catch (error) { report(error, "更新采集状态"); if (trigger) trigger.disabled = false; }
   }
   $("#manual-artist-form").addEventListener("submit", async (event) => {
@@ -466,13 +466,11 @@
     card.dataset.artistId = id;
     const sampleIDs = Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids.slice(0, 3) : [];
     const title = node("h3", "candidate-name");
-    if (sampleIDs.length) {
-      const titleButton = node("button", "candidate-title-button", artist.name || "Pixiv UID " + id);
-      titleButton.type = "button";
-      titleButton.setAttribute("aria-label", "查看 " + (artist.name || "Pixiv UID " + id) + " 的代表作大图");
-      titleButton.addEventListener("click", () => window.PixivCuratorViewer.open({ id: sampleIDs[0], artistId: artist.id, pageIndex: 0, title: "代表作 " + sampleIDs[0], artistName: artist.name || "" }));
-      title.append(titleButton);
-    } else title.textContent = artist.name || "Pixiv UID " + id;
+    const profile = node("a", "candidate-title-button", artist.name || "Pixiv UID " + id);
+    profile.href = `https://www.pixiv.net/users/${encodeURIComponent(id)}`;
+    profile.target = "_blank"; profile.rel = "noopener noreferrer";
+    profile.setAttribute("aria-label", "打开 " + (artist.name || "Pixiv UID " + id) + " 的 Pixiv 主页");
+    title.append(profile);
     const samples = node("div", "candidate-samples");
     const content = node("div", "recommendation-content");
     const heading = node("div", "candidate-heading");

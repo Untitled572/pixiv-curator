@@ -69,7 +69,6 @@ func TestRecommendationSeedsFreezeRecentApprovalsAndLongTermContentRatio(t *test
 	for id := int64(102); id <= 103; id++ {
 		seedEligibleArtist(t, s, id, "approved")
 		seedSelectionArtwork(t, s, id+1000, id, "safe", "non_ai", nil, 1)
-		_, _ = s.db.Exec(`UPDATE artists SET collection_enabled=0 WHERE id=?`, id) // paused approved artists remain history seeds.
 	}
 	seedEligibleArtist(t, s, 104, "approved")
 	seedSelectionArtwork(t, s, 1104, 104, "r18g", "non_ai", nil, 1)

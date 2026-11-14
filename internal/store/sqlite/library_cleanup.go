@@ -8,7 +8,7 @@ import (
 
 // LibraryCleanupReview returns a random local-only sample of approved artists.
 func (s *Store) LibraryCleanupReview(ctx context.Context) ([]domain.LibraryCleanupItem, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM artists WHERE review_status='approved' ORDER BY EXISTS(SELECT 1 FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=artists.id AND w.visible=1 AND p.media_state='indexed') DESC, RANDOM() LIMIT 5`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,account,avatar_url,review_status,collection_enabled,remote_followed FROM artists WHERE review_status='approved' AND collection_enabled=1 ORDER BY EXISTS(SELECT 1 FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=artists.id AND w.visible=1 AND p.media_state='indexed') DESC, RANDOM() LIMIT 5`)
 	if err != nil {
 		return nil, err
 	}
@@ -47,11 +47,10 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) ([]domain.LibraryClean
 	return items, nil
 }
 
-// RemoveLibraryArtist rejects an approved artist and cancels local and remote-follow work.
+// RemoveLibraryArtist pauses collection and removes local artwork metadata.
 func (s *Store) RemoveLibraryArtist(ctx context.Context, id int64) error {
 	if id <= 0 {
 		return domain.ErrInvalid
 	}
-	_, err := s.DecideArtist(ctx, id, "remove")
-	return err
+	return s.SetCollection(ctx, id, false)
 }
