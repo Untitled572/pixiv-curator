@@ -14,7 +14,7 @@ let round = 1, starts = 0, decisions = 0, activePreviews = 0, maxActivePreviews 
 const held = [];
 const previewRequests = [];
 const previewAttempts = new Map();
-const items = (n) => Array.from({ length: 30 }, (_, i) => ({ artist_id: String(n * 1000 + i), artist: { id: String(n * 1000 + i), name: `round ${n} artist ${i}` }, score: .5, sample_illust_ids: [String(n * 10000 + i * 3), String(n * 10000 + i * 3 + 1), String(n * 10000 + i * 3 + 2)], content_rating: "safe", ai_status: "non_ai" }));
+const items = (n) => Array.from({ length: 30 }, (_, i) => ({ artist_id: String(n * 1000 + i), artist: { id: String(n * 1000 + i), name: `round ${n} artist ${i}` }, score: .5, sources: n === 2 && i === 0 ? ["directed_random"] : [], sample_illust_ids: [String(n * 10000 + i * 3), String(n * 10000 + i * 3 + 1), String(n * 10000 + i * 3 + 2)], content_rating: "safe", ai_status: "non_ai" }));
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, "http://localhost");
   res.setHeader("Cache-Control", "no-store");
@@ -32,9 +32,9 @@ const server = http.createServer((req, res) => {
     return res.end(png);
   }
   res.setHeader("Content-Type", "application/json");
-  if (url.pathname === "/admin/api/recommendations" && req.method === "POST") { round++; starts++; return res.end(JSON.stringify({ run_id: `round-${round}` })); }
+  if ((url.pathname === "/admin/api/recommendations" || url.pathname === "/admin/api/recommendations/directed") && req.method === "POST") { round++; starts++; return res.end(JSON.stringify({ run_id: `round-${round}` })); }
   if (/\/artists\/\d+\/(approve|reject)$/.test(url.pathname)) decisions++;
-  if (url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") return res.end(JSON.stringify({ run: { id: `round-${round}`, state: "succeeded", progress_percent: 100 }, items: items(round) }));
+  if (url.pathname === "/admin/api/recommendation-runs/latest" || url.pathname === "/admin/api/recommendations") return res.end(JSON.stringify({ run: { id: `round-${round}`, state: "succeeded", progress_percent: 100, budget: { directed: round === 2 } }, items: items(round) }));
   if (url.pathname === "/admin/api/stats") return res.end(JSON.stringify({ image_pages: 100 }));
   return res.end(JSON.stringify({ items: [] }));
 });
@@ -52,9 +52,15 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator("#start-recommendations").isEnabled(), true, "completed discovery is ready before images finish");
     await page.waitForTimeout(120);
     assert.ok(previewRequests.filter((id) => id < 20000).length < 30, "offscreen cards must not trigger all 90 preview requests");
-    await page.locator("#start-recommendations").click();
+    await page.locator('details').filter({ has: page.locator("#directed-discovery") }).locator("summary").click();
+    await page.locator("#directed-discovery [name=tags]").fill("原創，風景");
+    await page.locator("#directed-discovery [name=rating]").selectOption("safe");
+    await page.locator("#directed-discovery [name=orientation]").selectOption("landscape");
+    await page.locator("#start-directed-discovery").click();
     await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30 && document.querySelector(".recommendation-card").dataset.artistId === "2000" && document.querySelector("#recommendation-status .run-meta")?.textContent === "100%");
     assert.equal(starts, 1);
+    assert.equal(await page.locator("#recommendation-status .run-state").textContent(), "定向随机发现");
+    assert.equal(await page.locator('.recommendation-card[data-artist-id="2000"] .score-badge').textContent(), "定向随机");
     assert.equal(decisions, 0, "manual refresh does not approve unfinished candidates");
     assert.ok((await page.locator(".recommendation-card").evaluateAll((cards) => cards.map((c) => Number(c.dataset.artistId)))).every((id) => id >= 2000 && id < 2030));
     for (const res of held.splice(0)) if (!res.destroyed) res.end(png);
