@@ -142,7 +142,7 @@ const server = http.createServer((req, res) => {
     payload = { items: historyItems, total: historyItems.length, page: Number(url.searchParams.get("page")) || 1, page_size: Number(url.searchParams.get("limit")) || 24, total_pages: 1 };
   }
   else if (url.pathname === "/admin/api/artworks") payload = { items: [{ id: "100", artist_id: url.searchParams.get("artist_id"), title: "测试代表作", visible: true, page_count: 1, rating: "safe", ai_status: "non_ai", tags: ["风景"], pages: [{ page_index: 0, media_state: "indexed" }] }], next_cursor: "" };
-  else if (url.pathname === "/admin/api/stats") payload = { image_pages: 1234, artworks: 999, library_artists: 57, accounts: 1, indexed_pages: 1200, r18_image_pages: 200, r18_image_ratio: 0.16235, artists: 9999 };
+  else if (url.pathname === "/admin/api/stats") payload = { image_pages: 1234, landscape_pages: 617, portrait_pages: 309, square_pages: 123, unknown_orientation_pages: 185, artworks: 999, library_artists: 57, accounts: 1, indexed_pages: 1200, r18_image_pages: 200, r18_image_ratio: 0.16235, artists: 9999 };
   else if (url.pathname === "/random") {
     const format = url.searchParams.get("format") || "json";
     if (format === "image") { res.setHeader("Content-Type", "image/png"); return res.end(png); }
@@ -164,6 +164,7 @@ const server = http.createServer((req, res) => {
     await page.goto(base + "/admin/");
     await page.locator("#panel-stats .stat-value").first().waitFor();
     assert.equal(await page.locator("#current-page-title").textContent(), "统计与接口");
+    assert.match(await page.locator(".stats-orientation").textContent(), /横图 50.0%竖图 25.0%方图 10.0%尺寸未知 15.0%/);
     assert.equal(await page.locator("#global-message").evaluate((message) => message.parentElement.classList.contains("topbar-actions")), true, "global messages stay in the top bar row");
     assert.equal(await page.locator("#tab-stats").getAttribute("aria-selected"), "true");
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")), false, "default Stats page must not fetch library data");
@@ -440,7 +441,8 @@ const server = http.createServer((req, res) => {
     await reviewCard.getByRole("button", { name: "已标记保留" }).waitFor();
     assert.equal(await page.locator(".library-review-card").count(), 6, "marking keeps the card visible");
     await page.locator("#reload-library-review").click();
-    await page.waitForFunction(() => document.querySelector("#library-review-round").textContent.includes("第 2 轮"));
+    await page.waitForFunction(() => document.querySelector(".library-review-card")?.dataset.artistId === "2");
+    assert.equal(await page.locator("#library-review-round").count(), 0);
     const failedReviewCard = page.locator('.library-review-card[data-artist-id="2"]');
     failNextReviewRemove = true;
     await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
@@ -607,14 +609,23 @@ const server = http.createServer((req, res) => {
     }
     await page.locator("#tab-discover").click();
     await page.locator("#start-recommendations").waitFor();
-    await page.locator("details").filter({ has: page.locator("#directed-discovery") }).locator("summary").click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.locator("#toggle-directed-discovery").click();
+    const directedFields = await page.locator(".directed-tools label").evaluateAll((labels) =>
+      labels.map((label) => ({ top: label.getBoundingClientRect().top, width: label.getBoundingClientRect().width }))
+    );
+    assert.equal(new Set(directedFields.map((field) => field.top)).size, 1);
+    assert.ok(directedFields[0].width > directedFields[1].width);
+    assert.ok((await page.locator("#toggle-directed-discovery").boundingBox()).x < (await page.locator("#start-recommendations").boundingBox()).x);
     await page.locator("#directed-discovery [name=tags]").fill("原創，風景");
     await page.locator("#directed-discovery [name=rating]").selectOption("safe");
     await page.locator("#directed-discovery [name=orientation]").selectOption("landscape");
     await page.route("**/admin/api/recommendations/directed", (route) => route.fulfill({ status: 202, json: { run_id: "directed-test", job_id: "test" } }));
     const directedRequest = page.waitForRequest((request) => request.url().endsWith("/admin/api/recommendations/directed") && request.method() === "POST");
-    await page.locator("#start-directed-discovery").click();
+    await page.locator("#start-recommendations").click();
     assert.deepEqual((await directedRequest).postDataJSON(), { tags: ["原創", "風景"], rating: "safe", ai: "all", orientation: "landscape" });
+    await page.locator("#global-message").waitFor({state: "visible"});
+    await page.locator("#global-message").waitFor({state: "hidden", timeout: 8000});
     assert.deepEqual(errors, []);
     console.log("PASS: count, pagination, no initial images/requests, details, filters, statistics, API builder/test, responsive layout");
   } finally {

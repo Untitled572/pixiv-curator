@@ -52,11 +52,11 @@ const server = http.createServer((req, res) => {
     assert.equal(await page.locator("#start-recommendations").isEnabled(), true, "completed discovery is ready before images finish");
     await page.waitForTimeout(120);
     assert.ok(previewRequests.filter((id) => id < 20000).length < 30, "offscreen cards must not trigger all 90 preview requests");
-    await page.locator('details').filter({ has: page.locator("#directed-discovery") }).locator("summary").click();
+    await page.locator("#toggle-directed-discovery").click();
     await page.locator("#directed-discovery [name=tags]").fill("原創，風景");
     await page.locator("#directed-discovery [name=rating]").selectOption("safe");
     await page.locator("#directed-discovery [name=orientation]").selectOption("landscape");
-    await page.locator("#start-directed-discovery").click();
+    await page.locator("#start-recommendations").click();
     await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30 && document.querySelector(".recommendation-card").dataset.artistId === "2000" && document.querySelector("#recommendation-status .run-meta")?.textContent === "100%");
     assert.equal(starts, 1);
     assert.equal(await page.locator("#recommendation-status .run-state").textContent(), "定向随机发现");
@@ -74,6 +74,7 @@ const server = http.createServer((req, res) => {
     assert.equal(previewAttempts.get(20002), 2, "a failed sample can be retried independently");
     assert.equal(await page.locator('.recommendation-card[data-artist-id="2000"] [data-approve]').isEnabled(), true, "one loaded sample enables approval immediately");
     assert.ok(maxActivePreviews <= 3, "preview requests stay within the small concurrent limit");
+    await page.locator("#toggle-directed-discovery").click();
     await page.locator("#tab-discover").click();
     await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "100%");
     assert.equal(await page.locator("#start-recommendations").isEnabled(), true);

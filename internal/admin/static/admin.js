@@ -2,6 +2,7 @@
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
   const message = $("#global-message");
+  let messageTimer;
   let libraryPage = 1, libraryPages = 0, libraryLoading = false;
   let detailController = null, detailArtist = null, detailCursors = [""], detailPage = 0;
   let libraryGeneration = 0;
@@ -35,9 +36,11 @@
     return item;
   }
   function showMessage(text, error = false) {
+    window.clearTimeout(messageTimer);
     message.textContent = text;
     message.classList.toggle("is-error", error);
     message.hidden = !text;
+    if (text) messageTimer = window.setTimeout(() => showMessage(""), 6000);
   }
   function csrfToken() {
     const item = document.cookie.split(";").map((part) => part.trim()).find((part) => part.startsWith("curator_csrf="));
@@ -251,7 +254,6 @@
         : await api("/admin/api/library/review", { signal: controller.signal });
       if (controller.signal.aborted || !$("#library-review").open) return;
       libraryReviewRound = result.round;
-      $("#library-review-round").textContent = `第 ${libraryReviewRound} 轮 · 保留或跳过的画师接下来 50 轮不再提示`;
       const kept = new Set(result.kept_ids || []);
       const fragment = document.createDocumentFragment();
       (Array.isArray(result.items) ? result.items : []).slice(0, 6).forEach((item) => {
@@ -574,11 +576,10 @@
   $("#recommendation-ai").addEventListener("change", () => readRecommendations("", true));
   async function submitDiscovery(options) {
     const trigger = $("#start-recommendations");
-    const directed = $("#start-directed-discovery");
-    if (trigger.disabled || directed.disabled) return;
+    if (trigger.disabled) return;
     stopRecommendationPolling();
     recommendationController?.abort(); recommendationPreviewController?.abort(); recommendationPreviewController = null;
-    trigger.disabled = directed.disabled = true;
+    trigger.disabled = true;
     try {
       const path = options ? "/admin/api/recommendations/directed" : "/admin/api/recommendations";
       const request = { method: "POST" };
@@ -595,11 +596,16 @@
       trigger.disabled = false;
       report(error, options ? "定向随机发现" : "开始发现");
       startRecommendationPolling();
-    } finally { directed.disabled = false; }
+    }
   }
-  $("#start-recommendations").addEventListener("click", () => submitDiscovery(null));
+  $("#toggle-directed-discovery").addEventListener("click", (event) => {
+    const form = $("#directed-discovery");
+    form.hidden = !form.hidden;
+    event.currentTarget.setAttribute("aria-expanded", String(!form.hidden));
+  });
   $("#directed-discovery").addEventListener("submit", (event) => {
     event.preventDefault();
+    if (event.currentTarget.hidden) { submitDiscovery(null); return; }
     const data = new FormData(event.currentTarget);
     const tags = String(data.get("tags")).split(/[,，、]/).map((tag) => tag.trim()).filter(Boolean);
     const options = { tags, rating: data.get("rating"), ai: data.get("ai"), orientation: data.get("orientation") };
@@ -877,6 +883,18 @@
         const value = key === "r18_image_ratio" ? `${(Math.max(0, Math.min(1, Number(result[key]) || 0) * 100).toFixed(1))}%` : Number(result[key] || 0).toLocaleString();
         card.append(node("p", "muted", label), node("strong", "stat-value", value), node("p", "field-help", note)); list.append(card);
       }
+      const total = Number(result.image_pages) || 0;
+      const orientation = node("div", "stats-orientation");
+      orientation.append(node("strong", "", "图片方向占比"));
+      const labels = [["横图", "landscape_pages"], ["竖图", "portrait_pages"], ["方图", "square_pages"], ["尺寸未知", "unknown_orientation_pages"]];
+      for (const [label, key] of labels) {
+        const count = Number(result[key]) || 0;
+        const proportion = total ? `${(count / total * 100).toFixed(1)}%` : "—";
+        const item = node("span", "", `${label} ${proportion}`);
+        item.title = `${count.toLocaleString()} 张 / 全部 ${total.toLocaleString()} 张`;
+        orientation.append(item);
+      }
+      list.append(orientation);
       $("#stats-updated").textContent = "更新于 " + new Date().toLocaleTimeString();
     } catch (error) { $("#stats-updated").textContent = "读取失败，可重新刷新。"; report(error, "读取统计"); }
     finally { list.setAttribute("aria-busy", "false"); }

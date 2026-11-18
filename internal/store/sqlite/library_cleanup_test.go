@@ -90,8 +90,8 @@ func TestCatalogStatsR18ImagePageRatioIncludesUnknownDenominator(t *testing.T) {
 		}
 	}
 	for _, a := range []domain.Artwork{
-		{ID: 301, ArtistID: 30, Rating: "r18", PageCount: 2, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/a.jpg", Width: 1, Height: 1}, {Index: 1, OriginalURL: "https://i.pximg.net/b.jpg", Width: 1, Height: 1}}},
-		{ID: 302, ArtistID: 31, Rating: "unknown", PageCount: 1, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/c.jpg", Width: 1, Height: 1}}},
+		{ID: 301, ArtistID: 30, Rating: "r18", PageCount: 2, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/a.jpg", Width: 1600, Height: 900}, {Index: 1, OriginalURL: "https://i.pximg.net/b.jpg", Width: 900, Height: 1600}}},
+		{ID: 302, ArtistID: 31, Rating: "unknown", PageCount: 2, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/c.jpg", Width: 1100, Height: 1000}, {Index: 1, OriginalURL: "https://i.pximg.net/d.jpg"}}},
 	} {
 		if err := s.UpsertArtwork(context.Background(), a); err != nil {
 			t.Fatal(err)
@@ -101,7 +101,8 @@ func TestCatalogStatsR18ImagePageRatioIncludesUnknownDenominator(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.ImagePages != 3 || stats.R18ImagePages != 2 || stats.R18ImageRatio < 0.6666 || stats.R18ImageRatio > 0.6667 {
+	if stats.ImagePages != 4 || stats.R18ImagePages != 2 || stats.R18ImageRatio != 0.5 ||
+		stats.LandscapePages != 1 || stats.PortraitPages != 1 || stats.SquarePages != 1 || stats.UnknownOrientationPages != 1 {
 		t.Fatalf("stats=%+v", stats)
 	}
 }
