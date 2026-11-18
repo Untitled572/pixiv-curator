@@ -164,7 +164,13 @@ const server = http.createServer((req, res) => {
     await page.goto(base + "/admin/");
     await page.locator("#panel-stats .stat-value").first().waitFor();
     assert.equal(await page.locator("#current-page-title").textContent(), "统计与接口");
-    assert.match(await page.locator(".stats-orientation").textContent(), /横图 50.0%竖图 25.0%方图 10.0%尺寸未知 15.0%/);
+    const directions = await page.locator(".stat-card").allTextContents();
+    assert.deepEqual(directions.slice(-4), [
+      "横图58.8%占全部图片 50.0%",
+      "竖图29.5%占全部图片 25.0%",
+      "方图11.7%占全部图片 10.0%",
+      "尺寸未知15.0%185 张缺少宽高"
+    ]);
     assert.equal(await page.locator("#global-message").evaluate((message) => message.parentElement.classList.contains("topbar-actions")), true, "global messages stay in the top bar row");
     assert.equal(await page.locator("#tab-stats").getAttribute("aria-selected"), "true");
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")), false, "default Stats page must not fetch library data");
@@ -440,7 +446,19 @@ const server = http.createServer((req, res) => {
     await reviewCard.getByRole("button", { name: "保留", exact: true }).click();
     await reviewCard.getByRole("button", { name: "已标记保留" }).waitFor();
     assert.equal(await page.locator(".library-review-card").count(), 6, "marking keeps the card visible");
-    await page.locator("#reload-library-review").click();
+    const reviewButton = page.locator("#reload-library-review");
+    const [headingBox, buttonBox] = await Promise.all([page.locator("#library-review > summary").boundingBox(), reviewButton.boundingBox()]);
+    assert.ok(Math.abs(headingBox.y - buttonBox.y) < 1, "review controls share a row");
+    assert.ok(buttonBox.x >= headingBox.x + headingBox.width, "refresh sits to the right of the review heading");
+    const reviewRoute = "**/admin/api/library/review/next";
+    await page.route(reviewRoute, () => {}, { times: 1 });
+    await reviewButton.click();
+    await page.waitForFunction(() => document.querySelector("#global-message").textContent.includes("读取整理图库超时"), null, { timeout: 12000 });
+    assert.equal(await page.locator(".library-review-card").count(), 6, "a timed-out review change retains the previous cards");
+    assert.equal(await reviewButton.isEnabled(), true, "failed request releases refresh button");
+    await reviewButton.click(); // Synchronize the current round after an ambiguous POST failure.
+    await page.waitForFunction(() => !document.querySelector("#reload-library-review").disabled);
+    await reviewButton.click();
     await page.waitForFunction(() => document.querySelector(".library-review-card")?.dataset.artistId === "2");
     assert.equal(await page.locator("#library-review-round").count(), 0);
     const failedReviewCard = page.locator('.library-review-card[data-artist-id="2"]');

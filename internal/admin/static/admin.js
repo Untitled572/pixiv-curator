@@ -246,12 +246,20 @@
   async function loadLibraryReview(next = false) {
     if (activeTab !== "library" || !$("#library-review").open) return;
     libraryReviewController?.abort(); const controller = new AbortController(); libraryReviewController = controller;
-    const list = $("#library-review-list"); list.setAttribute("aria-busy", "true");
-    list.replaceChildren(node("p", "empty-cell", "正在读取…")); $("#reload-library-review").disabled = true;
+    const list = $("#library-review-list"), trigger = $("#reload-library-review");
+    const hasCards = !!list.querySelector(".library-review-card");
+    list.setAttribute("aria-busy", "true");
+    if (!hasCards) list.replaceChildren(node("p", "empty-cell", "正在读取…"));
+    list.inert = true;
+    trigger.disabled = true;
+    trigger.textContent = next ? "换组中…" : "读取中…";
+    let timedOut = false;
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 10000);
     try {
       const result = next
         ? await api("/admin/api/library/review/next", { method: "POST", body: JSON.stringify({ round: libraryReviewRound }), signal: controller.signal })
         : await api("/admin/api/library/review", { signal: controller.signal });
+      if (timedOut) throw new Error("TIMEOUT");
       if (controller.signal.aborted || !$("#library-review").open) return;
       libraryReviewRound = result.round;
       const kept = new Set(result.kept_ids || []);
@@ -276,7 +284,7 @@
         (Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids : []).slice(0, 3).forEach((illustID) => {
           const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 大图");
           tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex: 0, title: "代表作 " + illustID, artistName: artist.name || "" }));
-          const image = node("img", "cover-image"); image.loading = "eager"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
+          const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
@@ -290,8 +298,27 @@
       });
       if (!fragment.children.length) fragment.append(node("p", "empty-cell", "这轮没有可整理的画师，可以换一组。"));
       list.replaceChildren(fragment);
-    } catch (error) { if (next && error.message === "CONFLICT" && !controller.signal.aborted) { return loadLibraryReview(); } if (!controller.signal.aborted) { report(error, "读取整理建议"); list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可换一组重试。")); } }
-    finally { if (!controller.signal.aborted) { list.setAttribute("aria-busy", "false"); $("#reload-library-review").disabled = false; } }
+    } catch (error) {
+      if (libraryReviewController !== controller) return;
+      if (next && error.message === "CONFLICT" && !controller.signal.aborted) {
+        libraryReviewRound = 0;
+        return loadLibraryReview();
+      }
+      if (controller.signal.aborted && !timedOut) return;
+      // A timed-out POST may have committed. Read the current group on retry.
+      if (next) libraryReviewRound = 0;
+      if (timedOut) showMessage("读取整理图库超时，请再点一次「换一组」。", true);
+      else report(error, "读取整理建议");
+      if (!hasCards) list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可重试。"));
+    } finally {
+      window.clearTimeout(timeout);
+      if (libraryReviewController === controller) {
+        list.setAttribute("aria-busy", "false");
+        list.inert = false;
+        trigger.disabled = false;
+        trigger.textContent = "换一组";
+      }
+    }
   }
   $("#library-review").addEventListener("toggle", () => { if ($("#library-review").open) loadLibraryReview(); else libraryReviewController?.abort(); });
   $("#reload-library-review").addEventListener("click", () => loadLibraryReview(libraryReviewRound > 0));
@@ -884,17 +911,22 @@
         card.append(node("p", "muted", label), node("strong", "stat-value", value), node("p", "field-help", note)); list.append(card);
       }
       const total = Number(result.image_pages) || 0;
-      const orientation = node("div", "stats-orientation");
-      orientation.append(node("strong", "", "图片方向占比"));
-      const labels = [["横图", "landscape_pages"], ["竖图", "portrait_pages"], ["方图", "square_pages"], ["尺寸未知", "unknown_orientation_pages"]];
-      for (const [label, key] of labels) {
+      const unknown = Number(result.unknown_orientation_pages) || 0;
+      const known = total - unknown;
+      const ratio = (count, denominator) => denominator > 0 ? `${(count / denominator * 100).toFixed(1)}%` : "—";
+      const directions = [["横图", "landscape_pages"], ["竖图", "portrait_pages"], ["方图", "square_pages"]];
+      for (const [label, key] of directions) {
         const count = Number(result[key]) || 0;
-        const proportion = total ? `${(count / total * 100).toFixed(1)}%` : "—";
-        const item = node("span", "", `${label} ${proportion}`);
-        item.title = `${count.toLocaleString()} 张 / 全部 ${total.toLocaleString()} 张`;
-        orientation.append(item);
+        const card = node("article", "stat-card");
+        card.title = "大字为占已知尺寸图片的比例";
+        card.append(node("p", "muted", label), node("strong", "stat-value", ratio(count, known)),
+          node("p", "field-help", `占全部图片 ${ratio(count, total)}`));
+        list.append(card);
       }
-      list.append(orientation);
+      const unknownCard = node("article", "stat-card");
+      unknownCard.append(node("p", "muted", "尺寸未知"), node("strong", "stat-value", ratio(unknown, total)),
+        node("p", "field-help", `${unknown.toLocaleString()} 张缺少宽高`));
+      list.append(unknownCard);
       $("#stats-updated").textContent = "更新于 " + new Date().toLocaleTimeString();
     } catch (error) { $("#stats-updated").textContent = "读取失败，可重新刷新。"; report(error, "读取统计"); }
     finally { list.setAttribute("aria-busy", "false"); }
