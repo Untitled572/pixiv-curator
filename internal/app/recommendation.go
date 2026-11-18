@@ -13,6 +13,7 @@ import (
 type RecommendationRepository interface {
 	StartRecommendation(context.Context, json.RawMessage) (string, string, error)
 	RecommendationSeeds(context.Context, int) ([]domain.Artist, error)
+	DirectedExcludedWorks(context.Context, map[int64]int64) (map[int64]bool, error)
 	RecommendationRun(context.Context, string) (domain.RecommendationRun, error)
 	ReserveRecommendationRequest(context.Context, domain.Job, string, int) (bool, error)
 	CommitRecommendationRecall(context.Context, domain.Job, string, int64, map[int64]domain.Artist, map[int64][]string, int) error
@@ -130,6 +131,20 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		for _, id := range ids {
 			excluded[id] = true
 		}
+	}
+	var directed struct {
+		Options *DirectedDiscovery `json:"directed"`
+		Date    string             `json:"directed_date"`
+	}
+	if json.Unmarshal(run.Budget, &directed) != nil {
+		return taskInvalid()
+	}
+	if directed.Options != nil {
+		options, valid := directed.Options.normalized()
+		if !valid {
+			return taskInvalid()
+		}
+		return s.directedRun(ctx, j, run, budget, options, directed.Date, excluded)
 	}
 	if err = s.recallIndependent(ctx, j, run, recallLimit, budget.TotalRequests, excluded); err != nil {
 		return err

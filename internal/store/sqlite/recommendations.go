@@ -46,8 +46,12 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 	}
 	defer tx.Rollback()
 	var runID, jobID string
-	err = tx.QueryRowContext(ctx, `SELECT r.id,j.id FROM recommendation_runs r JOIN jobs j ON j.kind='recommend_artists' AND json_extract(j.payload_json,'$.run_id')=r.id WHERE r.state='running' AND j.state IN ('pending','running','retry_wait','paused_auth') ORDER BY r.started_at DESC LIMIT 1`).Scan(&runID, &jobID)
+	var sameMode bool
+	err = tx.QueryRowContext(ctx, `SELECT r.id,j.id,COALESCE(json_extract(r.budget_json,'$.directed'),'null')=COALESCE(json_extract(?,'$.directed'),'null') FROM recommendation_runs r JOIN jobs j ON j.kind='recommend_artists' AND json_extract(j.payload_json,'$.run_id')=r.id WHERE r.state='running' AND j.state IN ('pending','running','retry_wait','paused_auth') ORDER BY r.started_at DESC LIMIT 1`, string(budget)).Scan(&runID, &jobID, &sameMode)
 	if err == nil {
+		if !sameMode {
+			return "", "", domain.ErrConflict
+		}
 		if err = tx.Commit(); err != nil {
 			return "", "", err
 		}
@@ -660,6 +664,9 @@ func (s *Store) CompleteRecommendation(ctx context.Context, j domain.Job, runID 
 	if err = checkRecommendationLease(ctx, tx, j, runID); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=? AND score_version='' AND EXISTS(SELECT 1 FROM recommendation_runs rr WHERE rr.id=? AND json_type(rr.budget_json,'$.directed')='object')`, runID, runID); err != nil {
+		return err
+	}
 	if err = selectRecommendationExploration(ctx, tx, runID); err != nil {
 		return err
 	}
@@ -702,4 +709,33 @@ func (s *Store) LatestRecommendation(ctx context.Context) (string, error) {
 		return "", domain.ErrNotFound
 	}
 	return id, err
+}
+
+// DirectedExcludedWorks checks local decisions before fetching artist samples.
+func (s *Store) DirectedExcludedWorks(ctx context.Context, owners map[int64]int64) (map[int64]bool, error) {
+	raw, err := json.Marshal(owners)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT CAST(input.key AS INTEGER)
+		FROM json_each(?) input
+		LEFT JOIN artists a ON a.id=input.value
+		LEFT JOIN artworks w ON w.id=CAST(input.key AS INTEGER)
+		LEFT JOIN artwork_preferences p ON p.illust_id=w.id
+		WHERE a.review_status<>'pending' OR w.visible=0 OR p.value='dislike'
+	`, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	excluded := map[int64]bool{}
+	for rows.Next() {
+		var id int64
+		if err = rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		excluded[id] = true
+	}
+	return excluded, rows.Err()
 }

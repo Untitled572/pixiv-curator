@@ -23,7 +23,7 @@ func scheduleRecommendationRefill(ctx context.Context, tx *sql.Tx, artistID int6
 		SELECT rr.id FROM recommendation_runs rr
 		JOIN recommendations r ON r.run_id=rr.id
 		WHERE rr.id=(SELECT id FROM recommendation_runs ORDER BY started_at DESC,rowid DESC LIMIT 1)
-		AND rr.state='succeeded' AND r.artist_id=?`, artistID).Scan(&runID)
+		AND rr.state='succeeded' AND json_type(rr.budget_json,'$.directed') IS NULL AND r.artist_id=?`, artistID).Scan(&runID)
 	if err == sql.ErrNoRows {
 		return nil
 	}

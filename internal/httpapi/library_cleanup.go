@@ -10,7 +10,9 @@ import (
 )
 
 type libraryCleanupStore interface {
-	LibraryCleanupReview(context.Context) ([]domain.LibraryCleanupItem, error)
+	LibraryCleanupReview(context.Context) (int64, []domain.LibraryCleanupItem, []string, error)
+	NextLibraryCleanup(context.Context, int64) (int64, []domain.LibraryCleanupItem, []string, error)
+	KeepLibraryCleanupArtist(context.Context, int64, int64) error
 	RemoveLibraryArtist(context.Context, int64) error
 }
 
@@ -22,12 +24,54 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		items, err := store.LibraryCleanupReview(r.Context())
+		round, items, kept, err := store.LibraryCleanupReview(r.Context())
 		if err != nil {
 			apiError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"items": items})
+		writeJSON(w, http.StatusOK, map[string]any{"round": round, "items": items, "kept_ids": kept})
+	})))
+	mux.Handle("POST /admin/api/library/review/next", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(q) != 0 {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		var in struct {
+			Round int64 `json:"round"`
+		}
+		if !decodeBody(w, r, &in) {
+			return
+		}
+		round, items, kept, err := store.NextLibraryCleanup(r.Context(), in.Round)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"round": round, "items": items, "kept_ids": kept})
+	})))
+	mux.Handle("POST /admin/api/library/artists/{id}/keep", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil || len(q) != 0 {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil || id <= 0 {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		var in struct {
+			Round int64 `json:"round"`
+		}
+		if !decodeBody(w, r, &in) {
+			return
+		}
+		if err = store.KeepLibraryCleanupArtist(r.Context(), id, in.Round); err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": strconv.FormatInt(id, 10), "kept": true})
 	})))
 	mux.Handle("POST /admin/api/library/artists/{id}/remove", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := url.ParseQuery(r.URL.RawQuery)

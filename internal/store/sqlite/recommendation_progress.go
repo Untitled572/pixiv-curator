@@ -24,6 +24,7 @@ func (s *Store) recommendationProgress(ctx context.Context, run domain.Recommend
 	}
 	if stats == "{}" {
 		var budget struct {
+			Directed          json.RawMessage   `json:"directed"`
 			SeedArtists       int               `json:"seed_artists"`
 			SeedArtistIDs     []int64           `json:"seed_artist_ids"`
 			Independent       bool              `json:"independent_exploration"`
@@ -34,6 +35,9 @@ func (s *Store) recommendationProgress(ctx context.Context, run domain.Recommend
 		}
 		if err := json.Unmarshal(run.Budget, &budget); err != nil {
 			return 0, err
+		}
+		if len(budget.Directed) > 0 {
+			return min(95, 1+int(run.SeedCursor)*15), nil
 		}
 		seedIDs := budget.SeedArtistIDs
 		if seedIDs == nil {

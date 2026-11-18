@@ -10,6 +10,7 @@
   let recommendationRunID = "";
   let recommendationTimer = null;
   let recommendationController = null;
+  let recommendationPreviewController = null;
   let recommendationPollError = false;
   let recommendationRenderedKey = "", recommendationPendingID = "";
   let tagController = null, tagSearchTimer = null;
@@ -17,7 +18,7 @@
   let accountStatusLoading = false;
   let accountChoices = [];
   let historyPage = 1, historyPages = 0, historyController = null;
-  let libraryReviewController = null;
+  let libraryReviewController = null, libraryReviewRound = 0;
   const historyFeedback = new Map(), historyFeedbackPending = new Set();
 
   function node(tag, className = "", text) {
@@ -84,7 +85,10 @@
     if (tabName !== "settings") stopAccountPolling();
     if (tabName !== "history") historyController?.abort();
     if (tabName === "history") loadHistory();
-    if (tabName === "library") { loadLibrary(); loadLibraryFilters(); }
+    if (tabName === "library") {
+      if ($("#library-review").open) loadLibraryReview();
+      if ($("#library-list-panel").open) { loadLibrary(); loadLibraryFilters(); }
+    } else { libraryReviewController?.abort(); }
     if (tabName === "stats") { loadStats(); loadAPIAccounts(); updateAPIURL(); }
     if (tabName === "discover") loadLatestRecommendations();
     if (tabName === "settings") { loadAccounts(); loadNetwork(); loadPreferences(); startAccountPolling(); }
@@ -107,6 +111,7 @@
 
   async function loadLibrary(reset = false) {
     if (reset) libraryPage = 1;
+    if (!$("#library-list-panel").open) return;
     const generation = ++libraryGeneration;
     libraryLoading = true; updateLibraryPager();
     const list = $("#artist-list");
@@ -235,26 +240,41 @@
     container.append(image);
   }
   function statusText(status) { return ({ approved: "已收录", pending: "正在加入", blocked: "已屏蔽", rejected: "未收录" })[status] || "已收录"; }
-  async function loadLibraryReview() {
+  async function loadLibraryReview(next = false) {
+    if (activeTab !== "library" || !$("#library-review").open) return;
     libraryReviewController?.abort(); const controller = new AbortController(); libraryReviewController = controller;
     const list = $("#library-review-list"); list.setAttribute("aria-busy", "true");
     list.replaceChildren(node("p", "empty-cell", "正在读取…")); $("#reload-library-review").disabled = true;
     try {
-      const result = await api("/admin/api/library/review", { signal: controller.signal });
+      const result = next
+        ? await api("/admin/api/library/review/next", { method: "POST", body: JSON.stringify({ round: libraryReviewRound }), signal: controller.signal })
+        : await api("/admin/api/library/review", { signal: controller.signal });
       if (controller.signal.aborted || !$("#library-review").open) return;
+      libraryReviewRound = result.round;
+      $("#library-review-round").textContent = `第 ${libraryReviewRound} 轮 · 保留或跳过的画师接下来 50 轮不再提示`;
+      const kept = new Set(result.kept_ids || []);
       const fragment = document.createDocumentFragment();
-      (Array.isArray(result.items) ? result.items : []).slice(0, 5).forEach((item) => {
+      (Array.isArray(result.items) ? result.items : []).slice(0, 6).forEach((item) => {
         const artist = item.artist || {}, id = String(artist.id || "");
         const card = node("article", "library-review-card"); card.dataset.artistId = id;
         const heading = node("div", "library-review-heading");
         const identity = node("div"), name = node("h3", "artist-name"), profile = node("a", "candidate-title-button", artist.name || "Pixiv UID " + id); profile.href = `https://www.pixiv.net/users/${encodeURIComponent(id)}`; profile.target = "_blank"; profile.rel = "noopener noreferrer"; name.append(profile); identity.append(name, node("p", "artist-id", "UID " + id)); heading.append(identity);
-        button(heading, "保留", "button button-quiet button-small", (event) => { event.currentTarget.closest(".library-review-card")?.remove(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); });
+        const keep = button(heading, kept.has(id) ? "已标记保留" : "保留", "button button-quiet button-small", async () => {
+          keep.disabled = true;
+          try {
+            await api(`/admin/api/library/artists/${encodeURIComponent(id)}/keep`, {
+              method: "POST", body: JSON.stringify({ round: result.round })
+            });
+            keep.textContent = "已标记保留";
+          } catch (error) { keep.disabled = false; report(error, "保留画师"); }
+        });
+        keep.disabled = kept.has(id);
         card.append(heading);
         const samples = node("div", "library-review-samples");
         (Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids : []).slice(0, 3).forEach((illustID) => {
           const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 大图");
           tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex: 0, title: "代表作 " + illustID, artistName: artist.name || "" }));
-          const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
+          const image = node("img", "cover-image"); image.loading = "eager"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
@@ -266,13 +286,19 @@
         });
         card.append(actions); fragment.append(card);
       });
-      if (!fragment.children.length) fragment.append(node("p", "empty-cell", "目前没有可整理的画师。"));
+      if (!fragment.children.length) fragment.append(node("p", "empty-cell", "这轮没有可整理的画师，可以换一组。"));
       list.replaceChildren(fragment);
-    } catch (error) { if (!controller.signal.aborted) { report(error, "读取整理建议"); list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可换一组重试。")); } }
+    } catch (error) { if (next && error.message === "CONFLICT" && !controller.signal.aborted) { return loadLibraryReview(); } if (!controller.signal.aborted) { report(error, "读取整理建议"); list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可换一组重试。")); } }
     finally { if (!controller.signal.aborted) { list.setAttribute("aria-busy", "false"); $("#reload-library-review").disabled = false; } }
   }
   $("#library-review").addEventListener("toggle", () => { if ($("#library-review").open) loadLibraryReview(); else libraryReviewController?.abort(); });
-  $("#reload-library-review").addEventListener("click", loadLibraryReview);
+  $("#reload-library-review").addEventListener("click", () => loadLibraryReview(libraryReviewRound > 0));
+  $("#library-list-panel").addEventListener("toggle", () => {
+    if (activeTab === "library" && $("#library-list-panel").open) {
+      loadLibrary();
+      loadLibraryFilters();
+    }
+  });
   async function libraryArtistAction(id, action, trigger) {
     if (trigger?.disabled) return;
     if (trigger) trigger.disabled = true;
@@ -326,23 +352,158 @@
     if (runID) query.set("run_id", runID);
     return query;
   }
-  function updateRecommendationStatus(run, loadingSamples = false) {
+  function updateRecommendationStatus(run) {
     const status = $("#recommendation-status");
     const progress = Math.max(0, Math.min(100, Number(run.progress_percent) || 0));
-    const displayProgress = loadingSamples && progress >= 100 ? 99 : progress;
-    const key = [run.id, run.state, progress, loadingSamples].join(":");
-    if (status.dataset.stateKey === key) return;
-    status.dataset.stateKey = key;
-    const parts = document.createDocumentFragment();
-    parts.append(node("span", "run-state", loadingSamples ? "推荐已生成，正在加载代表作" : "为你发现的画师"));
-    parts.append(node("span", `run-pill state-${run.state || "unknown"}`, loadingSamples ? "预览准备中" : runLabel(run.state)));
-    parts.append(node("span", "run-meta", `${displayProgress}%`));
-    status.replaceChildren(parts);
+    const key = [run.id, run.state, progress, !!run.budget?.directed].join(":");
     const running = ["pending", "running", "retry_wait"].includes(run.state);
     $("#start-recommendations").disabled = running;
     $("#start-recommendations").textContent = running ? "正在发现…" : "换一批";
+    if (status.dataset.stateKey === key) return;
+    status.dataset.stateKey = key;
+    const parts = document.createDocumentFragment();
+    parts.append(node("span", "run-state", run.budget?.directed ? "定向随机发现" : "为你发现的画师"));
+    parts.append(node("span", `run-pill state-${run.state || "unknown"}`, runLabel(run.state)));
+    parts.append(node("span", "run-meta", `${progress}%`));
+    status.replaceChildren(parts);
   }
-  async function prepareRecommendationCards(items, signal) {
+  const recommendationPreviewQueue = [];
+  const recommendationPreviewSignals = new WeakMap();
+  let recommendationPreviewObserver = null, recommendationPreviewActive = 0;
+  const recommendationPreviewConcurrency = 3;
+  function finishRecommendationPreview(image, state) {
+    const task = image.__previewTask;
+    if (!task || task.finished) return;
+    task.finished = true;
+    clearTimeout(task.timer);
+    image.removeEventListener("load", task.loaded);
+    image.removeEventListener("error", task.failed);
+    task.signal.removeEventListener("abort", task.canceled);
+    delete image.__previewTask;
+    delete image.dataset.previewLoading;
+    recommendationPreviewActive = Math.max(0, recommendationPreviewActive - 1);
+    const tile = image.closest(".sample-tile"), placeholder = tile?.querySelector(".preview-placeholder");
+    if (state === "loaded") {
+      image.dataset.previewLoaded = "true";
+      image.hidden = false;
+      placeholder?.remove();
+      if (tile) { delete tile.dataset.previewFailed; tile.setAttribute("aria-label", "查看作品 " + image.alt.replace(/^代表作\s*/, "") + " 大图"); }
+      const card = image.closest(".recommendation-card"), approval = card?.querySelector("[data-approve]");
+      if (card) card.dataset.previewReady = "true";
+      if (approval && !card.dataset.decisionPending) { approval.disabled = false; approval.removeAttribute("title"); }
+    } else if (state === "failed") {
+      image.removeAttribute("src");
+      image.hidden = true;
+      if (placeholder) { placeholder.className = "preview-placeholder preview-retry-hint"; placeholder.textContent = "加载失败 · 点击重试"; }
+      if (tile) { tile.dataset.previewFailed = "true"; tile.setAttribute("aria-label", "预览加载失败，点击重试：" + image.alt); }
+    } else {
+      image.removeAttribute("src");
+      image.dataset.previewSrc = image.dataset.previewURL;
+      image.hidden = false;
+    }
+    pumpRecommendationPreviewQueue();
+  }
+  function pumpRecommendationPreviewQueue() {
+    recommendationPreviewQueue.sort((a, b) => Number(a.image.dataset.sampleIndex || 0) - Number(b.image.dataset.sampleIndex || 0));
+    while (recommendationPreviewActive < recommendationPreviewConcurrency && recommendationPreviewQueue.length) {
+      const { image, signal } = recommendationPreviewQueue.shift();
+      delete image.dataset.previewQueued;
+      if (signal.aborted || !image.isConnected || image.dataset.previewLoaded === "true" || !image.dataset.previewSrc) continue;
+      const tile = image.closest(".sample-tile"), placeholder = tile?.querySelector(".preview-placeholder");
+      const src = image.dataset.previewSrc;
+      delete image.dataset.previewSrc;
+      if (tile) delete tile.dataset.previewFailed;
+      placeholder?.classList.remove("preview-retry-hint");
+      if (placeholder) placeholder.textContent = "正在加载预览";
+      image.hidden = false;
+      image.loading = "eager";
+      image.fetchPriority = Number(image.dataset.sampleIndex || 0) === 0 ? "high" : "auto";
+      image.dataset.previewLoading = "true";
+      recommendationPreviewActive++;
+      const task = { signal, timer: null, finished: false };
+      task.loaded = () => finishRecommendationPreview(image, "loaded");
+      task.failed = () => finishRecommendationPreview(image, "failed");
+      task.canceled = () => finishRecommendationPreview(image, "canceled");
+      image.__previewTask = task;
+      image.addEventListener("load", task.loaded, { once: true });
+      image.addEventListener("error", task.failed, { once: true });
+      signal.addEventListener("abort", task.canceled, { once: true });
+      task.timer = setTimeout(task.failed, 7000);
+      image.src = src;
+    }
+  }
+  function queueRecommendationPreview(image, signal = recommendationPreviewSignals.get(image)) {
+    if (!signal || signal.aborted || !image.isConnected || image.dataset.previewLoaded === "true" || image.dataset.previewQueued || image.dataset.previewLoading || !image.dataset.previewSrc) return;
+    image.dataset.previewQueued = "true";
+    recommendationPreviewQueue.push({ image, signal });
+    pumpRecommendationPreviewQueue();
+  }
+  function queueVisibleRecommendationPreviews() {
+    $$("#recommendation-list .candidate-samples img[data-preview-src]").forEach((image) => {
+      const slider = image.closest(".candidate-samples");
+      const bounds = slider?.getBoundingClientRect(), rect = image.getBoundingClientRect();
+      if (bounds && rect.right > bounds.left - 80 && rect.left < bounds.right + 80 && rect.bottom > -220 && rect.top < innerHeight + 220) queueRecommendationPreview(image);
+    });
+  }
+  function retryRecommendationPreview(image) {
+    const tile = image.closest(".sample-tile");
+    if (!tile || tile.dataset.previewFailed !== "true") return;
+    delete tile.dataset.previewFailed;
+    const placeholder = tile.querySelector(".preview-placeholder");
+    if (placeholder) { placeholder.className = "preview-placeholder"; placeholder.textContent = "正在加载预览"; }
+    image.hidden = false;
+    image.dataset.previewSrc = image.dataset.previewURL;
+    queueRecommendationPreview(image);
+  }
+  function observeRecommendationPreviews(root, signal) {
+    const images = Array.from(root.querySelectorAll("img[data-preview-src]"));
+    if (!signal || signal.aborted) return;
+    if (!recommendationPreviewObserver && "IntersectionObserver" in window) {
+      recommendationPreviewObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          recommendationPreviewObserver.unobserve(entry.target);
+          queueRecommendationPreview(entry.target);
+        });
+      }, { rootMargin: "220px 180px", threshold: 0.01 });
+    }
+    signal.addEventListener("abort", () => {
+      const batchImages = new Set(images);
+      for (let i = recommendationPreviewQueue.length - 1; i >= 0; i--) {
+        if (batchImages.has(recommendationPreviewQueue[i].image)) recommendationPreviewQueue.splice(i, 1);
+      }
+      images.forEach((image) => {
+        recommendationPreviewObserver?.unobserve(image);
+        delete image.dataset.previewQueued;
+        if (image.__previewTask?.signal === signal) image.__previewTask.canceled();
+        else if (image.dataset.previewLoaded !== "true") {
+          image.removeAttribute("src");
+          image.dataset.previewSrc = image.dataset.previewURL;
+        }
+      });
+    }, { once: true });
+    images.forEach((image) => {
+      recommendationPreviewSignals.set(image, signal);
+      const slider = image.closest(".candidate-samples");
+      if (slider && !slider.dataset.previewScrollBound) {
+        slider.dataset.previewScrollBound = "true";
+        slider.addEventListener("scroll", () => {
+          const bounds = slider.getBoundingClientRect();
+          slider.querySelectorAll("img[data-preview-src]").forEach((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            if (rect.right > bounds.left - 180 && rect.left < bounds.right + 180 && rect.bottom > -220 && rect.top < innerHeight + 220) queueRecommendationPreview(candidate);
+          });
+        }, { passive: true });
+      }
+      if (recommendationPreviewObserver) recommendationPreviewObserver.observe(image);
+      else if (slider) slider.dispatchEvent(new Event("scroll"));
+    });
+    if (!recommendationPreviewObserver && !document.documentElement.dataset.previewScrollBound) {
+      document.documentElement.dataset.previewScrollBound = "true";
+      document.addEventListener("scroll", queueVisibleRecommendationPreviews, { capture: true, passive: true });
+    }
+  }
+  function prepareRecommendationCards(items) {
     const fragment = document.createDocumentFragment();
     const oldCards = new Map($$("#recommendation-list .recommendation-card[data-artist-id]").map((card) => [card.dataset.artistId, card]));
     const cards = items.filter((item) => Array.isArray(item.sample_illust_ids) && item.sample_illust_ids.length).slice(0, 30).map((item) => {
@@ -351,38 +512,14 @@
       return renderRecommendation(item);
     });
     cards.forEach((card) => fragment.append(card));
-    const images = Array.from(fragment.querySelectorAll("img[data-preview-src]")).sort((a, b) => Number(a.dataset.sampleIndex || 0) - Number(b.dataset.sampleIndex || 0));
-    let index = 0; const deadline = Date.now() + 15000;
-    async function next() {
-      while (!signal.aborted && index < images.length) {
-        const image = images[index++];
-        if (Date.now() >= deadline) { image.replaceWith(node("span", "cover-empty", "预览暂不可用")); continue; }
-        await new Promise((resolve) => {
-          let done = false, timer;
-          const finish = () => { if (done) return; done = true; clearTimeout(timer); image.removeEventListener("load", loaded); image.removeEventListener("error", fail); signal.removeEventListener("abort", cancel); resolve(); };
-          const fail = () => { image.removeAttribute("src"); image.replaceWith(node("span", "cover-empty", "预览暂不可用")); finish(); };
-          const cancel = () => { image.removeAttribute("src"); finish(); };
-          const loaded = () => { if (typeof image.decode === "function") image.decode().catch(() => {}).then(finish); else finish(); };
-          image.addEventListener("load", loaded, { once: true }); image.addEventListener("error", fail, { once: true }); signal.addEventListener("abort", cancel, { once: true });
-          timer = setTimeout(fail, Math.max(1, Math.min(5000, deadline - Date.now())));
-          image.loading = "eager"; image.src = image.dataset.previewSrc; delete image.dataset.previewSrc;
-        });
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(4, images.length) }, next));
-    if (signal.aborted) { images.forEach((image) => image.removeAttribute("src")); return null; }
     fragment.querySelectorAll("[data-reuse-artist]").forEach((stub) => { const old = oldCards.get(stub.dataset.reuseArtist); if (old?.isConnected) stub.replaceWith(old); else stub.remove(); });
-    cards.forEach((card) => {
-      const approval = card.querySelector("[data-approve]");
-      if (approval) { approval.disabled = !Array.from(card.querySelectorAll("img")).some((image) => image.complete && image.naturalWidth > 0); if (approval.disabled) approval.title = "至少加载一张代表作后才可加入"; }
-    });
     return fragment;
   }
   async function readRecommendations(runID = "", invalidate = false) {
     stopRecommendationPolling(); recommendationController?.abort();
     const controller = new AbortController(); recommendationController = controller;
     const list = $("#recommendation-list");
-    if (invalidate) { recommendationRenderedKey = ""; list.replaceChildren(node("p", "empty-cell", "正在读取推荐…")); }
+    if (invalidate) { recommendationPreviewController?.abort(); recommendationPreviewController = null; recommendationRenderedKey = ""; list.replaceChildren(node("p", "empty-cell", "正在读取推荐…")); }
     try {
       const path = runID ? "/admin/api/recommendations?" : "/admin/api/recommendation-runs/latest?";
       const result = await api(path + new URLSearchParams(runID ? { run_id: runID } : {}), { signal: controller.signal });
@@ -399,7 +536,12 @@
         }
         if (!list.querySelector(".recommendation-card")) {
           const carried = (result.items || []).filter((item) => item.components?.carryover && ($("#recommendation-rating").value === "all" || item.content_rating === $("#recommendation-rating").value) && ($("#recommendation-ai").value === "all" || item.ai_status === $("#recommendation-ai").value));
-          if (carried.length) { const carriedFragment = await prepareRecommendationCards(carried, controller.signal); if (carriedFragment && !controller.signal.aborted) list.replaceChildren(carriedFragment); }
+          if (carried.length) {
+            recommendationPreviewController?.abort();
+            const previewController = new AbortController(); recommendationPreviewController = previewController;
+            const carriedFragment = prepareRecommendationCards(carried);
+            if (!controller.signal.aborted) { list.replaceChildren(carriedFragment); observeRecommendationPreviews(list, previewController.signal); }
+          }
         }
         startRecommendationPolling(); return;
       }
@@ -411,12 +553,12 @@
       const items = (Array.isArray(result.items) ? result.items : []).filter((item) => (rating === "all" || item.content_rating === rating) && (ai === "all" || item.ai_status === ai));
       const key = JSON.stringify([run.id, recommendationQuery().toString(), items]);
       if (key === recommendationRenderedKey) { startRecommendationPolling(30000); return; }
-      updateRecommendationStatus(run, true);
-      if (!list.querySelector(".recommendation-card")) list.replaceChildren(node("p", "empty-cell", "正在加载代表作，准备完成后统一显示…"));
-      const fragment = await prepareRecommendationCards(items, controller.signal);
+      recommendationPreviewController?.abort();
+      const previewController = new AbortController(); recommendationPreviewController = previewController;
+      const fragment = prepareRecommendationCards(items);
       if (!fragment || controller.signal.aborted || activeTab !== "discover") return;
       if (!fragment.children.length) fragment.append(node("p", "empty-cell", "当前筛选下没有带代表作的候选，可调整筛选或生成下一批。"));
-      list.replaceChildren(fragment); recommendationRenderedKey = key; updateRecommendationStatus(run); startRecommendationPolling(30000);
+      list.replaceChildren(fragment); observeRecommendationPreviews(list, previewController.signal); recommendationRenderedKey = key; updateRecommendationStatus(run); startRecommendationPolling(30000);
     } catch (error) {
       if (controller.signal.aborted || activeTab !== "discover") return;
       $("#start-recommendations").disabled = false; $("#start-recommendations").textContent = "开始发现";
@@ -430,16 +572,42 @@
   function loadRecommendationByID(runID) { return readRecommendations(runID); }
   $("#recommendation-rating").addEventListener("change", () => readRecommendations("", true));
   $("#recommendation-ai").addEventListener("change", () => readRecommendations("", true));
-  $("#start-recommendations").addEventListener("click", async (event) => {
-    const trigger = event.currentTarget; if (trigger.disabled) return;
-    stopRecommendationPolling(); recommendationController?.abort();
-    trigger.disabled = true; trigger.textContent = "正在提交…";
+  async function submitDiscovery(options) {
+    const trigger = $("#start-recommendations");
+    const directed = $("#start-directed-discovery");
+    if (trigger.disabled || directed.disabled) return;
+    stopRecommendationPolling();
+    recommendationController?.abort(); recommendationPreviewController?.abort(); recommendationPreviewController = null;
+    trigger.disabled = directed.disabled = true;
     try {
-      const result = await api("/admin/api/recommendations", { method: "POST" });
+      const path = options ? "/admin/api/recommendations/directed" : "/admin/api/recommendations";
+      const request = { method: "POST" };
+      if (options) request.body = JSON.stringify(options);
+      const result = await api(path, request);
       recommendationRunID = String(result.run_id || "");
-      showMessage("已提交发现任务，生成完整候选后再按当前筛选展示。");
+      if (options) {
+        $("#recommendation-rating").value = "all";
+        $("#recommendation-ai").value = "all";
+      }
+      showMessage(options ? "已提交定向随机发现。" : "已提交发现任务。");
       await readRecommendations(recommendationRunID, true);
-    } catch (error) { trigger.disabled = false; trigger.textContent = "开始发现"; report(error, "开始发现"); }
+    } catch (error) {
+      trigger.disabled = false;
+      report(error, options ? "定向随机发现" : "开始发现");
+      startRecommendationPolling();
+    } finally { directed.disabled = false; }
+  }
+  $("#start-recommendations").addEventListener("click", () => submitDiscovery(null));
+  $("#directed-discovery").addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const tags = String(data.get("tags")).split(/[,，、]/).map((tag) => tag.trim()).filter(Boolean);
+    const options = { tags, rating: data.get("rating"), ai: data.get("ai"), orientation: data.get("orientation") };
+    if (!tags.length && options.rating === "all" && options.ai === "all" && options.orientation === "any") {
+      showMessage("请填写标签或选择至少一个条件。", true);
+      return;
+    }
+    submitDiscovery(options);
   });
   function startRecommendationPolling(delay = 2500) {
     stopRecommendationPolling();
@@ -476,8 +644,9 @@
     const heading = node("div", "candidate-heading");
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
     const score = Number(item.components?.display_score ?? item.score);
-    const scoreBadge = node("span", "score-badge", Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
-    scoreBadge.title = "仅用于候选排序参考，不代表喜欢概率"; heading.append(scoreBadge); content.append(heading);
+    const directedRandom = Array.isArray(item.sources) && item.sources.includes("directed_random");
+    const scoreBadge = node("span", "score-badge", directedRandom ? "定向随机" : Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
+    scoreBadge.title = directedRandom ? "来自定向随机候选，不表示模型评分" : "仅用于候选排序参考，不代表喜欢概率"; heading.append(scoreBadge); content.append(heading);
     const tags = [item.tags, artist.tags, item.components?.matched_tags].find((value) => Array.isArray(value) && value.length) || [];
     const chips = node("div", "reason-list");
     if (tags.length) tags.slice(0, 8).forEach((tag) => chips.append(node("span", "reason-chip", tag)));
@@ -490,9 +659,14 @@
     if (sampleIDs.length) {
       for (const [sampleIndex, workID] of sampleIDs.entries()) {
         const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + workID + " 大图");
-        tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: workID, artistId: artist.id, pageIndex: 0, title: "代表作 " + workID, artistName: artist.name || "" }));
-        const image = node("img", "cover-image"); image.alt = "代表作 " + workID; image.decoding = "async";
-        image.dataset.sampleIndex = String(sampleIndex); image.dataset.previewSrc = `/admin/api/previews/${encodeURIComponent(workID)}/0`; tile.append(image);
+        const image = node("img", "cover-image"); image.alt = "代表作 " + workID; image.decoding = "async"; image.loading = "lazy";
+        image.dataset.sampleIndex = String(sampleIndex); image.dataset.previewURL = `/admin/api/previews/${encodeURIComponent(workID)}/0`; image.dataset.previewSrc = image.dataset.previewURL;
+        const placeholder = node("span", "preview-placeholder", "等待加载预览");
+        tile.addEventListener("click", (event) => {
+          if (tile.dataset.previewFailed === "true") { event.preventDefault(); event.stopPropagation(); retryRecommendationPreview(image); return; }
+          window.PixivCuratorViewer.open({ id: workID, artistId: artist.id, pageIndex: 0, title: "代表作 " + workID, artistName: artist.name || "" });
+        });
+        tile.append(image, placeholder);
         tile.append(node("span", "sample-caption", "作品 " + workID));
         samples.append(tile);
       }
@@ -504,7 +678,7 @@
     const approveButton = button(actions, "加入图库", "button button-primary", async (event) => {
       const actionButton = event.currentTarget;
       if (decisionPending) return;
-      decisionPending = true; approveButton.disabled = true; rejectButton.disabled = true;
+      decisionPending = true; card.dataset.decisionPending = "true"; approveButton.disabled = true; rejectButton.disabled = true;
       try {
         await api(`/admin/api/artists/${encodeURIComponent(id)}/approve`, { method: "POST" });
         showMessage("已加入图库，后台会自动安排采集。");
@@ -513,7 +687,7 @@
           setTimeout(() => card.remove(), 475);
         } else card.remove();
       } catch (error) {
-        decisionPending = false; actionButton.disabled = false; rejectButton.disabled = false;
+        decisionPending = false; delete card.dataset.decisionPending; actionButton.disabled = card.dataset.previewReady !== "true"; rejectButton.disabled = false;
         report(error, "加入图库");
       }
     });
@@ -521,9 +695,9 @@
     const rejectButton = button(actions, "不感兴趣", "button button-quiet", async (event) => {
       const actionButton = event.currentTarget;
       if (decisionPending) return;
-      decisionPending = true; approveButton.disabled = true; rejectButton.disabled = true;
+      decisionPending = true; card.dataset.decisionPending = "true"; approveButton.disabled = true; rejectButton.disabled = true;
       try { await api(`/admin/api/artists/${encodeURIComponent(id)}/reject`, { method: "POST" }); showMessage("已记录为不感兴趣。"); card.remove(); }
-      catch (error) { decisionPending = false; actionButton.disabled = false; approveButton.disabled = false; report(error, "记录选择"); }
+      catch (error) { decisionPending = false; delete card.dataset.decisionPending; actionButton.disabled = false; approveButton.disabled = card.dataset.previewReady !== "true"; report(error, "记录选择"); }
     });
     content.append(actions); card.append(content); return card;
   }

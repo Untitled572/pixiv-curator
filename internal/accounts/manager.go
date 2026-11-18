@@ -302,3 +302,13 @@ func (m *Manager) Credentials(ctx context.Context, token string) error {
 	_, err := m.Save(ctx, "", "Pixiv 账号", token)
 	return err
 }
+
+func (m *Manager) SearchTaggedArtworks(ctx context.Context, tag string, offset int) ([]pixiv.RawArtwork, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	c, err := m.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return c.SearchTaggedArtworks(ctx, tag, offset)
+}

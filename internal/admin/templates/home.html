@@ -27,15 +27,29 @@
 
     <section class="panel tab-panel" id="panel-library" data-panel="library" role="tabpanel" aria-labelledby="tab-library" hidden>
       <div class="panel-heading"><div><p class="eyebrow">本地采集名单</p><h2>画师图库</h2><p class="muted">分页浏览已收录画师。点击详情后才加载代表作；标签修正只影响本地目录。</p></div><button id="reload-library" class="button button-secondary" type="button">刷新图库</button></div>
-      <details id="library-review" class="library-review"><summary class="button button-secondary">整理图库</summary><div class="library-review-body"><div class="section-heading"><p class="muted">看看近期作品，决定是否移出图库。</p><button id="reload-library-review" class="button button-quiet button-small" type="button">换一组</button></div><div id="library-review-list" class="library-review-list"><p class="empty-cell">展开后读取建议。</p></div></div></details>
+      <details id="library-review" class="library-review" open><summary class="button button-secondary">整理图库</summary><div class="library-review-body"><div class="section-heading"><p id="library-review-round" class="muted">每组最多 6 位，保留或跳过的画师接下来 50 轮不再提示。</p><button id="reload-library-review" class="button button-quiet button-small" type="button">换一组</button></div><div id="library-review-list" class="library-review-list"><p class="empty-cell">展开后读取建议。</p></div></div></details>
       <form id="manual-artist-form" class="manual-add"><label for="manual-artist-id">手动添加 Pixiv UID</label><div class="manual-add-row"><input id="manual-artist-id" name="id" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="输入数字 UID" required><button class="button button-primary" type="submit">加入图库</button></div><p class="field-help">点击后会将画师加入图库并安排后台采集。</p></form>
+      <details id="library-list-panel" class="library-review"><summary class="button button-secondary">画师列表</summary><div class="library-review-body">
       <div class="library-tools"><label>按标签筛选<input id="library-tag-search" type="search" autocomplete="off" placeholder="输入关键词搜索标签"><select id="library-tag"><option value="">所有标签</option></select><small id="library-tag-hint" class="field-help">搜索后选择标签，每次最多显示 30 个。</small></label><label>账号<select id="library-account"><option value="">所有账号</option></select></label><label>采集状态<select id="library-collection"><option value="">全部状态</option><option value="1">启用采集</option><option value="0">暂停采集</option></select></label><span id="library-summary" class="muted sr-only" aria-live="polite"></span></div>
       <div id="artist-list" class="artist-grid" aria-live="polite"><p class="empty-cell">正在读取图库…</p></div>
       <nav class="list-footer library-pagination" aria-label="画师分页"><label class="page-size">每页<select id="library-page-size"><option value="24">24 位</option><option value="48">48 位</option><option value="96">96 位</option></select></label><div class="page-buttons"><button id="previous-artists" class="button button-secondary button-small" type="button" disabled>上一页</button><span id="artist-page-status" class="muted" aria-live="polite"></span><button id="next-artists" class="button button-secondary button-small" type="button" disabled>下一页</button></div><form id="library-page-jump" class="page-jump"><label for="library-page-number">跳至</label><input id="library-page-number" type="number" min="1" value="1" required aria-label="画师页码"><button class="button button-quiet button-small" type="submit">前往</button></form></nav>
+      </div></details>
     </section>
 
     <section class="panel tab-panel" id="panel-discover" data-panel="discover" role="tabpanel" aria-labelledby="tab-discover" hidden>
       <div class="panel-heading"><div><p class="eyebrow">灵感候选</p><h2>发现画师</h2><p class="muted">看看代表作和推荐理由，再决定是否加入你的图库。</p></div><button id="start-recommendations" class="button button-primary" type="button">开始发现</button></div>
+      <details class="library-review"><summary class="button button-secondary">定向随机发现</summary>
+        <form id="directed-discovery" class="library-review-body">
+          <div class="discover-tools">
+            <label>作品标签<input name="tags" placeholder="最多 5 个标签，用逗号分隔" maxlength="505"></label>
+            <label>年龄分级<select name="rating"><option value="all">不指定</option><option value="safe">全年龄</option><option value="adult">R18 / R18G</option><option value="unknown">未知</option></select></label>
+            <label>AI 分类<select name="ai"><option value="all">不指定</option><option value="ai">AI 生成</option><option value="non_ai">非 AI</option><option value="unknown">未知</option></select></label>
+            <label>主要作品方向<select name="orientation"><option value="any">不指定</option><option value="landscape">以横图为主</option><option value="portrait">以竖图为主</option><option value="square">以方图为主</option></select></label>
+          </div>
+          <p class="field-help">标签需全部匹配。按画师近期有尺寸的作品首图判断方向，超过半数才算符合。至少指定一项。</p>
+          <button id="start-directed-discovery" class="button button-primary" type="submit">开始定向随机</button>
+        </form>
+      </details>
       <div class="discover-tools"><label>R18 样本<select id="recommendation-rating"><option value="all">不指定</option><option value="adult">含 R18</option><option value="safe">样本均为全年龄</option><option value="unknown">未知</option></select></label><label>AI 样本<select id="recommendation-ai"><option value="all">不指定</option><option value="ai">含 AI</option><option value="non_ai">样本均为非 AI</option><option value="unknown">未知</option></select></label><p class="field-help">筛选只影响发现后的展示，不影响候选生成。分类仅根据本轮已取得的代表作样本，不代表画师全部作品；缺失或未标明的样本保留为未知。</p></div>
       <div id="recommendation-status" class="run-summary" aria-live="polite"><span>正在查找最近一次推荐…</span></div>
       <div id="recommendation-list" class="recommendation-list"><p class="empty-cell">推荐结果会显示在这里。</p></div>

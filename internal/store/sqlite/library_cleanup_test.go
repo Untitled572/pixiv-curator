@@ -3,6 +3,10 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
+	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
@@ -20,12 +24,12 @@ func TestLibraryCleanupReviewBoundAndRemove(t *testing.T) {
 	if err := s.UpsertArtwork(ctx, domain.Artwork{ID: 101, ArtistID: 1, Rating: "r18g", PageCount: 1, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/a.jpg", Width: 10, Height: 10}}}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := s.LibraryCleanupReview(ctx)
+	_, items, _, err := s.LibraryCleanupReview(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 5 {
-		t.Fatalf("review items=%d, want 5", len(items))
+	if len(items) != 6 {
+		t.Fatalf("review items=%d, want 6", len(items))
 	}
 	foundSample := false
 	for _, item := range items {
@@ -139,5 +143,89 @@ func TestPausePurgesCatalogAndPreservesArtist(t *testing.T) {
 	var lastSynced bool
 	if err = s.db.QueryRow(`SELECT last_synced_at IS NULL FROM artists WHERE id=991`).Scan(&lastSynced); err != nil || !lastSynced {
 		t.Fatalf("last synced reset=%v err=%v", lastSynced, err)
+	}
+}
+
+func TestCleanupBatchPersistsAndSkipsExactlyFiftyRounds(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "cleanup.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id := int64(1); id <= 7; id++ {
+		seedArtist(t, s, id)
+		if _, err = s.DecideArtist(ctx, id, "approve"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	round, first, kept, err := s.LibraryCleanupReview(ctx)
+	if err != nil || round != 1 || len(first) != 6 || len(kept) != 0 {
+		t.Fatalf("first round=%d len=%d kept=%v err=%v", round, len(first), kept, err)
+	}
+	keptID := first[0].Artist.ID
+	if err = s.KeepLibraryCleanupArtist(ctx, keptID, round); err != nil {
+		t.Fatal(err)
+	}
+	_, again, kept, err := s.LibraryCleanupReview(ctx)
+	if err != nil || !reflect.DeepEqual(first, again) || len(kept) != 1 || kept[0] != strconv.FormatInt(keptID, 10) {
+		t.Fatalf("reloaded items=%v kept=%v err=%v", again, kept, err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	_, again, kept, err = s.LibraryCleanupReview(ctx)
+	if err != nil || !reflect.DeepEqual(first, again) || len(kept) != 1 {
+		t.Fatalf("reopened kept=%v err=%v", kept, err)
+	}
+	if err = s.RemoveLibraryArtist(ctx, first[1].Artist.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, again, _, err = s.LibraryCleanupReview(ctx)
+	if err != nil || len(again) != 5 {
+		t.Fatalf("removed still in batch: %v %v", again, err)
+	}
+	round, _, _, err = s.NextLibraryCleanup(ctx, 1)
+	if err != nil || round != 2 {
+		t.Fatalf("next=%d err=%v", round, err)
+	}
+	if _, _, _, err = s.NextLibraryCleanup(ctx, 1); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale next: %v", err)
+	}
+	if err = s.KeepLibraryCleanupArtist(ctx, keptID, 1); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale keep: %v", err)
+	}
+	for round < 51 {
+		var items []domain.LibraryCleanupItem
+		round, items, _, err = s.NextLibraryCleanup(ctx, round)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range items {
+			if item.Artist.ID == keptID {
+				t.Fatalf("artist returned early at round %d", round)
+			}
+		}
+	}
+	round, items, _, err := s.NextLibraryCleanup(ctx, round)
+	if err != nil || round != 52 {
+		t.Fatalf("round=%d err=%v", round, err)
+	}
+	found := false
+	for _, item := range items {
+		if item.Artist.ID == keptID {
+			found = true
+		}
+		if item.Artist.ID == first[1].Artist.ID {
+			t.Fatal("removed artist reappeared")
+		}
+	}
+	if !found {
+		t.Fatalf("artist absent after 50 skipped rounds: %+v", items)
 	}
 }

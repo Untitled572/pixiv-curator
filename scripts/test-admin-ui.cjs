@@ -13,7 +13,9 @@ const artists = Array.from({ length: 57 }, (_, index) => ({ id: String(index + 1
 artists[0].collection_enabled = false;
 const removedArtistIDs = new Set();
 const reviewItems = Array.from({ length: 7 }, (_, index) => ({ artist: { id: String(index + 1), name: "整理候选 " + (index + 1) }, sample_illust_ids: [String(8500 + index * 3), String(8501 + index * 3), String(8502 + index * 3), "ignored"] }));
-const reviewWrites = [], feedbackWrites = [];
+let reviewRound = 1;
+const keptReview = new Set(), reviewWrites = [], feedbackWrites = [];
+const reviewPayload = () => ({ round: reviewRound, items: reviewItems.slice(reviewRound === 1 ? 0 : 1), kept_ids: [...keptReview] });
 let failNextReviewRemove = false, failNextFeedback = false, delayNextFeedback = false;
 const tagCorpus = ["风景", "无结果", "搜索专用", ...Array.from({ length: 15139 }, (_, index) => `测试标签${String(index).padStart(5, "0")}`)];
 const hits = [];
@@ -74,7 +76,15 @@ const server = http.createServer((req, res) => {
     if (failNextApprove) { failNextApprove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
     return setTimeout(() => { if (!res.destroyed) res.end(JSON.stringify({ updated: true })); }, 100);
   }
-  if (url.pathname === "/admin/api/library/review" && req.method === "GET") { payload = { items: reviewItems }; return res.end(JSON.stringify(payload)); }
+  if (url.pathname === "/admin/api/library/review" && req.method === "GET") { payload = reviewPayload(); return res.end(JSON.stringify(payload)); }
+  if (url.pathname === "/admin/api/library/review/next" && req.method === "POST") {
+    reviewRound++; keptReview.clear();
+    return res.end(JSON.stringify(reviewPayload()));
+  }
+  if (url.pathname.endsWith("/keep") && req.method === "POST") {
+    keptReview.add(url.pathname.split("/").at(-2));
+    return res.end(JSON.stringify({ kept: true }));
+  }
   if (/^\/admin\/api\/library\/artists\/\d+\/remove$/.test(url.pathname) && req.method === "POST") {
     reviewWrites.push(url.pathname);
     if (failNextReviewRemove) { failNextReviewRemove = false; res.statusCode = 500; return res.end(JSON.stringify({ error: { code: "NOT_READY" } })); }
@@ -160,14 +170,17 @@ const server = http.createServer((req, res) => {
     assert.equal(hits.some((hit) => hit.startsWith("/admin/api/previews/")), false, "default Stats page must not request image previews");
     assert.equal(await page.locator("img").count(), 0, "default Stats page should not create image elements");
     await page.locator("#tab-library").click();
+    assert.equal(await page.locator("#library-review").evaluate((details) => details.open), true);
+    assert.equal(await page.locator("#library-list-panel").evaluate((details) => details.open), false);
+    await page.locator("#library-list-panel > summary").click();
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
     assert.equal(tagCorpus.length, 15142);
     assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/tags?limit=30&q=")), "library tag options should use bounded q/limit lookup");
     assert.ok(await page.locator("#library-tag option").count() <= 32, "tag options should be capped at 30 plus the all/current entries");
     assert.ok(await page.locator("body *").count() < 1500, "large tag corpus must not expand the DOM");
-    assert.equal(await page.locator("img").count(), 0);
-    assert.equal(hits.filter((u) => /artworks|previews/.test(u)).length, 0);
+    assert.equal(await page.locator("#artist-list img").count(), 0);
+    assert.equal(hits.filter((u) => /artworks/.test(u)).length, 0);
     const tagSearch = page.waitForResponse((response) => response.url().includes("/admin/api/library/tags?") && new URL(response.url()).searchParams.get("q") === "搜索专用");
     await page.locator("#library-tag-search").fill("搜索专用");
     await tagSearch;
@@ -182,10 +195,13 @@ const server = http.createServer((req, res) => {
     assert.equal(hits.filter((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")).length, libraryHitsBeforeReload, "reloaded admin page returns to Stats without loading the library");
     const libraryHitsBeforeReloadVisit = libraryHitsBeforeReload;
     await page.locator("#tab-library").click();
+    assert.equal(await page.locator("#library-review").evaluate((details) => details.open), true);
+    assert.equal(await page.locator("#library-list-panel").evaluate((details) => details.open), false);
+    await page.locator("#library-list-panel > summary").click();
     await page.waitForFunction(() => document.querySelectorAll(".artist-card").length === 24);
     assert.equal(await page.locator("#artist-count").textContent(), "57");
     assert.ok(hits.filter((hit) => hit.startsWith("/admin/api/library/artists?") || hit.startsWith("/admin/api/library/tags?")).length > libraryHitsBeforeReloadVisit, "library data loads after navigating back to its tab");
-    assert.equal(hits.filter((u) => /artworks|previews/.test(u)).length, 0);
+    assert.equal(hits.filter((u) => /artworks/.test(u)).length, 0);
     await page.locator("#next-artists").click();
     await page.waitForFunction(() => document.querySelector(".artist-card")?.dataset.artistId === "25");
     assert.equal(await page.locator(".artist-card").count(), 24);
@@ -220,7 +236,7 @@ const server = http.createServer((req, res) => {
     const artworkDialogBounds = await page.locator("#artwork-dialog").boundingBox();
     await page.mouse.click(Math.max(0, artworkDialogBounds.x - 10), artworkDialogBounds.y + artworkDialogBounds.height / 2);
     await page.waitForFunction(() => !document.querySelector("#artwork-dialog").open && document.querySelectorAll("#artwork-list img").length === 0);
-    assert.equal(await page.locator("img").count(), 1, "closing the viewer should keep its UI shell but clear the image request");
+    assert.equal(await page.locator(".pixiv-viewer-image").count(), 1, "closing the viewer should keep its UI shell but clear the image request");
     assert.equal(await page.locator(".pixiv-viewer-image").getAttribute("src"), null, "closing the viewer must stop and clear the original-image request");
     assert.equal(await page.locator(".skip-link").evaluate((el) => el.getBoundingClientRect().bottom <= 0), true, "mouse dialog close does not reveal skip link");
     const sidebarBefore = await page.evaluate(() => ({ side: document.querySelector(".sidebar").getBoundingClientRect().toJSON(), brand: document.querySelector(".brand").getBoundingClientRect().toJSON(), scrollY }));
@@ -246,7 +262,9 @@ const server = http.createServer((req, res) => {
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["全年龄非 AI"]);
     assert.deepEqual(await page.locator(".recommendation-card .reason-chip").allTextContents(), ["风景", "原创"], "first row shows the artist's main sample tags instead of generic recommendation reasons");
     assert.equal(hits.some((u) => u.startsWith("/admin/api/previews/92001/")), false, "safe filter must not request adult sample previews");
-    assert.ok(hits.includes("/admin/api/previews/91001/0") && hits.includes("/admin/api/previews/91002/0"), "sample IDs should map directly to page-zero preview endpoints");
+    await page.locator(".recommendation-card img").first().scrollIntoViewIfNeeded();
+    await page.locator(".recommendation-card img[data-preview-loaded]").first().waitFor();
+    assert.ok(hits.includes("/admin/api/previews/91001/0"), "sample IDs should map directly to page-zero preview endpoints");
     assert.equal(hits.slice(hitsBeforeDiscover).some((u) => u.startsWith("/admin/api/artworks?")), false, "recommendation samples must not fetch artwork metadata");
     assert.equal(await page.locator(".recommendation-cover").count(), 0);
     assert.equal(await page.locator(".recommendation-card .candidate-title-button").getAttribute("href"), "https://www.pixiv.net/users/801");
@@ -310,13 +328,13 @@ const server = http.createServer((req, res) => {
 	assert.equal(hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length, beforeNewRunPreviews, "running partial samples must remain unfetched");
 	await firstNewPreviewSeen;
 	assert.equal(newRunPolls, 3, "sample loading should only begin after the succeeded response");
-	assert.equal(await page.locator(".recommendation-card").count(), 0, "slow sample loading must not insert a partial batch");
+	assert.equal(await page.locator(".recommendation-card").count(), 30, "cards are shown before slow previews finish");
 	await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30, null, { timeout: 10000 });
 	assert.equal(await page.locator(".recommendation-card").count(), 30, "completed results should cap rendered candidates at 30");
-	assert.equal(await page.locator(".sample-tile").count(), 90, "each rendered candidate may show at most three samples");
-	assert.equal(newRunPreviewRequests, 90, "only the first 30 candidates should load three previews each");
-	assert.ok(maxNewPreviewRequests <= 4 && maxNewPreviewRequests >= 2, `preview concurrency should be between 2 and 4, got ${maxNewPreviewRequests}`);
-	assert.equal(activeNewPreviewRequests, 0, "all prepared previews should finish before insertion");
+	assert.equal(await page.locator(".recommendation-card .sample-tile").count(), 90, "each rendered candidate may show at most three samples");
+	assert.ok(newRunPreviewRequests < 90, "offscreen previews remain deferred");
+	assert.ok(maxNewPreviewRequests <= 3, `preview concurrency must stay bounded, got ${maxNewPreviewRequests}`);
+	assert.equal(await page.locator("#recommendation-status .run-meta").textContent(), "100%");
     assert.equal(await page.locator('.recommendation-card[data-exploration]').count(), 0, "API order is shown without a special exploration marker");
     assert.deepEqual(await page.locator(".recommendation-card").evaluateAll((cards) => cards.slice(0, 3).map((card) => card.dataset.artistId)), completedRunItems.slice(0, 3).map((item) => item.artist_id), "recommendations retain API order");
     assert.equal(await page.locator(".exploration-chip").count(), 0, "candidates share the normal recommendation presentation");
@@ -324,6 +342,7 @@ const server = http.createServer((req, res) => {
     assert.match(await page.locator(".score-badge").first().getAttribute("title"), /不代表喜欢概率/);
     const failedExploration = page.locator('.recommendation-card[data-artist-id="1025"]');
     failNextApprove = true;
+    await failedExploration.locator(".sample-tile").first().scrollIntoViewIfNeeded();
     await failedExploration.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.querySelector("[data-approve]")?.disabled, await failedExploration.elementHandle());
     assert.equal(await failedExploration.count(), 1, "failed approval keeps the exploration card");
@@ -331,6 +350,7 @@ const server = http.createServer((req, res) => {
     const successExploration = page.locator('.recommendation-card[data-artist-id="1026"]');
     const approveResponse = page.waitForResponse((response) => response.request().method() === "POST" && response.url().endsWith("/admin/api/artists/1026/approve"));
     const successCardBounds = await successExploration.boundingBox();
+    await successExploration.locator(".sample-tile").first().scrollIntoViewIfNeeded();
     await successExploration.locator("[data-approve]").click();
     assert.equal(await successExploration.locator("button").filter({ hasText: "不感兴趣" }).isDisabled(), true, "both decisions are locked while approval is pending");
     assert.equal(await successExploration.locator("[data-approve]").isDisabled(), true);
@@ -354,18 +374,24 @@ const server = http.createServer((req, res) => {
     await particleOverlay.waitFor({ state: "detached" });
     const normalCard = page.locator('.recommendation-card[data-artist-id="1001"]');
     const normalHandle = await normalCard.elementHandle();
+    await normalCard.locator(".sample-tile").first().scrollIntoViewIfNeeded();
     await normalCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, normalHandle);
     assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "normal recommendations emit no particles");
     await page.emulateMedia({ reducedMotion: "reduce" });
     const reducedCard = page.locator('.recommendation-card[data-artist-id="1027"]');
     const reducedHandle = await reducedCard.elementHandle();
+    await reducedCard.locator(".sample-tile").first().scrollIntoViewIfNeeded();
     await reducedCard.locator("[data-approve]").click();
     await page.waitForFunction((card) => !card.isConnected, reducedHandle);
     assert.equal(await page.locator(".exploration-particle-overlay").count(), 0, "reduced-motion approval emits no particles");
     await page.emulateMedia({ reducedMotion: "no-preference" });
-    const carrySampleIDs = completedRunItems.slice(1, 16).flatMap((item) => item.sample_illust_ids);
-    const carryPreviewHits = hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length;
+    const loadedCarryPreviews = await page.locator(".recommendation-card img[data-preview-loaded]").evaluateAll(
+      (images, ids) => images.filter((img) => ids.includes(img.closest(".recommendation-card").dataset.artistId))
+        .map((img) => new URL(img.src).pathname), refillCarryIDs
+    );
+    const carryPreviewHits = () => hits.filter((hit) => loadedCarryPreviews.includes(hit)).length;
+    const carryHitsBefore = carryPreviewHits();
     await page.locator(".recommendation-card").evaluateAll((cards) => {
       window.__refillCarryCards = cards.slice(0, 15);
       cards.slice(15).forEach((card) => card.remove());
@@ -376,14 +402,14 @@ const server = http.createServer((req, res) => {
     await page.waitForFunction(() => document.querySelector("#recommendation-status .run-meta")?.textContent === "35%");
     assert.equal(await page.locator(".recommendation-card").count(), 15, "running refill keeps the existing cards visible");
     assert.ok(await page.evaluate(() => window.__refillCarryCards.every((card) => card.isConnected && document.querySelector(`.recommendation-card[data-artist-id="${CSS.escape(card.dataset.artistId)}"]`) === card)), "running refill preserves the original card nodes");
-    assert.equal(hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length, carryPreviewHits, "running refill does not reload previews for existing cards");
+    assert.equal(carryPreviewHits(), carryHitsBefore, "running refill does not reload previews for existing cards");
     refillPhase = "succeeded";
     await page.locator("#tab-discover").click();
     await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 30, null, { timeout: 10000 });
     const carriedCardStatus = await page.evaluate(() => ({ original: window.__refillCarryCards.map((card) => [card.dataset.artistId, card.isConnected]), current: Array.from(document.querySelectorAll(".recommendation-card")).map((card) => card.dataset.artistId) }));
     assert.ok(await page.evaluate(() => window.__refillCarryCards.every((card) => card.isConnected && document.querySelector(`.recommendation-card[data-artist-id="${CSS.escape(card.dataset.artistId)}"]`) === card)), "completed refill reuses the original carried card nodes: " + JSON.stringify(carriedCardStatus));
     assert.deepEqual(await page.locator(".recommendation-card").evaluateAll((cards) => cards.map((card) => card.dataset.artistId)), [...refillCarryIDs, ...refillNewItems.map((item) => item.artist_id)], "completed refill combines carried and new candidates");
-    assert.equal(hits.filter((hit) => carrySampleIDs.some((id) => hit.startsWith(`/admin/api/previews/${id}/`))).length, carryPreviewHits, "completed refill does not reload previews for carried cards");
+    assert.equal(carryPreviewHits(), carryHitsBefore, "completed refill does not reload previews for carried cards");
     refillPhase = "";
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.screenshot({path:path.join(root,"data","discovery-three-previews.png"),fullPage:false});
@@ -406,28 +432,23 @@ const server = http.createServer((req, res) => {
     await page.locator("#library-tag").selectOption("无结果");
     await page.waitForFunction(() => document.querySelector("#library-summary").textContent.includes("符合条件 0"));
     assert.equal(await page.locator("#artist-count").textContent(), "57");
-    const reviewRequestsBefore = hits.filter((hit) => hit === "/admin/api/library/review").length;
-    assert.equal(await page.locator("#library-review").evaluate((element) => element.open), false, "library review starts closed");
-    assert.equal(hits.filter((hit) => hit === "/admin/api/library/review").length, reviewRequestsBefore, "closed review does not request suggestions");
-    await page.locator("#library-review > summary").click();
-    await page.waitForFunction(() => document.querySelectorAll(".library-review-card").length === 5);
-    assert.equal(hits.filter((hit) => hit === "/admin/api/library/review").length, reviewRequestsBefore + 1);
-    assert.equal(await page.locator(".library-review-samples img").count(), 15, "review shows up to three thumbnails for at most five artists");
+    await page.waitForFunction(() => document.querySelectorAll(".library-review-card").length === 6);
+    assert.equal(await page.locator(".library-review-samples img").count(), 18);
     const reviewCard = page.locator(".library-review-card").first();
     assert.equal(await reviewCard.locator(".artist-name a").getAttribute("href"), "https://www.pixiv.net/users/1");
-    await reviewCard.getByRole("button", { name: "保留" }).click();
-    assert.equal(await page.locator(".library-review-card").count(), 4, "keep removes only the current suggestion card");
-    assert.equal(reviewWrites.length, 0, "keep does not write to an API");
+    await reviewCard.getByRole("button", { name: "保留", exact: true }).click();
+    await reviewCard.getByRole("button", { name: "已标记保留" }).waitFor();
+    assert.equal(await page.locator(".library-review-card").count(), 6, "marking keeps the card visible");
     await page.locator("#reload-library-review").click();
-    await page.waitForFunction(() => document.querySelectorAll(".library-review-card").length === 5);
-    const failedReviewCard = page.locator('.library-review-card[data-artist-id="1"]');
+    await page.waitForFunction(() => document.querySelector("#library-review-round").textContent.includes("第 2 轮"));
+    const failedReviewCard = page.locator('.library-review-card[data-artist-id="2"]');
     failNextReviewRemove = true;
     await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
     await page.waitForFunction(() => document.querySelector("#global-message").textContent.includes("服务暂时不可用"));
     assert.equal(await failedReviewCard.count(), 1, "failed removal keeps the suggestion card");
     assert.match(await failedReviewCard.textContent(), /停止采集和供图/);
     await failedReviewCard.getByRole("button", { name: "移出图库" }).click();
-    await page.waitForFunction(() => !document.querySelector('.library-review-card[data-artist-id="1"]'));
+    await page.waitForFunction(() => !document.querySelector('.library-review-card[data-artist-id="2"]'));
     assert.equal(await page.locator("#artist-count").textContent(), "57", "pausing retains the artist record");
     assert.equal(reviewWrites.length, 2, "removal POST is sent only after explicit clicks");
     assert.ok(hits.some((hit) => hit.startsWith("/admin/api/library/artists?")), "successful removal refreshes the current library");
@@ -584,6 +605,16 @@ const server = http.createServer((req, res) => {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, "horizontal overflow at " + width);
       assert.equal(await page.evaluate(() => getComputedStyle(document.body).zoom), width >= 1100 ? "1.1" : "1", "desktop-only 110% zoom at " + width);
     }
+    await page.locator("#tab-discover").click();
+    await page.locator("#start-recommendations").waitFor();
+    await page.locator("details").filter({ has: page.locator("#directed-discovery") }).locator("summary").click();
+    await page.locator("#directed-discovery [name=tags]").fill("原創，風景");
+    await page.locator("#directed-discovery [name=rating]").selectOption("safe");
+    await page.locator("#directed-discovery [name=orientation]").selectOption("landscape");
+    await page.route("**/admin/api/recommendations/directed", (route) => route.fulfill({ status: 202, json: { run_id: "directed-test", job_id: "test" } }));
+    const directedRequest = page.waitForRequest((request) => request.url().endsWith("/admin/api/recommendations/directed") && request.method() === "POST");
+    await page.locator("#start-directed-discovery").click();
+    assert.deepEqual((await directedRequest).postDataJSON(), { tags: ["原創", "風景"], rating: "safe", ai: "all", orientation: "landscape" });
     assert.deepEqual(errors, []);
     console.log("PASS: count, pagination, no initial images/requests, details, filters, statistics, API builder/test, responsive layout");
   } finally {

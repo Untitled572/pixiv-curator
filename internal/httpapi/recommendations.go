@@ -9,6 +9,22 @@ import (
 )
 
 func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth) {
+	mux.Handle("POST /admin/api/recommendations/directed", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawQuery != "" {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		var options app.DirectedDiscovery
+		if !decodeBody(w, r, &options) {
+			return
+		}
+		runID, jobID, err := s.StartDirected(r.Context(), options)
+		if err != nil {
+			apiError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"run_id": runID, "job_id": jobID})
+	})))
 	mux.Handle("POST /admin/api/recommendations/activity", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.RawQuery != "" {
 			apiError(w, domain.ErrInvalid)
