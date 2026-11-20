@@ -8,7 +8,7 @@ import (
 )
 
 func (c *Client) SearchTaggedArtworks(ctx context.Context, tag string, offset int) ([]RawArtwork, error) {
-	if strings.TrimSpace(tag) == "" || len(tag) > 300 || offset < 0 || offset > 150 || offset%30 != 0 {
+	if strings.TrimSpace(tag) == "" || len(tag) > 300 || offset < 0 || offset > 450 || offset%30 != 0 {
 		return nil, &Error{Code: "INVALID_REQUEST"}
 	}
 	params := url.Values{

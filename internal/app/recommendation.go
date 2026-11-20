@@ -135,6 +135,7 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	var directed struct {
 		Options *DirectedDiscovery `json:"directed"`
 		Date    string             `json:"directed_date"`
+		Pages   int                `json:"directed_pages"`
 	}
 	if json.Unmarshal(run.Budget, &directed) != nil {
 		return taskInvalid()
@@ -144,7 +145,7 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		if !valid {
 			return taskInvalid()
 		}
-		return s.directedRun(ctx, j, run, budget, options, directed.Date, excluded)
+		return s.directedRun(ctx, j, run, budget, options, directed.Date, directed.Pages, excluded)
 	}
 	if err = s.recallIndependent(ctx, j, run, recallLimit, budget.TotalRequests, excluded); err != nil {
 		return err
