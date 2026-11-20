@@ -10,7 +10,14 @@ import (
 )
 
 func imageFeedbackInTx(ctx context.Context, tx *sql.Tx) (map[string]float64, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT t.normalized_name,SUM(CASE f.value WHEN 'like' THEN 1.0 ELSE -1.0 END) score FROM image_feedback f JOIN artwork_tags at ON at.illust_id=f.illust_id JOIN tags t ON t.id=at.tag_id GROUP BY t.normalized_name ORDER BY ABS(score) DESC,t.normalized_name LIMIT 10000`)
+	// Start with the feedback rows and look up only their artwork tags.
+	// A tag-first plan scans the catalog even when only a few pages have votes.
+	rows, err := tx.QueryContext(ctx, `SELECT t.normalized_name,
+		SUM(CASE f.value WHEN 'like' THEN 1.0 ELSE -1.0 END) score
+		FROM image_feedback f
+		CROSS JOIN artwork_tags at ON at.illust_id=f.illust_id
+		CROSS JOIN tags t ON t.id=at.tag_id
+		GROUP BY t.normalized_name ORDER BY ABS(score) DESC,t.normalized_name LIMIT 10000`)
 	if err != nil {
 		return nil, err
 	}

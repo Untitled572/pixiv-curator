@@ -3,11 +3,13 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/domain"
@@ -86,6 +88,57 @@ func TestLibraryTagRoutesAuthenticateAndRestoreOverride(t *testing.T) {
 	}
 	if rec = libraryRequest(h, http.MethodGet, "/admin/api/stats", "", true); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"unknown_rating_artworks":1`) {
 		t.Fatalf("stats status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+type statsSourceFunc func(context.Context) (domain.CatalogStats, error)
+
+func (f statsSourceFunc) CatalogStats(ctx context.Context) (domain.CatalogStats, error) {
+	return f(ctx)
+}
+
+func TestCatalogStatsCacheSharesRefreshAndExpires(t *testing.T) {
+	var cache catalogStatsCache
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	finished := make(chan error, 1)
+	go func() {
+		_, err := cache.get(context.Background(), statsSourceFunc(func(context.Context) (domain.CatalogStats, error) {
+			close(started)
+			<-finish
+			return domain.CatalogStats{ImagePages: 10}, nil
+		}))
+		finished <- err
+	}()
+	<-started
+
+	var loads int
+	load := statsSourceFunc(func(context.Context) (domain.CatalogStats, error) {
+		loads++
+		return domain.CatalogStats{ImagePages: 20}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := cache.get(ctx, load)
+	close(finish)
+	if loadErr := <-finished; loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if !errors.Is(err, context.Canceled) || loads != 0 {
+		t.Fatalf("waiting request: err=%v loads=%d", err, loads)
+	}
+	if stats, err := cache.get(context.Background(), load); err != nil || stats.ImagePages != 10 || loads != 0 {
+		t.Fatalf("cache hit: stats=%+v err=%v loads=%d", stats, err, loads)
+	}
+	cache.validUntil = time.Time{}
+	fail := errors.New("temporary failure")
+	if _, err := cache.get(context.Background(), statsSourceFunc(func(context.Context) (domain.CatalogStats, error) {
+		return domain.CatalogStats{}, fail
+	})); !errors.Is(err, fail) {
+		t.Fatalf("cache miss error=%v, want %v", err, fail)
+	}
+	if stats, err := cache.get(context.Background(), load); err != nil || stats.ImagePages != 20 || loads != 1 {
+		t.Fatalf("cache refresh: stats=%+v err=%v loads=%d", stats, err, loads)
 	}
 }
 

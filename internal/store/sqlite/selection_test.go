@@ -84,6 +84,52 @@ func TestSelectUnknownAndDislikeNeverPassDefaultRules(t *testing.T) {
 	}
 }
 
+func TestSampledSelectionUsesCurrentEligibilityAndFallsBackForRareFilters(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 800, "approved")
+	seedEligibleArtist(t, s, 801, "blocked")
+	seedSelectionArtwork(t, s, 810, 800, "safe", "non_ai", []string{"dense"}, 80)
+	seedSelectionArtwork(t, s, 811, 800, "safe", "non_ai", nil, 20)
+	seedSelectionArtwork(t, s, 812, 801, "safe", "non_ai", nil, 10)
+	seedSelectionArtwork(t, s, 813, 800, "safe", "non_ai", []string{"rare"}, 1)
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO image_feedback(illust_id,page_index,value,updated_at)
+		VALUES(810,0,'dislike',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM image_pages WHERE illust_id=810 AND page_index=1`); err != nil {
+		t.Fatal(err)
+	}
+	putSelectionRules(t, s, domain.SelectionRules{
+		AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Strategy: "random",
+	})
+	// Exercise the sampler directly with a dense enough set that all possible
+	// 64-row draws include at least one eligible page from artwork 810.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, args, err := selectionWhere(domain.DefaultRules(), 0, "", []int64{811, 813})
+	if err != nil {
+		tx.Rollback()
+		t.Fatal(err)
+	}
+	rows, err := sampleSelectionRows(ctx, tx, where, args, 1)
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err != nil || len(rows) != 1 || rows[0].page.IllustID != 810 || rows[0].page.PageIndex < 2 {
+		t.Fatalf("sample = %+v, %v, want an eligible page from artwork 810", rows, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE image_pages SET rowid=1500 WHERE illust_id=813`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Select(ctx, domain.SelectionRequest{SelectionRules: domain.SelectionRules{IncludeTags: [][]string{{"rare"}}}})
+	if err != nil || got.IllustID != 813 || got.Repeated {
+		t.Fatalf("rare selection = %+v, %v, want artwork 813", got, err)
+	}
+}
+
 func TestSelectRejectsStoredEmptyAllowLists(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)

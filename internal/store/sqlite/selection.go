@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	randv2 "math/rand/v2"
 	"strings"
 	"time"
 
@@ -39,11 +40,11 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 	}
 	defer tx.Rollback()
 
-	var artworkCount int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM artworks`).Scan(&artworkCount); err != nil {
+	var hasArtworks bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM artworks)`).Scan(&hasArtworks); err != nil {
 		return domain.SelectedPage{}, err
 	}
-	if artworkCount == 0 {
+	if !hasArtworks {
 		return domain.SelectedPage{}, domain.ErrCatalogEmpty
 	}
 
@@ -430,7 +431,16 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 		if len(counts) > 0 {
 			limit = 64
 		}
-		rows, err := selectionRows(ctx, tx, where, args, `random()`, limit)
+		var rows []selectionPage
+		if artistID == 0 {
+			rows, err = sampleSelectionRows(ctx, tx, where, args, limit)
+			if err != nil {
+				return selectionPage{}, err
+			}
+		}
+		if len(rows) < limit {
+			rows, err = selectionRows(ctx, tx, where, args, `random()`, limit)
+		}
 		if err != nil {
 			return selectionPage{}, err
 		}
@@ -546,7 +556,12 @@ func selectionWhere(rules domain.SelectionRules, artistID int64, accountID strin
 }
 
 func selectionArtistIDs(ctx context.Context, tx *sql.Tx, where string, args []any) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT a.artist_id FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` ORDER BY random() LIMIT 20`, args...)
+	// Stop at the first eligible page for each artist. Use the artist index
+	// because the global eligibility index would be scanned once per artist.
+	rows, err := tx.QueryContext(ctx, `SELECT ar.id FROM artists ar
+		WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND EXISTS (
+		SELECT 1 FROM artworks a INDEXED BY artworks_artist JOIN image_pages p ON p.illust_id=a.id
+		WHERE a.artist_id=ar.id AND `+where+`) ORDER BY random() LIMIT 20`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -562,8 +577,45 @@ func selectionArtistIDs(ctx context.Context, tx *sql.Tx, where string, args []an
 	return ids, rows.Err()
 }
 
+// sampleSelectionRows draws a uniform subset of row IDs. Deleted rows are
+// ignored and every candidate is filtered against the current transaction.
+// When fewer than limit pages qualify, the caller runs the exact query.
+func sampleSelectionRows(ctx context.Context, tx *sql.Tx, where string, args []any, limit int) ([]selectionPage, error) {
+	var first, last int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT MIN(rowid) FROM image_pages),0),
+		COALESCE((SELECT MAX(rowid) FROM image_pages),0)`).Scan(&first, &last); err != nil {
+		return nil, err
+	}
+	sampleSize := max(64, limit*16)
+	if first <= 0 || last-first < int64(sampleSize) {
+		return nil, nil
+	}
+
+	seen := make(map[int64]struct{}, sampleSize)
+	params := make([]any, 0, sampleSize+len(args)+1)
+	for len(seen) < sampleSize {
+		id := first + randv2.Int64N(last-first+1)
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		params = append(params, id)
+	}
+	params = append(params, args...)
+	params = append(params, limit)
+	query := `SELECT ` + selectionColumns + `
+		FROM image_pages p CROSS JOIN artworks a ON a.id=p.illust_id
+		CROSS JOIN artists ar ON ar.id=a.artist_id
+		WHERE p.rowid IN (` + placeholders(sampleSize) + `) AND ` + where + ` ORDER BY random() LIMIT ?`
+	return querySelectionRows(ctx, tx, query, params)
+}
+
 func selectionRows(ctx context.Context, tx *sql.Tx, where string, args []any, orderBy string, limit int) ([]selectionPage, error) {
 	query := selectionPageQuery(where, orderBy) + fmt.Sprintf(" LIMIT %d", limit)
+	return querySelectionRows(ctx, tx, query, args)
+}
+
+func querySelectionRows(ctx context.Context, tx *sql.Tx, query string, args []any) ([]selectionPage, error) {
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -580,8 +632,10 @@ func selectionRows(ctx context.Context, tx *sql.Tx, where string, args []any, or
 	return result, rows.Err()
 }
 
+const selectionColumns = `a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url`
+
 func selectionPageQuery(where, orderBy string) string {
-	query := `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
+	query := `SELECT ` + selectionColumns + `
 		FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE ` + where
 	if orderBy != "" {
 		query += ` ORDER BY ` + orderBy

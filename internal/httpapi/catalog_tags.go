@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
@@ -25,8 +27,52 @@ type catalogStatsStore interface {
 	CatalogStats(context.Context) (domain.CatalogStats, error)
 }
 
+const catalogStatsTTL = 30 * time.Second
+
+type catalogStatsCache struct {
+	mu         sync.Mutex
+	stats      domain.CatalogStats
+	validUntil time.Time
+	refreshing chan struct{}
+}
+
+func (c *catalogStatsCache) get(ctx context.Context, store catalogStatsStore) (domain.CatalogStats, error) {
+	for {
+		c.mu.Lock()
+		if time.Now().Before(c.validUntil) {
+			stats := c.stats
+			c.mu.Unlock()
+			return stats, nil
+		}
+		if pending := c.refreshing; pending != nil {
+			c.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return domain.CatalogStats{}, ctx.Err()
+			case <-pending:
+				continue
+			}
+		}
+		c.refreshing = make(chan struct{})
+		c.mu.Unlock()
+
+		stats, err := store.CatalogStats(ctx)
+
+		c.mu.Lock()
+		if err == nil {
+			c.stats = stats
+			c.validUntil = time.Now().Add(catalogStatsTTL)
+		}
+		close(c.refreshing)
+		c.refreshing = nil
+		c.mu.Unlock()
+		return stats, err
+	}
+}
+
 // RegisterLibrary adds the authenticated artist tag management routes.
 func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
+	var statsCache catalogStatsCache
 	protect := func(pattern string, handler http.HandlerFunc) { mux.Handle(pattern, auth.Middleware(handler)) }
 	protect("GET /admin/api/library/artists", func(w http.ResponseWriter, r *http.Request) {
 		q, parseErr := url.ParseQuery(r.URL.RawQuery)
@@ -111,7 +157,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			apiError(w, domain.ErrNotFound)
 			return
 		}
-		stats, err := statsStore.CatalogStats(r.Context())
+		stats, err := statsCache.get(r.Context(), statsStore)
 		if err != nil {
 			apiError(w, err)
 			return
