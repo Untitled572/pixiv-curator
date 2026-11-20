@@ -337,7 +337,7 @@ input[type=radio]{min-height:0;padding:0;border:0;box-shadow:none}
 .recommendation-content>.candidate-samples .preview-retry-hint{background:rgba(248,234,231,.94);color:#994a41}
 
 .library-review-section{position:relative}
-.library-review-section #reload-library-review{position:absolute;inset-block-start:11px;inset-inline-start:109px;min-height:44px;white-space:nowrap}
+.library-review-section #reload-library-review{position:absolute;inset-block-start:11px;inset-inline-end:11px;min-height:44px;white-space:nowrap}
 .library-review-section #library-review>summary{width:90px}
 .library-review-section #library-review:not([open])+#reload-library-review{display:none}
 .discovery-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
