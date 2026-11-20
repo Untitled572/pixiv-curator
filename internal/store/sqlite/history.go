@@ -43,7 +43,7 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 	}
 
 	offset := int64(page-1) * int64(pageSize)
-	query := `SELECT h.id,h.selected_at,h.illust_id,h.page_index,a.artist_id,ar.name,a.title,p.width,p.height,
+	query := `SELECT h.id,h.selected_at,h.illust_id,h.page_index,MAX(a.page_count,h.page_index+1),a.artist_id,ar.name,a.title,p.width,p.height,
 		CASE WHEN a.visible=1 AND ar.review_status<>'blocked' AND p.media_state='indexed' THEN 1 ELSE 0 END,p.original_url,a.rating,a.ai_status,COALESCE((SELECT json_group_array(t.display_name) FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id),'[]')
 		,COALESCE(f.value,'neutral')
 		FROM distribution_history h
@@ -63,7 +63,7 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 		var item domain.DistributionHistoryItem
 		var available int
 		var originalURL, rawTags string
-		if err = rows.Scan(&item.ID, &item.SelectedAt, &item.IllustID, &item.PageIndex, &item.ArtistID,
+		if err = rows.Scan(&item.ID, &item.SelectedAt, &item.IllustID, &item.PageIndex, &item.PageCount, &item.ArtistID,
 			&item.ArtistName, &item.Title, &item.Width, &item.Height, &available, &originalURL, &item.Rating, &item.AIStatus, &rawTags, &item.Feedback); err != nil {
 			return out, err
 		}

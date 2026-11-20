@@ -857,18 +857,19 @@
       const fragment = document.createDocumentFragment();
       for (const item of result.items || []) {
         const card = node("article", "history-card"); card.dataset.historyId = String(item.id);
+        const open = () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, pageCount: item.page_count, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags });
         const cover = node("button", "history-preview"); cover.type = "button"; cover.disabled = !item.available;
         if (item.available) {
           const image = node("img"); image.alt = item.title || "历史图片"; image.loading = "lazy"; image.decoding = "async";
           image.src = `/admin/api/previews/${encodeURIComponent(item.illust_id)}/${Number(item.page_index)}`;
           image.addEventListener("error", () => image.replaceWith(node("span", "cover-empty", "图片暂不可用")), { once: true }); cover.append(image);
-          cover.addEventListener("click", () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags }));
+          cover.addEventListener("click", open);
         } else cover.append(node("span", "cover-empty", "当前不可预览"));
         const title = node("h3", "artwork-title");
         if (item.available) {
           const titleButton = node("button", "artwork-title-button", item.title || "作品 " + item.illust_id);
           titleButton.type = "button"; titleButton.setAttribute("aria-label", "查看作品大图：" + (item.title || item.illust_id));
-          titleButton.addEventListener("click", () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags }));
+          titleButton.addEventListener("click", open);
           title.append(titleButton);
         } else title.textContent = item.title || "作品 " + item.illust_id;
         card.append(cover, title, node("p", "artwork-meta", (item.artist_name || "UID " + item.artist_id) + " · 第 " + (Number(item.page_index) + 1) + " 页"), node("p", "artwork-meta", formatTime(item.selected_at)));

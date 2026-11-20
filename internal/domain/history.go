@@ -10,6 +10,7 @@ type DistributionHistoryItem struct {
 	SelectedAt   int64    `json:"selected_at"`
 	IllustID     int64    `json:"illust_id,string"`
 	PageIndex    int      `json:"page_index"`
+	PageCount    int      `json:"page_count"`
 	ArtistID     int64    `json:"artist_id,string"`
 	ArtistName   string   `json:"artist_name"`
 	Title        string   `json:"title"`

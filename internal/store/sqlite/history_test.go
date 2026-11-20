@@ -20,7 +20,7 @@ func TestHistoryPaginationOrderingAvailabilityAndFixedURLs(t *testing.T) {
 	seedEligibleArtist(t, s, 2, "blocked")
 	seedEligibleArtist(t, s, 3, "approved")
 	seedSelectionArtwork(t, s, 101, 1, "safe", "non_ai", nil, 1)
-	seedSelectionArtwork(t, s, 102, 1, "r18", "ai", nil, 1)
+	seedSelectionArtwork(t, s, 102, 1, "r18", "ai", nil, 3)
 	seedSelectionArtwork(t, s, 201, 2, "safe", "non_ai", nil, 1)
 	seedSelectionArtwork(t, s, 301, 3, "safe", "non_ai", nil, 1)
 	if _, err := s.db.ExecContext(ctx, `UPDATE artworks SET visible=0 WHERE id=301`); err != nil {
@@ -29,15 +29,16 @@ func TestHistoryPaginationOrderingAvailabilityAndFixedURLs(t *testing.T) {
 	for i, record := range []struct {
 		id       string
 		illust   int64
+		page     int
 		selected int64
 	}{
 		{id: "record-a", illust: 101, selected: 100},
 		{id: "record-b", illust: 101, selected: 200},
-		{id: "record-c", illust: 102, selected: 200},
+		{id: "record-c", illust: 102, page: 1, selected: 200},
 		{id: "record-d", illust: 201, selected: 300},
 		{id: "record-e", illust: 301, selected: 300},
 	} {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,'preferred',?,0,?,?)`, record.id, record.illust, record.selected, fmt.Sprintf("request-%d", i)); err != nil {
+		if _, err := s.db.ExecContext(ctx, `INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,'preferred',?,?,?,?)`, record.id, record.illust, record.page, record.selected, fmt.Sprintf("request-%d", i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -59,7 +60,7 @@ func TestHistoryPaginationOrderingAvailabilityAndFixedURLs(t *testing.T) {
 	if second.Items[0].ID != "record-c" || !second.Items[0].Available || second.Items[1].ID != "record-b" || !second.Items[1].Available {
 		t.Fatalf("management eligibility or duplicate page identity failed: %+v", second.Items)
 	}
-	if second.Items[0].ThumbnailURL != "/admin/api/previews/102/0" || second.Items[0].FullURL != "/admin/api/previews/102/0?size=original" || second.Items[1].ThumbnailURL != "/admin/api/previews/101/0" || second.Items[1].FullURL != "/admin/api/previews/101/0?size=original" || second.Items[1].IllustID != 101 || second.Items[1].PageIndex != 0 {
+	if second.Items[0].PageIndex != 1 || second.Items[0].PageCount != 3 || second.Items[0].ThumbnailURL != "/admin/api/previews/102/1" || second.Items[0].FullURL != "/admin/api/previews/102/1?size=original" || second.Items[1].ThumbnailURL != "/admin/api/previews/101/0" || second.Items[1].FullURL != "/admin/api/previews/101/0?size=original" || second.Items[1].IllustID != 101 || second.Items[1].PageIndex != 0 || second.Items[1].PageCount != 1 {
 		t.Fatalf("history preview URL or fixed page identity=%+v", second.Items)
 	}
 	if third, err := s.History(ctx, 3, 2); err != nil || len(third.Items) != 1 || third.Items[0].ID != "record-a" {
