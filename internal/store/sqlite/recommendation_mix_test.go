@@ -6,6 +6,8 @@ import (
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/Untitled572/pixiv-curator/internal/recommend"
 )
 
 type recommendationMixTestRow struct {
@@ -116,9 +118,12 @@ func TestIndependentMixPrioritizesUniformThenRankingAndFreezesSpreadOrder(t *tes
 	var lastNormalScore float64 = 2
 	for pos, row := range first {
 		flags := row.components
-		score := flags["display_score"].(float64)
-		if score < 0 || score > 1 {
-			t.Fatalf("display score out of range: %v", score)
+		if flags["uniform_id"] == true {
+			if pos != len(first)-1 || flags["display_score"] != nil {
+				t.Fatalf("uniform candidate must be last and have no display score: %v", flags)
+			}
+		} else if score, ok := flags["display_score"].(float64); !ok || score < 0 || score > 1 {
+			t.Fatalf("invalid display score: %v", flags["display_score"])
 		}
 		if flags["exploration"] == true {
 			independent++
@@ -164,10 +169,10 @@ func TestIndependentMixPrioritizesUniformThenRankingAndFreezesSpreadOrder(t *tes
 	}
 }
 
-func TestIndependentMixUsesExactAvailable17To10To3CohortBudget(t *testing.T) {
+func TestIndependentMixUsesExactAvailable18To10To2CohortBudget(t *testing.T) {
 	s := openTestStore(t)
-	const run = "mix-17-10-3"
-	budget := `{"candidate_artists":30,"algorithm_artists":17,"ranking_artists":10,"exploration_artists":13,"uniform_sample_target":3,"library_adult_ratio":0.5,"independent_exploration":true}`
+	const run = "mix-18-10-2"
+	budget := `{"candidate_artists":30,"algorithm_artists":18,"ranking_artists":10,"exploration_artists":12,"uniform_sample_target":2,"library_adult_ratio":0.5,"independent_exploration":true}`
 	addRecommendationMixTestRun(t, s, run, budget, `{}`)
 	for i := int64(0); i < 20; i++ {
 		addRecommendationMixCandidate(t, s, run, 3800+i, 4800+i, "safe", 0.5, []string{"algorithm"}, "")
@@ -198,7 +203,7 @@ func TestIndependentMixUsesExactAvailable17To10To3CohortBudget(t *testing.T) {
 			algorithm++
 		}
 	}
-	if algorithm != 17 || ranking != 10 || uniform != 3 {
+	if algorithm != 18 || ranking != 10 || uniform != 2 {
 		t.Fatalf("actual cohorts algorithm=%d ranking=%d uniform=%d", algorithm, ranking, uniform)
 	}
 	var actualRaw string
@@ -206,8 +211,52 @@ func TestIndependentMixUsesExactAvailable17To10To3CohortBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	var actual map[string]int
-	if err := json.Unmarshal([]byte(actualRaw), &actual); err != nil || actual["algorithm"] != 17 || actual[independentRankingSource] != 10 || actual[independentUniformSource] != 3 {
+	if err := json.Unmarshal([]byte(actualRaw), &actual); err != nil || actual["algorithm"] != 18 || actual[independentRankingSource] != 10 || actual[independentUniformSource] != 2 {
 		t.Fatalf("actual source counts=%v err=%v", actual, err)
+	}
+}
+
+func TestRecommendationSourceShareKeepsContentSplitAndFillsShortages(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		related, other, want int
+	}{
+		{"both sources available", 8, 8, 11},
+		{"few related artists", 1, 9, 2},
+		{"few other candidates", 9, 1, 16},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var candidates []recommendationMixCandidate
+			for _, class := range []string{"adult", "safe"} {
+				for i := 0; i < tc.related+tc.other; i++ {
+					sources := []string{recommend.SourceRelatedArtwork}
+					if i < tc.related {
+						sources = append(sources, recommend.SourceRelatedArtist)
+					}
+					candidates = append(candidates, recommendationMixCandidate{
+						artistID: int64(len(candidates) + 1), class: class, weight: 1, sources: sources,
+					})
+				}
+			}
+			selected := selectRecommendationMixNormal(candidates, 18, 0.5, nil)
+			var related, adult int
+			seen := make(map[int64]bool)
+			for _, c := range selected {
+				if seen[c.artistID] {
+					t.Fatalf("duplicate artist %d", c.artistID)
+				}
+				seen[c.artistID] = true
+				if hasRecommendationMixSource(c.sources, recommend.SourceRelatedArtist) {
+					related++
+				}
+				if c.class == "adult" {
+					adult++
+				}
+			}
+			if len(selected) != 18 || related != tc.want || adult != 9 {
+				t.Fatalf("selected %d (related %d, adult %d), want 18 (related %d, adult 9)", len(selected), related, adult, tc.want)
+			}
+		})
 	}
 }
 

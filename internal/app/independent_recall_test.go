@@ -115,7 +115,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(run.Budget, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.CandidateArtists != 30 || plan.AlgorithmArtists != 17 || plan.RankingArtists != 10 || plan.UniformTarget != 3 || plan.ExplorationArtists != 13 || plan.IndependentLimit != 26 || len(plan.Queries) != 4 {
+	if plan.CandidateArtists != 30 || plan.AlgorithmArtists != 18 || plan.RankingArtists != 10 || plan.UniformTarget != 2 || plan.ExplorationArtists != 12 || plan.IndependentLimit != 24 || len(plan.Queries) != 4 {
 		t.Fatalf("frozen cohort budget=%+v", plan)
 	}
 	wantDate := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
@@ -137,7 +137,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	}(nil), client.queries...)
 	probeCalls := append([]int64(nil), client.artworkIDs...)
 	client.mu.Unlock()
-	if len(queryCalls) != 4 || len(probeCalls) != 3 {
+	if len(queryCalls) != 4 || len(probeCalls) != 2 {
 		t.Fatalf("ranking requests=%d uniform probes=%d", len(queryCalls), len(probeCalls))
 	}
 	for i, query := range queryCalls {
@@ -188,7 +188,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 		t.Fatal(err)
 	}
 	client.mu.Lock()
-	if len(client.queries) != 4 || len(client.artworkIDs) != 3 {
+	if len(client.queries) != 4 || len(client.artworkIDs) != 2 {
 		t.Fatalf("restart repeated a completed request: queries=%d probes=%d", len(client.queries), len(client.artworkIDs))
 	}
 	client.mu.Unlock()
@@ -205,11 +205,11 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	}
 
 	// Fill the algorithm pool through the same SQLite admission API, then run
-	// finalization to exercise the complete 17:10:3 source mix and display order.
+	// finalization to exercise the complete 18:10:2 source mix and display order.
 	algorithmArtists := map[int64]domain.Artist{}
 	algorithmSources := map[int64][]string{}
 	algorithmSamples := map[int64][]domain.Artwork{}
-	for i := int64(0); i < 17; i++ {
+	for i := int64(0); i < 18; i++ {
 		artistID := int64(50000) + i
 		artist, artistErr := pixiv.NormalizeArtist(rawArtist(artistID, fmt.Sprintf("algorithm-%d", i)))
 		if artistErr != nil {
@@ -267,7 +267,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(finalBudget["actual_source_counts"], &actual); err != nil {
 		t.Fatal(err)
 	}
-	if actual["algorithm"] != 17 || actual[independentRecallSource] != 10 || actual[independentUniformSource] != 3 {
+	if actual["algorithm"] != 18 || actual[independentRecallSource] != 10 || actual[independentUniformSource] != 2 {
 		t.Fatalf("actual admitted source counts=%v", actual)
 	}
 	if run, err = store.RecommendationRun(ctx, runID); err != nil {
@@ -281,14 +281,22 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 			t.Fatalf("display ordering drift at %d: %d != %d", i, first[i].ArtistID, second[i].ArtistID)
 		}
 		var components struct {
-			DisplayOrder int     `json:"display_order"`
-			DisplayScore float64 `json:"display_score"`
+			DisplayOrder int      `json:"display_order"`
+			DisplayScore *float64 `json:"display_score"`
+			UniformID    bool     `json:"uniform_id"`
 		}
 		if err = json.Unmarshal(first[i].Components, &components); err != nil {
 			t.Fatal(err)
 		}
-		if components.DisplayOrder != i || components.DisplayScore < 0 || components.DisplayScore > 1 {
+		if components.DisplayOrder != i || components.UniformID != (i >= 28) {
 			t.Fatalf("candidate %d display data=%+v", i, components)
+		}
+		if components.UniformID {
+			if components.DisplayScore != nil {
+				t.Fatalf("uniform candidate %d has a display score", i)
+			}
+		} else if components.DisplayScore == nil || *components.DisplayScore < 0 || *components.DisplayScore > 1 {
+			t.Fatalf("candidate %d has invalid display score", i)
 		}
 	}
 }

@@ -11,11 +11,14 @@ import (
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"github.com/Untitled572/pixiv-curator/internal/feedback"
+	"github.com/Untitled572/pixiv-curator/internal/recommend"
 )
 
 const (
-	independentRankingSource = "independent_ranking"
-	independentUniformSource = "independent_uniform_id"
+	independentRankingSource   = "independent_ranking"
+	independentUniformSource   = "independent_uniform_id"
+	relatedArtistShare         = 0.60
+	uniformRecommendationLimit = 2
 )
 
 type recommendationMixBudget struct {
@@ -44,6 +47,7 @@ type recommendationMixCarry struct {
 	score        float64
 	components   string
 	exploration  bool
+	uniformID    bool
 	displayScore float64
 }
 
@@ -143,7 +147,14 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 	actualCounts := map[string]int{"algorithm": 0, independentRankingSource: 0, independentUniformSource: 0}
 	// Uniform-ID samples get first claim on exploration slots. A row carrying
 	// both independent sources is one candidate and is counted only once.
-	uniformPick := chooseRecommendationMixUniform(uniform, min(b.UniformSampleTarget, targetIndependent))
+	carriedUniform := 0
+	for _, c := range carry {
+		if c.uniformID {
+			carriedUniform++
+		}
+	}
+	uniformSlots := min(b.UniformSampleTarget, max(0, uniformRecommendationLimit-carriedUniform))
+	uniformPick := chooseRecommendationMixUniform(uniform, uniformSlots)
 	for _, c := range uniformPick {
 		selectedIndependent = append(selectedIndependent, c)
 		selectedIDs[c.artistID] = true
@@ -186,20 +197,6 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 			actualCounts[independentRankingSource]++
 		}
 	}
-	fillSlots = b.CandidateArtists - len(selectedIndependent) - len(selectedNormal)
-	if fillSlots > 0 {
-		remainingIndependent := filterRecommendationMixCandidates(independent, selectedIDs)
-		moreIndependent := chooseRecommendationMixUniform(remainingIndependent, fillSlots)
-		selectedIndependent = append(selectedIndependent, moreIndependent...)
-		for _, c := range moreIndependent {
-			selectedIDs[c.artistID] = true
-			if hasRecommendationMixSource(c.sources, independentUniformSource) {
-				actualCounts[independentUniformSource]++
-			} else {
-				actualCounts[independentRankingSource]++
-			}
-		}
-	}
 
 	// Carryovers retain their previous relative order and all stored fields.
 	// New ordinary results stay score-ranked; independent results are inserted
@@ -211,24 +208,35 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 		return selectedNormal[i].score > selectedNormal[j].score
 	})
 	ordered := make([]recommendationMixEntry, 0, len(carry)+len(selectedNormal)+len(selectedIndependent))
+	var uniformEntries []recommendationMixEntry
 	for _, c := range carry {
-		ordered = append(ordered, recommendationMixEntry{artistID: c.artistID, score: c.score, components: c.components, carryover: true, exploration: c.exploration, displayScore: c.displayScore})
+		entry := recommendationMixEntry{artistID: c.artistID, score: c.score, components: c.components, carryover: true, exploration: c.exploration, uniformID: c.uniformID, displayScore: c.displayScore}
+		if c.uniformID {
+			uniformEntries = append(uniformEntries, entry)
+		} else {
+			ordered = append(ordered, entry)
+		}
 	}
 	for _, c := range selectedNormal {
 		ordered = append(ordered, recommendationMixEntry{artistID: c.artistID, score: c.score, components: c.components})
 	}
-	rand.Shuffle(len(selectedIndependent), func(i, j int) {
-		selectedIndependent[i], selectedIndependent[j] = selectedIndependent[j], selectedIndependent[i]
+	rankingSelected := selectedIndependent[len(uniformPick):]
+	rand.Shuffle(len(rankingSelected), func(i, j int) {
+		rankingSelected[i], rankingSelected[j] = rankingSelected[j], rankingSelected[i]
 	})
-	for _, c := range selectedIndependent {
+	for _, c := range rankingSelected {
 		at := rand.IntN(len(ordered) + 1)
 		ordered = append(ordered, recommendationMixEntry{})
 		copy(ordered[at+1:], ordered[at:])
 		ordered[at] = recommendationMixEntry{artistID: c.artistID, score: c.score, components: c.components, exploration: true}
 	}
 	setRecommendationMixDisplayScores(ordered)
+	ordered = append(ordered, uniformEntries...)
+	for _, c := range uniformPick {
+		ordered = append(ordered, recommendationMixEntry{artistID: c.artistID, components: c.components, exploration: true, uniformID: true})
+	}
 	for i := range ordered {
-		component, marshalErr := mergeRecommendationMixComponents(ordered[i].components, i, ordered[i].score, ordered[i].exploration, ordered[i].carryover, ordered[i].displayScore)
+		component, marshalErr := mergeRecommendationMixComponents(ordered[i], i)
 		if marshalErr != nil {
 			return marshalErr
 		}
@@ -402,6 +410,7 @@ type recommendationMixEntry struct {
 	score        float64
 	components   string
 	exploration  bool
+	uniformID    bool
 	carryover    bool
 	displayScore float64
 }
@@ -436,48 +445,45 @@ func selectRecommendationMixNormal(candidates []recommendationMixCandidate, slot
 	safeSlots := min(len(safe), classSlots-adultSlots)
 	selected := make([]recommendationMixCandidate, 0, min(slots, len(candidates)))
 	chosen := make(map[int64]bool)
-	take := func(pool []recommendationMixCandidate, n int) []recommendationMixCandidate {
-		got := chooseRecommendationMixWeighted(pool, n)
-		for _, c := range got {
+	take := func(pool []recommendationMixCandidate, n int) {
+		n = min(n, len(pool))
+		// Round the cumulative quota to avoid losing a slot in each class.
+		before := math.Round(float64(len(selected)) * relatedArtistShare)
+		after := math.Round(float64(len(selected)+n) * relatedArtistShare)
+		for _, c := range chooseRecommendationMixBySource(pool, n, int(after-before)) {
 			chosen[c.artistID] = true
 			selected = append(selected, c)
 		}
-		return got
 	}
-	pickedAdult := take(adult, adultSlots)
-	pickedSafe := take(safe, safeSlots)
-	_ = pickedAdult
-	_ = pickedSafe
+	take(adult, adultSlots)
+	take(safe, safeSlots)
 	take(unknown, unknownSlots)
-	if len(selected) < slots {
-		remaining := filterRecommendationMixCandidates(adult, chosen)
-		more := chooseRecommendationMixWeighted(remaining, slots-len(selected))
-		for _, c := range more {
-			chosen[c.artistID] = true
-			selected = append(selected, c)
+	for _, pool := range [][]recommendationMixCandidate{adult, safe, unknown} {
+		if len(selected) == slots {
+			break
 		}
-	}
-	if len(selected) < slots {
-		remaining := filterRecommendationMixCandidates(safe, chosen)
-		more := chooseRecommendationMixWeighted(remaining, slots-len(selected))
-		for _, c := range more {
-			chosen[c.artistID] = true
-			selected = append(selected, c)
-		}
-	}
-	if len(selected) < slots {
-		remaining := filterRecommendationMixCandidates(unknown, chosen)
-		more := chooseRecommendationMixWeighted(remaining, slots-len(selected))
-		for _, c := range more {
-			chosen[c.artistID] = true
-			selected = append(selected, c)
-		}
-	}
-	if len(selected) < slots {
-		more := chooseRecommendationMixWeighted(filterRecommendationMixCandidates(candidates, chosen), slots-len(selected))
-		selected = append(selected, more...)
+		take(filterRecommendationMixCandidates(pool, chosen), slots-len(selected))
 	}
 	return selected
+}
+
+// Keep the content class allocation and divide its slots between sources.
+// Related artist candidates with additional sources count only once.
+func chooseRecommendationMixBySource(candidates []recommendationMixCandidate, slots, relatedTarget int) []recommendationMixCandidate {
+	if slots <= 0 {
+		return nil
+	}
+	var related, other []recommendationMixCandidate
+	for _, c := range candidates {
+		if hasRecommendationMixSource(c.sources, recommend.SourceRelatedArtist) {
+			related = append(related, c)
+		} else {
+			other = append(other, c)
+		}
+	}
+	relatedSlots := min(len(related), max(relatedTarget, slots-len(other)))
+	selected := chooseRecommendationMixWeighted(related, relatedSlots)
+	return append(selected, chooseRecommendationMixWeighted(other, slots-relatedSlots)...)
 }
 
 func chooseRecommendationMixUniform(candidates []recommendationMixCandidate, count int) []recommendationMixCandidate {
@@ -544,12 +550,14 @@ func readRecommendationMixCarry(ctx context.Context, tx *sql.Tx, runID string) (
 		}
 		var previous struct {
 			Exploration  bool     `json:"exploration"`
+			UniformID    bool     `json:"uniform_id"`
 			DisplayScore *float64 `json:"display_score"`
 		}
 		if err = json.Unmarshal([]byte(c.components), &previous); err != nil {
 			return nil, err
 		}
 		c.exploration = previous.Exploration
+		c.uniformID = previous.UniformID
 		c.displayScore = clampRecommendationMixScore(c.score)
 		if previous.DisplayScore != nil {
 			c.displayScore = clampRecommendationMixScore(*previous.DisplayScore)
@@ -559,24 +567,23 @@ func readRecommendationMixCarry(ctx context.Context, tx *sql.Tx, runID string) (
 	return out, rows.Err()
 }
 
-func mergeRecommendationMixComponents(raw string, order int, score float64, exploration, carryover bool, displayScore float64) (string, error) {
+func mergeRecommendationMixComponents(entry recommendationMixEntry, order int) (string, error) {
 	var fields map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
+	if err := json.Unmarshal([]byte(entry.components), &fields); err != nil {
 		return "", err
 	}
 	if fields == nil {
 		fields = make(map[string]json.RawMessage)
 	}
-	orderJSON, _ := json.Marshal(order)
-	fields["display_order"] = orderJSON
-	if carryover {
-		return stringMustJSON(fields)
+	fields["display_order"], _ = json.Marshal(order)
+	if !entry.carryover {
+		fields["exploration"], _ = json.Marshal(entry.exploration)
 	}
-	fields["exploration"], _ = json.Marshal(exploration)
-	if exploration {
-		fields["display_score"], _ = json.Marshal(clampRecommendationMixScore(displayScore))
-	} else {
-		fields["display_score"], _ = json.Marshal(clampRecommendationMixScore(score))
+	if entry.uniformID {
+		fields["uniform_id"] = json.RawMessage("true")
+		delete(fields, "display_score")
+	} else if !entry.carryover {
+		fields["display_score"], _ = json.Marshal(clampRecommendationMixScore(entry.displayScore))
 	}
 	return stringMustJSON(fields)
 }

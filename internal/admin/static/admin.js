@@ -682,8 +682,12 @@
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
     const score = Number(item.components?.display_score ?? item.score);
     const directedRandom = Array.isArray(item.sources) && item.sources.includes("directed_random");
-    const scoreBadge = node("span", "score-badge", directedRandom ? "定向随机" : Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
-    scoreBadge.title = directedRandom ? "来自定向随机候选，不表示模型评分" : "仅用于候选排序参考，不代表喜欢概率"; heading.append(scoreBadge); content.append(heading);
+    if (!item.components?.uniform_id) {
+      const scoreBadge = node("span", "score-badge", directedRandom ? "定向随机" : Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
+      scoreBadge.title = directedRandom ? "来自定向随机候选，不表示模型评分" : "仅用于候选排序参考，不代表喜欢概率";
+      heading.append(scoreBadge);
+    }
+    content.append(heading);
     const tags = [item.tags, artist.tags, item.components?.matched_tags].find((value) => Array.isArray(value) && value.length) || [];
     const chips = node("div", "reason-list");
     if (tags.length) tags.slice(0, 8).forEach((tag) => chips.append(node("span", "reason-chip", tag)));
@@ -835,15 +839,21 @@
   $("#artwork-dialog").addEventListener("cancel", closeArtistDetails);
   $("#artwork-dialog").addEventListener("close", () => { if (!$("#artwork-dialog").open) closeArtistDetails(); });
 
-  async function loadHistory() {
+  const historyJump = $("#history-page-jump");
+  const historyPageNumber = $("#history-page-number");
+  async function loadHistory(page = historyPage) {
     historyController?.abort(); const controller = new AbortController(); historyController = controller;
     const list = $("#history-list"); list.setAttribute("aria-busy", "true");
+    const jumpButton = historyJump.querySelector("button");
     $("#previous-history").disabled = true; $("#next-history").disabled = true;
+    historyPageNumber.disabled = jumpButton.disabled = true;
     try {
-      const result = await api("/admin/api/history?" + new URLSearchParams({ page: String(historyPage), limit: "24" }), { signal: controller.signal });
+      const result = await api("/admin/api/history?" + new URLSearchParams({ page: String(page), limit: "24" }), { signal: controller.signal });
       if (controller.signal.aborted || activeTab !== "history") return;
-      historyPages = Number(result.total_pages) || 0;
-      if (historyPages && historyPage > historyPages) { historyPage = historyPages; return loadHistory(); }
+      const totalPages = Number(result.total_pages) || 0;
+      if (totalPages && page > totalPages) return loadHistory(totalPages);
+      historyPages = totalPages;
+      historyPage = totalPages ? page : 1;
       const fragment = document.createDocumentFragment();
       for (const item of result.items || []) {
         const card = node("article", "history-card"); card.dataset.historyId = String(item.id);
@@ -884,11 +894,25 @@
       list.replaceChildren(fragment);
       $("#history-page-status").textContent = "共 " + (result.total || 0) + " 条 · " + (historyPages ? "第 " + historyPage + " / " + historyPages + " 页" : "暂无记录");
     } catch (error) { if (!controller.signal.aborted) { report(error, "读取历史"); if (!list.querySelector(".history-card")) list.replaceChildren(node("p", "empty-cell", "历史暂时无法读取。")); } }
-    finally { if (!controller.signal.aborted) { list.setAttribute("aria-busy", "false"); $("#previous-history").disabled = historyPage <= 1; $("#next-history").disabled = historyPage >= historyPages; } }
+    finally {
+      if (!controller.signal.aborted) {
+        list.setAttribute("aria-busy", "false");
+        $("#previous-history").disabled = historyPage <= 1;
+        $("#next-history").disabled = historyPage >= historyPages;
+        historyPageNumber.value = String(historyPage);
+        historyPageNumber.max = String(Math.max(1, historyPages));
+        historyPageNumber.disabled = jumpButton.disabled = !historyPages;
+      }
+    }
   }
-  $("#reload-history").addEventListener("click", loadHistory);
-  $("#previous-history").addEventListener("click", () => { if (historyPage > 1) { historyPage--; loadHistory(); } });
-  $("#next-history").addEventListener("click", () => { if (historyPage < historyPages) { historyPage++; loadHistory(); } });
+  $("#reload-history").addEventListener("click", () => loadHistory());
+  $("#previous-history").addEventListener("click", () => { if (historyPage > 1) loadHistory(historyPage - 1); });
+  $("#next-history").addEventListener("click", () => { if (historyPage < historyPages) loadHistory(historyPage + 1); });
+  historyJump.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const page = historyPageNumber.valueAsNumber;
+    if (!historyPageNumber.disabled && Number.isInteger(page) && page >= 1 && page <= historyPages) loadHistory(page);
+  });
   async function loadStats() {
     const list = $("#stats-grid"); list.setAttribute("aria-busy", "true");
     $("#stats-updated").textContent = "正在读取…";

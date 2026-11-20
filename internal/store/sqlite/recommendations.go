@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"github.com/Untitled572/pixiv-curator/internal/recommend"
 )
 
 func checkRecommendationJobLease(ctx context.Context, tx *sql.Tx, j domain.Job) error {
@@ -68,7 +69,7 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 	if err != nil {
 		return "", "", err
 	}
-	budget, err = freezeExplorationPlan(budget)
+	budget, err = freezeExplorationPlan(budget, 0)
 	if err != nil {
 		return "", "", err
 	}
@@ -212,7 +213,16 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 			ids = append(ids, id)
 		}
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	sort.Slice(ids, func(i, j int) bool {
+		if plan.Independent {
+			left := hasRecommendationMixSource(sources[ids[i]], recommend.SourceRelatedArtist)
+			right := hasRecommendationMixSource(sources[ids[j]], recommend.SourceRelatedArtist)
+			if left != right {
+				return left
+			}
+		}
+		return ids[i] < ids[j]
+	})
 	sort.Slice(independentIDs, func(i, j int) bool {
 		a, b := recommendationAdmissionHash(runID, independentIDs[i]), recommendationAdmissionHash(runID, independentIDs[j])
 		if a == b {

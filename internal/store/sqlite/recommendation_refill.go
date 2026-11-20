@@ -176,8 +176,9 @@ func (s *Store) StartRecommendationRefill(ctx context.Context, j domain.Job, bud
 	if latestID != payload.RunID || state != "succeeded" {
 		return completeRefillNoop(ctx, tx, j)
 	}
-	var pending int
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM recommendations r JOIN artists a ON a.id=r.artist_id WHERE r.run_id=? AND a.review_status='pending'`, latestID).Scan(&pending); err != nil {
+	var pending, carriedUniform int
+	if err = tx.QueryRowContext(ctx, `SELECT count(*), count(*) FILTER (WHERE json_extract(r.components_json,'$.uniform_id')=1)
+		FROM recommendations r JOIN artists a ON a.id=r.artist_id WHERE r.run_id=? AND a.review_status='pending'`, latestID).Scan(&pending, &carriedUniform); err != nil {
 		return err
 	}
 	if pending > 30 {
@@ -216,7 +217,7 @@ func (s *Store) StartRecommendationRefill(ctx context.Context, j domain.Job, bud
 	if err != nil {
 		return err
 	}
-	budget, err = freezeExplorationPlan(budget)
+	budget, err = freezeExplorationPlan(budget, carriedUniform)
 	if err != nil {
 		return err
 	}

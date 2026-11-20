@@ -12,7 +12,7 @@ import (
 
 const independentSource = "independent_ranking"
 
-func freezeExplorationPlan(raw json.RawMessage) (json.RawMessage, error) {
+func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMessage, error) {
 	var b map[string]json.RawMessage
 	if json.Unmarshal(raw, &b) != nil || b == nil {
 		return nil, domain.ErrInvalid
@@ -27,7 +27,7 @@ func freezeExplorationPlan(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, domain.ErrInvalid
 	}
 	rankingTarget := int(float64(candidates)*10/30 + 0.5)
-	uniformTarget := int(float64(candidates)*3/30 + 0.5)
+	uniformTarget := min(int(float64(candidates)*2/30+0.5), max(0, uniformRecommendationLimit-carriedUniform))
 	algorithmTarget := candidates - rankingTarget - uniformTarget
 	explorationTarget := rankingTarget + uniformTarget
 	set := func(key string, value any) error {
