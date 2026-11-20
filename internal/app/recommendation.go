@@ -8,6 +8,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/recommend"
 	"sort"
+	"strings"
 )
 
 type RecommendationRepository interface {
@@ -82,10 +83,10 @@ func (s *Recommender) CandidatesFiltered(ctx context.Context, runID, contentRati
 }
 
 func validRecommendationRating(value string) bool {
-	return value == "" || value == "all" || value == "adult" || value == "safe" || value == "unknown"
+	return value == "" || value == "all" || value == "adult" || value == "safe" || value == "unknown" || value == "safe_or_unknown" || value == "adult_or_unknown"
 }
 func validRecommendationAI(value string) bool {
-	return value == "" || value == "all" || value == "ai" || value == "non_ai" || value == "unknown"
+	return value == "" || value == "all" || value == "ai" || value == "non_ai" || value == "unknown" || value == "non_ai_or_unknown" || value == "ai_or_unknown"
 }
 
 func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
@@ -527,13 +528,21 @@ func (s *Recommender) LatestFiltered(ctx context.Context, contentRating, aiType 
 	return run, filterRecommendationCandidates(items, contentRating, aiType), nil
 }
 
+func matchesRecommendationCategory(filter, actual string) bool {
+	if filter == "" || filter == "all" || filter == actual {
+		return true
+	}
+	known, includesUnknown := strings.CutSuffix(filter, "_or_unknown")
+	return includesUnknown && (actual == known || actual == "unknown")
+}
+
 func filterRecommendationCandidates(items []domain.Recommendation, contentRating, aiType string) []domain.Recommendation {
 	if (contentRating == "" || contentRating == "all") && (aiType == "" || aiType == "all") {
 		return items
 	}
 	filtered := make([]domain.Recommendation, 0, len(items))
 	for _, item := range items {
-		if (contentRating == "" || contentRating == "all" || item.ContentRating == contentRating) && (aiType == "" || aiType == "all" || item.AIStatus == aiType) {
+		if matchesRecommendationCategory(contentRating, item.ContentRating) && matchesRecommendationCategory(aiType, item.AIStatus) {
 			filtered = append(filtered, item)
 		}
 	}

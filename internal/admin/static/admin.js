@@ -376,6 +376,10 @@
   $("#library-account").addEventListener("change", () => loadLibrary(true));
   $("#library-collection").addEventListener("change", () => loadLibrary(true));
 
+  function matchesRecommendationCategory(filter, actual) {
+    if (filter === "all" || filter === actual) return true;
+    return filter.endsWith("_or_unknown") && (actual === "unknown" || actual === filter.slice(0, -"_or_unknown".length));
+  }
   function recommendationQuery(runID = "") {
     const query = new URLSearchParams({ content_rating: $("#recommendation-rating").value, ai_type: $("#recommendation-ai").value });
     if (runID) query.set("run_id", runID);
@@ -564,7 +568,7 @@
           recommendationPendingID = recommendationRunID; recommendationRenderedKey = "";
         }
         if (!list.querySelector(".recommendation-card")) {
-          const carried = (result.items || []).filter((item) => item.components?.carryover && ($("#recommendation-rating").value === "all" || item.content_rating === $("#recommendation-rating").value) && ($("#recommendation-ai").value === "all" || item.ai_status === $("#recommendation-ai").value));
+          const carried = (result.items || []).filter((item) => item.components?.carryover && matchesRecommendationCategory($("#recommendation-rating").value, item.content_rating) && matchesRecommendationCategory($("#recommendation-ai").value, item.ai_status));
           if (carried.length) {
             recommendationPreviewController?.abort();
             const previewController = new AbortController(); recommendationPreviewController = previewController;
@@ -579,7 +583,7 @@
         list.replaceChildren(node("p", "empty-cell", run.state === "paused_auth" ? "请先在设置中检查账号，恢复任务后再查看。" : "本轮发现未完成，可以稍后重新开始。")); return;
       }
       const rating = $("#recommendation-rating").value, ai = $("#recommendation-ai").value;
-      const items = (Array.isArray(result.items) ? result.items : []).filter((item) => (rating === "all" || item.content_rating === rating) && (ai === "all" || item.ai_status === ai));
+      const items = (Array.isArray(result.items) ? result.items : []).filter((item) => matchesRecommendationCategory(rating, item.content_rating) && matchesRecommendationCategory(ai, item.ai_status));
       const key = JSON.stringify([run.id, recommendationQuery().toString(), items]);
       if (key === recommendationRenderedKey) { startRecommendationPolling(30000); return; }
       recommendationPreviewController?.abort();

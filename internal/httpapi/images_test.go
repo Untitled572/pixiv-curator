@@ -276,4 +276,16 @@ func TestSelectionQueryUnknownIsDistinctFromAllKnown(t *testing.T) {
 			t.Fatal("all-known silently enabled unknown")
 		}
 	}
+	for _, tc := range []struct {
+		query       string
+		ratings, ai []string
+	}{
+		{"r18=safe_or_unknown&ai_type=ai_or_unknown", []string{"safe", "unknown"}, []string{"ai", "unknown"}},
+		{"r18=adult_or_unknown&ai_type=non_ai_or_unknown", []string{"r18", "r18g", "unknown"}, []string{"non_ai", "unknown"}},
+	} {
+		got, err := selectionQuery(httptest.NewRequest("GET", "/random?"+tc.query, nil))
+		if err != nil || !reflect.DeepEqual(got.AllowedRatings, tc.ratings) || !reflect.DeepEqual(got.AllowedAI, tc.ai) {
+			t.Fatalf("%s mapping=%+v err=%v", tc.query, got, err)
+		}
+	}
 }

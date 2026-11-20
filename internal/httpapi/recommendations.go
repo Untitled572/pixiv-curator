@@ -5,7 +5,6 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth) {
@@ -89,13 +88,8 @@ func recommendationQuery(raw string, needRun bool) (url.Values, error) {
 	if needRun && len(q["run_id"]) != 1 {
 		return nil, domain.ErrInvalid
 	}
-	if values, ok := q["content_rating"]; ok {
-		if len(values) != 1 || strings.TrimSpace(values[0]) != values[0] || (values[0] != "all" && values[0] != "adult" && values[0] != "safe" && values[0] != "unknown") {
-			return nil, domain.ErrInvalid
-		}
-	}
-	if values, ok := q["ai_type"]; ok {
-		if len(values) != 1 || strings.TrimSpace(values[0]) != values[0] || (values[0] != "all" && values[0] != "ai" && values[0] != "non_ai" && values[0] != "unknown") {
+	for _, key := range []string{"content_rating", "ai_type"} {
+		if q.Has(key) && q.Get(key) == "" {
 			return nil, domain.ErrInvalid
 		}
 	}

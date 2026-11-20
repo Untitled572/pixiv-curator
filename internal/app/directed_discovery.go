@@ -101,10 +101,11 @@ func (s *Recommender) StartDirected(ctx context.Context, options DirectedDiscove
 }
 
 func (in DirectedDiscovery) matches(work domain.Artwork) bool {
-	if in.Rating == "safe" && work.Rating != "safe" ||
-		in.Rating == "adult" && work.Rating != "r18" && work.Rating != "r18g" ||
-		in.Rating == "unknown" && work.Rating != "unknown" ||
-		in.AI != "all" && work.AIStatus != in.AI {
+	rating := work.Rating
+	if rating == "r18" || rating == "r18g" {
+		rating = "adult"
+	}
+	if !matchesRecommendationCategory(in.Rating, rating) || !matchesRecommendationCategory(in.AI, work.AIStatus) {
 		return false
 	}
 	for _, required := range in.Tags {

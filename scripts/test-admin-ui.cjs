@@ -287,10 +287,15 @@ const server = http.createServer((req, res) => {
       if (width === 1440) await page.screenshot({ path: path.join(root, "data", "recommendation-layout-desktop.png"), fullPage: true });
       else await page.screenshot({ path: path.join(root, "data", "recommendation-layout-mobile.png"), fullPage: true });
     }
-    await page.locator("#recommendation-rating").selectOption("unknown");
-    await page.locator("#recommendation-ai").selectOption("unknown");
+    await page.locator("#recommendation-rating").selectOption("safe_or_unknown");
+    await page.locator("#recommendation-ai").selectOption("ai_or_unknown");
     await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
     assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["未知分类"]);
+    await page.locator("#recommendation-ai").selectOption("non_ai_or_unknown");
+    await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 2);
+    assert.deepEqual(await page.locator(".recommendation-card .candidate-name").allTextContents(), ["全年龄非 AI", "未知分类"]);
+    await page.locator("#recommendation-ai").selectOption("ai_or_unknown");
+    await page.waitForFunction(() => document.querySelectorAll(".recommendation-card").length === 1);
     const unknownRequest = hits.findLast((u) => u === "/admin/api/recommendation-runs/latest");
     assert.ok(unknownRequest, "result reads must remain unfiltered; filtering happens in the browser");
 	await page.locator(".recommendation-card").first().evaluate((card) => { window.__originalRecommendationCard = card; });
@@ -315,8 +320,8 @@ const server = http.createServer((req, res) => {
     await page.locator("#recommendation-ai").selectOption("non_ai");
 	await page.waitForFunction(() => document.querySelector("#recommendation-list .empty-cell")?.textContent.includes("没有带代表作的候选"));
     assert.equal(await page.locator(".recommendation-cover").count(), 0, "empty recommendation layout must not render a hero cover");
-	await page.locator("#recommendation-rating").selectOption("unknown");
-	await page.locator("#recommendation-ai").selectOption("unknown");
+	await page.locator("#recommendation-rating").selectOption("safe_or_unknown");
+	await page.locator("#recommendation-ai").selectOption("ai_or_unknown");
 	await page.waitForFunction(() => document.querySelector(".recommendation-card .candidate-name")?.textContent === "未知分类");
 	const beforeNewRunPreviews = hits.filter((hit) => /^\/admin\/api\/previews\/1000[0-9]+/.test(hit)).length;
 	await page.locator("#start-recommendations").click();
@@ -551,11 +556,11 @@ const server = http.createServer((req, res) => {
     assert.match(hits.findLast((u) => u.startsWith("/random?")), /format=json/);
     assert.equal(page.context().pages().length, pagesBeforeJSONTest, "JSON mode should not open a new tab");
     assert.equal(hits.some((u) => u === "/mock-image.png" || /\/random\?[^ ]*format=image/.test(u)), false, "JSON test should not request image bytes");
-    await page.locator("#api-rating").selectOption("unknown");
-    await page.locator("#api-ai").selectOption("unknown");
+    await page.locator("#api-rating").selectOption("adult_or_unknown");
+    await page.locator("#api-ai").selectOption("non_ai_or_unknown");
     let apiURL = new URL(await page.locator("#api-url").inputValue());
-    assert.equal(apiURL.searchParams.get("r18"), "unknown");
-    assert.equal(apiURL.searchParams.get("ai_type"), "unknown");
+    assert.equal(apiURL.searchParams.get("r18"), "adult_or_unknown");
+    assert.equal(apiURL.searchParams.get("ai_type"), "non_ai_or_unknown");
     await page.locator("#api-delivery").selectOption("original");
     apiURL = new URL(await page.locator("#api-url").inputValue());
     assert.equal(apiURL.searchParams.get("delivery"), "original");

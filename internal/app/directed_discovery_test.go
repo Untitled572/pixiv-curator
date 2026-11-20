@@ -50,6 +50,7 @@ func (c *directedTestClient) ArtistArtworks(_ context.Context, id int64, _ strin
 		return pixiv.ArtworkPage{Artworks: []pixiv.RawArtwork{first, second}}, nil
 	}
 	third := directedArtwork(id*10+3, id, "original", "scenery")
+	third.XRestrict, third.IllustAIType = nil, nil
 	otherTag := directedArtwork(id*10+4, id, "original")
 	adult := directedArtwork(id*10+5, id, "original", "scenery")
 	r18 := 1
@@ -80,7 +81,7 @@ func TestDirectedDiscoveryAppliesConditionsBeforeShowingCandidates(t *testing.T)
 	defer store.Close()
 	client := &directedTestClient{fakeRecommendationClient: newFakeRecommendationClient()}
 	service := NewRecommender(store, client)
-	opts := DirectedDiscovery{Tags: []string{"original", "scenery"}, Rating: "safe", AI: "non_ai", Orientation: "landscape"}
+	opts := DirectedDiscovery{Tags: []string{"original", "scenery"}, Rating: "safe_or_unknown", AI: "non_ai_or_unknown", Orientation: "landscape"}
 	id, _, err := service.StartDirected(ctx, opts)
 	if err != nil {
 		t.Fatal(err)

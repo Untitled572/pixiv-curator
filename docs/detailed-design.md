@@ -76,7 +76,7 @@ v0.3.0 默认每轮30位：17位算法、10位排行榜随机、3位随机ID探�
 
 ## 发现画师筛选
 
-GET /admin/api/recommendation-runs/latest 与 GET /admin/api/recommendations?run_id=... 可组合 content_rating=all/adult/safe/unknown、ai_type=all/ai/non_ai/unknown，均默认 all。严格拒绝重复、未知、非法查询参数。筛选只读取当前候选，不创建新任务、不批准画师，不受供图偏好影响。
+GET /admin/api/recommendation-runs/latest 与 GET /admin/api/recommendations?run_id=... 可组合 content_rating=all/adult/safe/unknown/safe_or_unknown/adult_or_unknown、ai_type=all/ai/non_ai/unknown/non_ai_or_unknown/ai_or_unknown，均默认 all。严格拒绝重复、未知、非法查询参数。筛选只读取当前候选，不创建新任务、不批准画师，不受供图偏好影响。
 
 Recommendation 返回 content_rating、ai_status 及各类样本计数，依据该候选明确列出的 sample_illust_ids（最多 4 件）对应作品：
 - 任一 R18/R18G 样本即为 adult，任一 AI 样本即为 ai。
@@ -145,7 +145,7 @@ SQLite旧库首次升级会重建为增量回收模式，需要额外临时磁�
 
 ## 定向发现与整理轮次（2026-11-18）
 
-管理页新增 POST /admin/api/recommendations/directed。请求字段 tags、rating、ai、orientation 至少指定一项条件，最多 5 个标签。带标签时按第一个标签搜索 Pixiv，作品须匹配全部标签。未指定标签时随机抽取历史榜单。仅从本轮有权限取得的作品筛选，候选最多 30 位，带标签最多 16 页搜索结果，无标签最多 24 页跨日期的较浅榜单。凑满后停止；整批最多 160 次请求，包括方向检查、预览补齐与 OAuth 相关请求，遵守既有限速与冷却。条件较窄或预算用尽时按实际匹配数量返回。年龄和 AI 条件应用于推荐预览作品，未知保持独立。主要方向按画师近期最多 8 件尺寸明确的有效作品首图判断，至少需要 2 件且符合方向的样本须超过半数。边长比不超过 1.1 归为方图。每位画师最多展示 3 件不同作品，搜索样本不足时最多读取一页近期作品补齐，需要判断方向时复用同一页。补齐作品须匹配标签、分级、AI 和作品方向条件。定向批次单独随机排序并保留续跑进度，人工批准之前仍为待审；自动补池不混入普通推荐。
+管理页新增 POST /admin/api/recommendations/directed。请求字段 tags、rating、ai、orientation 至少指定一项条件，最多 5 个标签。带标签时按第一个标签搜索 Pixiv，作品须匹配全部标签。未指定标签时随机抽取历史榜单。仅从本轮有权限取得的作品筛选，候选最多 30 位，带标签最多 16 页搜索结果，无标签最多 24 页跨日期的较浅榜单。凑满后停止；整批最多 160 次请求，包括方向检查、预览补齐与 OAuth 相关请求，遵守既有限速与冷却。条件较窄或预算用尽时按实际匹配数量返回。年龄和 AI 条件应用于推荐预览作品，可选择已知类别与未知的并集。未知仍保持独立。主要方向按画师近期最多 8 件尺寸明确的有效作品首图判断，至少需要 2 件且符合方向的样本须超过半数。边长比不超过 1.1 归为方图。每位画师最多展示 3 件不同作品，搜索样本不足时最多读取一页近期作品补齐，需要判断方向时复用同一页。补齐作品须匹配标签、分级、AI 和作品方向条件。定向批次单独随机排序并保留续跑进度，人工批准之前仍为待审；自动补池不混入普通推荐。
 
 图库整理默认展开，画师列表折叠且按需查询。GET /admin/api/library/review 读取当前批次，首次生成最多 6 位。POST /admin/api/library/review/next 按当前 round 推进，POST /admin/api/library/artists/{id}/keep 按 round 标记本轮保留，两个请求都要求管理鉴权和轮次校验。保留及换组时未移出的画师在随后 50 轮不进入候选，刷新和重启保留当前批次与标记。候选不足时可出现空组。
 

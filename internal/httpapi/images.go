@@ -287,6 +287,10 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			out.AllowedRatings = []string{"r18", "r18g"}
 		case "unknown":
 			out.AllowedRatings = []string{"unknown"}
+		case "safe_or_unknown":
+			out.AllowedRatings = []string{"safe", "unknown"}
+		case "adult_or_unknown":
+			out.AllowedRatings = []string{"r18", "r18g", "unknown"}
 		case "2":
 			out.AllowedRatings = []string{"safe", "r18", "r18g"}
 		default:
@@ -301,6 +305,10 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 			out.AllowedAI = []string{"ai"}
 		case "unknown":
 			out.AllowedAI = []string{"unknown"}
+		case "non_ai_or_unknown":
+			out.AllowedAI = []string{"non_ai", "unknown"}
+		case "ai_or_unknown":
+			out.AllowedAI = []string{"ai", "unknown"}
 		case "any":
 			out.AllowedAI = []string{"non_ai", "ai"}
 		default:

@@ -156,3 +156,5 @@ PicHub 已新增 Pixiv Curator 图源（ID 40）：URL 为 https://pix.ut572.eu.
 
 
 2026-11-12 后续联调：当前 PicHub 图源为 ID 41，URL `https://pix.ut572.eu.org/random?format=json&delivery=proxy`，未配置分类。此前 ID 40 / `category=pixiv-curator` 的示例仅对应当时状态，当前按该分类请求会返回 no available sources。当前图源结构探测通过；本次未修改 PicHub 图源配置。
+
+供图 URL 可使用 `r18=safe_or_unknown` 或 `r18=adult_or_unknown`，以及 `ai_type=non_ai_or_unknown` 或 `ai_type=ai_or_unknown`。这些参数请求对应类别与未知的并集，只有全局偏好已开启相应未知项时才会纳入未知图片。原 `unknown` 参数保持仅未知的含义。
