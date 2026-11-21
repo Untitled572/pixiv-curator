@@ -560,6 +560,10 @@
     return Math.max(0, Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left)) * Math.max(0, Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top));
   }
   function updateDiscoveryExposure() {
+    if (!exposureRunID || activeTab !== "discover" || document.visibilityState !== "visible") {
+      exposureSince.clear();
+      return;
+    }
     const viewport = {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
     for (const card of $$("#recommendation-list .recommendation-card[data-artist-id]")) {
       const id = card.dataset.artistId, rect = card.getBoundingClientRect();
@@ -571,7 +575,7 @@
         const clipped = {left: Math.max(slider.left, viewport.left), top: Math.max(slider.top, viewport.top), right: Math.min(slider.right, viewport.right), bottom: Math.min(slider.bottom, viewport.bottom)};
         return visibleIntersection(imageRect, clipped) > 0;
       });
-      if (!exposureRunID || activeTab !== "discover" || document.visibilityState !== "visible" || !cardVisible || !sampleVisible || card.dataset.decisionPending) { exposureSince.delete(id); continue; }
+      if (!cardVisible || !sampleVisible || card.dataset.decisionPending) { exposureSince.delete(id); continue; }
       if (!exposureSince.has(id)) exposureSince.set(id, performance.now());
       if (performance.now() - exposureSince.get(id) >= 1500) exposureEligible.add(id);
     }
@@ -666,7 +670,7 @@
       const path = options ? "/admin/api/recommendations/directed" : "/admin/api/recommendations";
       const request = { method: "POST" };
       if (options) request.body = JSON.stringify(options);
-      else request.body = JSON.stringify({parent_run: exposureRunID, exposed_ids: Array.from(exposureEligible).filter((id) => document.querySelector(`#recommendation-list .recommendation-card[data-artist-id="${CSS.escape(id)}"]`)).map(Number)});
+      else request.body = JSON.stringify({parent_run: exposureRunID, exposed_ids: Array.from(exposureEligible).filter((id) => document.querySelector(`#recommendation-list .recommendation-card[data-artist-id="${CSS.escape(id)}"]`))});
       const result = await api(path, request);
       recommendationRunID = String(result.run_id || "");
       if (options) {

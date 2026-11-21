@@ -1,11 +1,30 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"github.com/Untitled572/pixiv-curator/internal/app"
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"net/http"
 	"net/url"
+	"strconv"
 )
+
+type exposureArtistID int64
+
+func (id *exposureArtistID) UnmarshalJSON(raw []byte) error {
+	text := string(raw)
+	if len(raw) > 0 && raw[0] == '"' {
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return err
+		}
+	}
+	value, err := strconv.ParseInt(text, 10, 64)
+	if err != nil || value <= 0 {
+		return domain.ErrInvalid
+	}
+	*id = exposureArtistID(value)
+	return nil
+}
 
 func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth) {
 	mux.Handle("POST /admin/api/recommendations/directed", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,8 +73,8 @@ func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth)
 			return
 		}
 		var input struct {
-			ParentRun  string  `json:"parent_run"`
-			ExposedIDs []int64 `json:"exposed_ids"`
+			ParentRun  string             `json:"parent_run"`
+			ExposedIDs []exposureArtistID `json:"exposed_ids"`
 		}
 		var runID, jobID string
 		var err error
@@ -66,7 +85,11 @@ func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth)
 			if !decodeBody(w, r, &input) {
 				return
 			}
-			runID, jobID, err = s.StartWithExposure(r.Context(), input.ParentRun, input.ExposedIDs)
+			ids := make([]int64, len(input.ExposedIDs))
+			for i, value := range input.ExposedIDs {
+				ids[i] = int64(value)
+			}
+			runID, jobID, err = s.StartWithExposure(r.Context(), input.ParentRun, ids)
 		}
 		if err != nil {
 			apiError(w, err)

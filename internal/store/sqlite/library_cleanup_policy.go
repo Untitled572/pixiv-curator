@@ -206,7 +206,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO library_cleanup_skip(artist_id,until_round,last_batch_round,pending_reason,pending_ai_id) VALUES(?,0,?,'',NULL) ON CONFLICT(artist_id) DO UPDATE SET last_batch_round=excluded.last_batch_round,pending_reason='',pending_ai_id=NULL`, c.id, round)
+		_, err = tx.ExecContext(ctx, `INSERT INTO library_cleanup_skip(artist_id,until_round,last_batch_round) VALUES(?,0,?) ON CONFLICT(artist_id) DO UPDATE SET last_batch_round=excluded.last_batch_round`, c.id, round)
 		if err != nil {
 			return err
 		}

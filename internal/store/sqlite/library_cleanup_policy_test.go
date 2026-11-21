@@ -47,6 +47,9 @@ func TestCleanupPendingAIWaitsForEvidenceAndSurvivesUntilAdmission(t *testing.T)
 	if items[0].SlotType != "priority" || items[0].AuditReason != "new_ai" || len(items[0].Samples) == 0 || items[0].Samples[0].IllustID != "101" || items[0].Samples[0].Reason != "ai" {
 		t.Fatalf("AI exception lost: %+v", items[0])
 	}
+	if err = s.db.QueryRow("SELECT pending_reason FROM library_cleanup_skip WHERE artist_id=1").Scan(&pending); err != nil || pending != "new_ai" {
+		t.Fatalf("admission consumed the mark before a new cooldown was set: pending=%q err=%v", pending, err)
+	}
 	if err = s.KeepLibraryCleanupArtist(ctx, 1, round); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +138,7 @@ func TestCleanupPendingExceptionWaitsForPrioritySlot(t *testing.T) {
 		}
 	}
 	var pending int
-	if err = s.db.QueryRow(`SELECT COUNT(*) FROM library_cleanup_skip WHERE pending_reason='new_dislikes'`).Scan(&pending); err != nil || pending != 1 {
+	if err = s.db.QueryRow(`SELECT COUNT(*) FROM library_cleanup_skip s WHERE pending_reason='new_dislikes' AND NOT EXISTS (SELECT 1 FROM library_cleanup_batch b WHERE b.artist_id=s.artist_id)`).Scan(&pending); err != nil || pending != 1 {
 		t.Fatalf("pending=%d err=%v", pending, err)
 	}
 	_, items, _, err = s.NextLibraryCleanup(ctx, round)
