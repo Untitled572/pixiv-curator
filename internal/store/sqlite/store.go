@@ -22,6 +22,7 @@ var migrations embed.FS
 
 type Store struct {
 	selectionSnapshot        atomic.Pointer[selectionSnapshot]
+	stratifiedFeedbackTags   atomic.Pointer[feedbackTagSnapshot]
 	selectionSnapshotOnce    sync.Once
 	selectionSnapshotDSN     string
 	selectionSnapshotRefresh chan struct{}

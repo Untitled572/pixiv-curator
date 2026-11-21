@@ -213,7 +213,6 @@
     title.append(name);
     title.append(node("span", `status-pill ${artist.review_status || "pending"}${artist.review_status === "approved" && !artist.collection_enabled ? " is-paused" : ""}`, artist.review_status === "approved" && !artist.collection_enabled ? "已暂停" : statusText(artist.review_status)));
     body.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`));
-    if (Number.isInteger(artist.artwork_count)) body.append(node("p", "artist-id", artist.artwork_count.toLocaleString() + " 件作品"));
     const tags = Array.isArray(artist.tags) ? artist.tags : [];
     const tagList = node("div", "tag-list");
     if (tags.length) tags.slice(0, 10).forEach((tag) => tagList.append(node("span", "tag-chip", tag)));
@@ -296,8 +295,7 @@
         keep.disabled = kept.has(id);
         card.append(heading);
         const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "可用作品较少", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
-        const summary = item.summary || {};
-        card.append(node("p", "field-help", `${reasons[item.audit_reason] || "常规巡检"} · 作品 ${summary.artworks || 0} · 图片 ${summary.pages || 0} · 默认可出图 ${summary.eligible_pages || 0} · R18 ${summary.r18 || 0}/${summary.known_rating || 0}（已知） · AI ${summary.ai || 0}/${summary.known_ai || 0}（已知） · 赞 ${summary.likes || 0} / 踩 ${summary.dislikes || 0}${summary.latest_published_at ? " · 最近 " + new Date(summary.latest_published_at).toLocaleDateString() : ""}`));
+        card.append(node("p", "field-help", (reasons[item.audit_reason] || "常规巡检") + " · " + artistSummaryText(item.summary || {})));
         const samples = node("div", "library-review-samples");
         (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
           const illustID = String(sample.illust_id), pageIndex = Number(sample.page_index) || 0;
@@ -374,7 +372,6 @@
     const card = $("#artist-list").querySelector('[data-artist-id="' + CSS.escape(String(id)) + '"]');
     if (!artist || !card) return;
     artist.collection_enabled = enabled;
-    if (!enabled) artist.artwork_count = 0;
     card.replaceWith(renderArtist(artist));
     const filtered = $("#library-collection").value !== "" || $("#library-tag").value !== "";
     if (filtered || $("#library-sort").value.startsWith("artworks_")) loadLibrary(false, true);
@@ -837,13 +834,28 @@
     detailController?.abort(); detailController = null;
     $("#artwork-list").replaceChildren(); detailArtist = null;
   }
+  function artistSummaryText(summary) {
+    return `作品 ${summary.artworks || 0} · 图片 ${summary.pages || 0} · 默认可出图 ${summary.eligible_pages || 0} · R18 ${summary.r18 || 0}/${summary.known_rating || 0}（已知） · AI ${summary.ai || 0}/${summary.known_ai || 0}（已知） · 赞 ${summary.likes || 0} / 踩 ${summary.dislikes || 0}${summary.latest_published_at ? " · 最近 " + new Date(summary.latest_published_at).toLocaleDateString() : ""}`;
+  }
+  async function loadArtistSummary(artist) {
+    const line = $("#artist-detail-summary");
+    try {
+      const summary = await api("/admin/api/library/artists/" + encodeURIComponent(artist.id) + "/summary");
+      if (detailArtist === artist && line.isConnected) line.textContent = artistSummaryText(summary);
+    } catch (_) {
+      if (detailArtist === artist && line.isConnected) line.textContent = "作品统计暂时不可用。";
+    }
+  }
   async function openArtistDetails(artist) {
     closeArtistDetails(); detailArtist = artist; detailCursors = [""]; detailPage = 0;
     $("#artwork-heading").textContent = artist.name || "Pixiv UID " + artist.id;
     const info = $("#artist-detail-info"); info.replaceChildren();
     info.append(node("p", "muted", "UID " + artist.id + (artist.account ? " · " + artist.account : "")));
     info.append(node("p", "muted", statusText(artist.review_status) + " · " + (artist.collection_enabled ? "采集已启用" : "采集已暂停") + " · " + (artist.remote_followed ? "Pixiv 关注中" : "历史或本地收录")));
-    if (Number.isInteger(artist.artwork_count)) info.append(node("p", "muted", artist.artwork_count.toLocaleString() + " 件作品"));
+    const summary = node("p", "field-help", "正在读取作品统计…");
+    summary.id = "artist-detail-summary";
+    info.append(summary);
+    loadArtistSummary(artist);
     const tags = node("div", "tag-list");
     (artist.tags || []).forEach((tag) => tags.append(node("span", "tag-chip", tag))); info.append(tags);
     const link = node("a", "button button-secondary button-small", "在 Pixiv 查看画师");
@@ -1324,6 +1336,8 @@
     onChange: (artist) => {
       if (detailArtist && String(detailArtist.id) === String(artist.id)) {
         detailArtist.collection_enabled = artist.collection_enabled;
+        loadArtistSummary(detailArtist);
+        loadArtistDetails();
         const lines = $$("#artist-detail-info > p");
         if (lines[1]) lines[1].textContent = statusText(detailArtist.review_status) + " · " + (artist.collection_enabled ? "采集已启用" : "采集已暂停") + " · " + (detailArtist.remote_followed ? "Pixiv 关注中" : "历史或本地收录");
       }

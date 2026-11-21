@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sort"
 	"time"
 
@@ -24,6 +25,45 @@ type stratifiedArtist struct {
 	weight float64
 }
 type tagVote struct{ likes, dislikes, documents float64 }
+type feedbackWorkTag struct{ workID, tagID int64 }
+type feedbackTagSnapshot struct {
+	tagIDs    []int64
+	items     []feedbackWorkTag
+	expiresAt time.Time
+}
+
+// Tag associations only affect soft weights. Vote values and hard exclusions
+// still come from the current transaction, and changed vote tags miss the cache.
+func (s *Store) feedbackTagsForSelection(ctx context.Context, tx *sql.Tx, votes map[int64]*tagVote) ([]feedbackWorkTag, error) {
+	ids := make([]int64, 0, len(votes))
+	for id := range votes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	now := time.Now()
+	if cached := s.stratifiedFeedbackTags.Load(); cached != nil && now.Before(cached.expiresAt) && slices.Equal(cached.tagIDs, ids) {
+		return cached.items, nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT at.illust_id,at.tag_id FROM artwork_tags at
+		WHERE at.tag_id IN (SELECT DISTINCT v.tag_id FROM image_feedback f CROSS JOIN artwork_tags v ON v.illust_id=f.illust_id)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []feedbackWorkTag
+	for rows.Next() {
+		var item feedbackWorkTag
+		if err = rows.Scan(&item.workID, &item.tagID); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	s.stratifiedFeedbackTags.Store(&feedbackTagSnapshot{tagIDs: ids, items: items, expiresAt: now.Add(30 * time.Second)})
+	return items, nil
+}
 
 // chooseStratified samples artist, artwork and page separately. Work multipliers
 // appear in the artist's weighted mean and in the conditional work lottery;
@@ -117,29 +157,17 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 	if err = rows.Err(); err != nil {
 		return selectionPage{}, err
 	}
-	// Only tags with feedback affect the lottery. Read them through the tag index.
 	if len(votes) > 0 {
-		rows, err = tx.QueryContext(ctx, `SELECT at.illust_id,at.tag_id FROM artwork_tags at
-			WHERE at.tag_id IN (SELECT DISTINCT v.tag_id FROM image_feedback f JOIN artwork_tags v ON v.illust_id=f.illust_id)`)
+		tags, err := s.feedbackTagsForSelection(ctx, tx, votes)
 		if err != nil {
 			return selectionPage{}, err
 		}
-		for rows.Next() {
-			var id, tag int64
-			if err = rows.Scan(&id, &tag); err != nil {
-				rows.Close()
-				return selectionPage{}, err
-			}
-			if w := works[id]; w != nil {
-				w.tags = append(w.tags, tag)
-				votes[tag].documents++
+		for _, tag := range tags {
+			if w := works[tag.workID]; w != nil {
+				w.tags = append(w.tags, tag.tagID)
+				votes[tag.tagID].documents++
 			}
 		}
-		if err = rows.Err(); err != nil {
-			rows.Close()
-			return selectionPage{}, err
-		}
-		rows.Close()
 	}
 	now := time.Now()
 	workExposure := map[int64]int64{}

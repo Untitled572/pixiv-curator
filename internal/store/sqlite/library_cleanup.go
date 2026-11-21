@@ -75,23 +75,11 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 	}
 	for i := range items {
 		item := &items[i]
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0) FROM artworks WHERE artist_id=? AND visible=1`, item.Artist.ID).Scan(&item.Summary.Artworks, &item.Summary.R18, &item.Summary.KnownRating, &item.Summary.AI, &item.Summary.KnownAI, &item.Summary.LatestPublished)
-		if err != nil {
-			return nil, nil, err
-		}
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE w.artist_id=? AND w.visible=1 AND p.media_state='indexed'`, item.Artist.ID).Scan(&item.Summary.Pages)
-		if err != nil {
-			return nil, nil, err
-		}
-		err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(f.value='like'),0),COALESCE(SUM(f.value='dislike'),0) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=?`, item.Artist.ID).Scan(&item.Summary.Likes, &item.Summary.Dislikes)
-		if err != nil {
-			return nil, nil, err
-		}
 		where, args, e := selectionWhere(rules, item.Artist.ID, "", nil)
 		if e != nil {
 			return nil, nil, e
 		}
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artists ar JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...).Scan(&item.Summary.EligiblePages)
+		item.Summary, err = libraryArtistSummary(ctx, tx, item.Artist.ID, where, args)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -292,4 +280,54 @@ func (s *Store) RemoveLibraryArtist(ctx context.Context, id int64) error {
 		return domain.ErrInvalid
 	}
 	return s.SetCollection(ctx, id, false)
+}
+
+func (s *Store) LibraryArtistSummary(ctx context.Context, id int64) (domain.LibraryCleanupSummary, error) {
+	var summary domain.LibraryCleanupSummary
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return summary, err
+	}
+	defer tx.Rollback()
+	var exists bool
+	if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM artists WHERE id=?)", id).Scan(&exists); err != nil {
+		return summary, err
+	}
+	if !exists {
+		return summary, domain.ErrNotFound
+	}
+	rules, err := defaultSelectionRulesInTx(ctx, tx)
+	if err != nil {
+		return summary, err
+	}
+	where, args, err := selectionWhere(rules, id, "", nil)
+	if err != nil {
+		return summary, err
+	}
+	summary, err = libraryArtistSummary(ctx, tx, id, where, args)
+	if err != nil {
+		return summary, err
+	}
+	return summary, tx.Commit()
+}
+
+func libraryArtistSummary(ctx context.Context, tx *sql.Tx, id int64, where string, args []any) (domain.LibraryCleanupSummary, error) {
+	var summary domain.LibraryCleanupSummary
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0) FROM artworks WHERE artist_id=? AND visible=1`, id).Scan(&summary.Artworks, &summary.R18, &summary.KnownRating, &summary.AI, &summary.KnownAI, &summary.LatestPublished)
+	if err != nil {
+		return summary, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE w.artist_id=? AND w.visible=1 AND p.media_state='indexed'`, id).Scan(&summary.Pages)
+	if err != nil {
+		return summary, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(f.value='like'),0),COALESCE(SUM(f.value='dislike'),0) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=?`, id).Scan(&summary.Likes, &summary.Dislikes)
+	if err != nil {
+		return summary, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artists ar JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...).Scan(&summary.EligiblePages)
+	if err != nil {
+		return summary, err
+	}
+	return summary, nil
 }

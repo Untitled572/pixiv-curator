@@ -18,6 +18,23 @@ type libraryCleanupStore interface {
 
 // RegisterLibraryCleanup mounts the standalone authenticated cleanup endpoints.
 func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth *Auth) {
+	if summaries, ok := store.(interface {
+		LibraryArtistSummary(context.Context, int64) (domain.LibraryCleanupSummary, error)
+	}); ok {
+		mux.Handle("GET /admin/api/library/artists/{id}/summary", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil || id <= 0 || r.URL.RawQuery != "" {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			summary, err := summaries.LibraryArtistSummary(r.Context(), id)
+			if err != nil {
+				apiError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, summary)
+		})))
+	}
 	mux.Handle("GET /admin/api/library/review", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil || len(q) != 0 {

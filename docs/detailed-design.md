@@ -56,7 +56,7 @@ r18=0 为 safe，1 为 r18/r18g，2 为全部已知分级，unknown 为未知；
 - `GET /admin/api/library/tags` 返回 `{items:[]}`。
 - `PUT /admin/api/library/artists/{id}/tags` 设置手动标签覆盖；`DELETE` 恢复自动标签。
 
-图库 page 模式支持 `uid` 精确筛选 Pixiv UID，以及 `sort=created_desc/created_asc/artworks_desc/artworks_asc` 排序。时间排序使用画师首次写入数据库的时间，并非 Pixiv 实际关注时间。作品数为本地已保存的作品数量，列表响应使用 artwork_count 字段；排序值相同时按 UID 升序。筛选和排序相互叠加，切换后回到第一页。原有数字游标只支持默认顺序。
+图库 page 模式支持 `uid` 精确筛选 Pixiv UID，以及 `sort=created_desc/created_asc/artworks_desc/artworks_asc` 排序。时间排序使用画师首次写入数据库的时间，并非 Pixiv 实际关注时间。作品数为本地已保存的作品数量；排序值相同时按 UID 升序。筛选和排序相互叠加，切换后回到第一页。原有数字游标只支持默认顺序。
 
 图库首页使用 page 模式：每页 24 / 48 / 96 位，上一页、下一页或输入页码跳转；切换筛选回到第 1 页。导航数字显示全部图库画师数（approved/blocked），筛选结果数单独显示。标签下拉按需请求 `limit=30&q=...`，每次至多返回 30 个匹配标签。首页不请求头像、作品列表或预览图片。点击画师名称或“查看详情”才打开元数据与作品预览，作品按 8 件分页；关闭详情取消请求并移除图片。
 

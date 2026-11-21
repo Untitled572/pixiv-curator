@@ -18,7 +18,6 @@ type Artist struct {
 	CollectionEnabled bool     `json:"collection_enabled"`
 	RemoteFollowed    bool     `json:"remote_followed"`
 	Tags              []string `json:"tags"`
-	ArtworkCount      *int64   `json:"artwork_count,omitempty"`
 }
 
 type Page struct {
