@@ -165,7 +165,7 @@
   }
   async function loadTagOptions() {
     tagController?.abort(); const controller = new AbortController(); tagController = controller;
-    const select = $("#library-tag"), selected = select.value;
+    const select = $("#library-tag"), selected = select.value, hint = $("#library-tag-hint");
     const query = new URLSearchParams({ limit: "30", q: $("#library-tag-search").value.trim() });
     try {
       const result = await api("/admin/api/library/tags?" + query, { signal: controller.signal });
@@ -175,8 +175,14 @@
       if (selected && !tags.includes(selected)) options.append(new Option(selected, selected));
       tags.forEach((tag) => options.append(new Option(tag, tag)));
       select.replaceChildren(options); select.value = selected;
-      $("#library-tag-hint").textContent = tags.length ? "选择标签应用筛选；输入关键词查找更多。" : "没有匹配标签，可换一个关键词。";
-    } catch (error) { if (!controller.signal.aborted) $("#library-tag-hint").textContent = "标签暂不可用，仍可浏览图库。"; }
+      hint.textContent = tags.length ? "" : "没有匹配标签，可换一个关键词。";
+      hint.hidden = tags.length > 0;
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        hint.textContent = "标签暂不可用，仍可浏览图库。";
+        hint.hidden = false;
+      }
+    }
   }
   $("#library-tag-search").addEventListener("input", () => { clearTimeout(tagSearchTimer); tagSearchTimer = setTimeout(loadTagOptions, 200); });
   async function loadLibraryFilters() {

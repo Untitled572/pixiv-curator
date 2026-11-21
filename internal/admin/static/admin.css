@@ -47,10 +47,10 @@ a{color:inherit}
 input:focus,select:focus,textarea:focus{border-color:#4a6b82;box-shadow:0 0 0 3px rgba(74,107,130,.2)}
 textarea{resize:vertical;line-height:1.55}
 #library-list-panel > .library-review-body{container-type:inline-size}
-.library-tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.library-tools{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .library-tools label,.library-tools label > :is(input,select){min-width:0}
 .library-tools label{font-size:12px}
-.library-tag-hint{margin:8px 0 16px}
+.library-tag-hint{margin:-8px 0 16px}
 @container (min-width:600px){.library-tools{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @container (min-width:1020px){.library-tools{grid-template-columns:repeat(6,minmax(0,1fr))}}
 .artist-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}
