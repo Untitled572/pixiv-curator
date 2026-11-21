@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -32,11 +34,19 @@ type AuthOptions struct {
 	SessionTTL    time.Duration
 	// PublicOrigin, when set, must match Origin on browser cookie write requests.
 	// An empty value still requires a syntactically valid Origin and CSRF token.
-	PublicOrigin string
+	PublicOrigin       string
+	RememberedSessions RememberedSessionStore
+}
+
+// RememberedSessionStore persists only hashes of session and CSRF credentials.
+type RememberedSessionStore interface {
+	SaveRememberedSession(context.Context, [32]byte, [32]byte, time.Time, time.Time) (bool, error)
+	RememberedSession(context.Context, [32]byte) ([32]byte, time.Time, error)
+	DeleteRememberedSession(context.Context, [32]byte) error
 }
 
 type authSession struct {
-	csrf      string
+	csrf      [32]byte
 	expiresAt time.Time
 }
 
@@ -161,21 +171,34 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 	if input.Remember {
 		ttl = rememberSessionTTL
 	}
-	digest := sha256.Sum256([]byte(sessionRaw))
+	digest := a.sessionDigest(sessionRaw)
 	now := time.Now()
-	a.mu.Lock()
-	for k, v := range a.sessions {
-		if !now.Before(v.expiresAt) {
-			delete(a.sessions, k)
+	session := authSession{csrf: sha256.Sum256([]byte(csrf)), expiresAt: now.Add(ttl)}
+	if input.Remember && a.options.RememberedSessions != nil {
+		ok, err := a.options.RememberedSessions.SaveRememberedSession(r.Context(), digest, session.csrf, session.expiresAt, now)
+		if err != nil {
+			writeAuthError(w, http.StatusInternalServerError, "internal_error")
+			return
 		}
-	}
-	if len(a.sessions) >= 256 {
+		if !ok {
+			writeAuthError(w, http.StatusTooManyRequests, "SESSION_LIMIT")
+			return
+		}
+	} else {
+		a.mu.Lock()
+		for k, v := range a.sessions {
+			if !now.Before(v.expiresAt) {
+				delete(a.sessions, k)
+			}
+		}
+		if len(a.sessions) >= 256 {
+			a.mu.Unlock()
+			writeAuthError(w, http.StatusTooManyRequests, "SESSION_LIMIT")
+			return
+		}
+		a.sessions[digest] = session
 		a.mu.Unlock()
-		writeAuthError(w, http.StatusTooManyRequests, "SESSION_LIMIT")
-		return
 	}
-	a.sessions[digest] = authSession{csrf: csrf, expiresAt: now.Add(ttl)}
-	a.mu.Unlock()
 	cookieTTL := time.Duration(0)
 	if input.Remember {
 		cookieTTL = ttl
@@ -187,7 +210,13 @@ func (a *Auth) login(w http.ResponseWriter, r *http.Request) {
 
 func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookieName); err == nil {
-		digest := sha256.Sum256([]byte(c.Value))
+		digest := a.sessionDigest(c.Value)
+		if a.options.RememberedSessions != nil {
+			if err := a.options.RememberedSessions.DeleteRememberedSession(r.Context(), digest); err != nil {
+				writeAuthError(w, http.StatusInternalServerError, "internal_error")
+				return
+			}
+		}
 		a.mu.Lock()
 		delete(a.sessions, digest)
 		a.mu.Unlock()
@@ -215,19 +244,31 @@ func (a *Auth) sessionFromRequest(r *http.Request) (authSession, bool) {
 	if err != nil || c.Value == "" {
 		return authSession{}, false
 	}
-	digest := sha256.Sum256([]byte(c.Value))
+	digest := a.sessionDigest(c.Value)
 	now := time.Now()
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	session, ok := a.sessions[digest]
-	if !ok {
-		return authSession{}, false
-	}
-	if !now.Before(session.expiresAt) {
+	if ok && !now.Before(session.expiresAt) {
 		delete(a.sessions, digest)
-		return authSession{}, false
+		ok = false
 	}
-	return session, true
+	a.mu.Unlock()
+	if ok || a.options.RememberedSessions == nil {
+		return session, ok
+	}
+	csrf, expiresAt, err := a.options.RememberedSessions.RememberedSession(r.Context(), digest)
+	return authSession{csrf: csrf, expiresAt: expiresAt}, err == nil && now.Before(expiresAt)
+}
+
+// Bind persisted sessions to the current management token. Rotating the token
+// also invalidates cookies created before the restart.
+func (a *Auth) sessionDigest(raw string) [32]byte {
+	mac := hmac.New(sha256.New, a.token)
+	mac.Write([]byte("curator session v1:"))
+	mac.Write([]byte(raw))
+	var hash [32]byte
+	mac.Sum(hash[:0])
+	return hash
 }
 
 func (a *Auth) validCSRF(w http.ResponseWriter, r *http.Request, session authSession) bool {
@@ -250,12 +291,10 @@ func (a *Auth) validCSRF(w http.ResponseWriter, r *http.Request, session authSes
 	if csrfHeader == "" || csrfCookie.Value == "" {
 		return false
 	}
-	return constantStringEqual(csrfHeader, session.csrf) && constantStringEqual(csrfCookie.Value, session.csrf)
-}
-
-func constantStringEqual(a, b string) bool {
-	ha, hb := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
-	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1 && len(a) > 0 && len(b) > 0
+	headerHash := sha256.Sum256([]byte(csrfHeader))
+	cookieHash := sha256.Sum256([]byte(csrfCookie.Value))
+	return subtle.ConstantTimeCompare(headerHash[:], session.csrf[:]) == 1 &&
+		subtle.ConstantTimeCompare(cookieHash[:], session.csrf[:]) == 1
 }
 
 func (a *Auth) reserveAttempt(key string) bool {

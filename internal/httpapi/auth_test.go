@@ -1,12 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Untitled572/pixiv-curator/internal/store/sqlite"
 )
 
 func TestAuthBearerAndFailClosed(t *testing.T) {
@@ -186,5 +190,58 @@ func TestRememberSessionLifetime(t *testing.T) {
 				t.Fatal("session survived service restart")
 			}
 		})
+	}
+}
+
+func TestRememberedSessionSurvivesRestartAndLogoutRevokesIt(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	db, err := sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	auth := NewAuth([]byte("test-secret"), AuthOptions{RememberedSessions: db})
+	login := httptest.NewRecorder()
+	auth.login(login, httptest.NewRequest(http.MethodPost, "http://curator.test/admin/login", strings.NewReader(`{"token":"test-secret","remember":true}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login status %d", login.Code)
+	}
+	cookies := login.Result().Cookies()
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sqlite.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth = NewAuth([]byte("test-secret"), AuthOptions{RememberedSessions: db})
+	request := func(method string) *http.Request {
+		r := httptest.NewRequest(method, "http://curator.test/admin/logout", nil)
+		for _, c := range cookies {
+			r.AddCookie(c)
+			if c.Name == csrfCookieName {
+				r.Header.Set("X-CSRF-Token", c.Value)
+			}
+		}
+		r.Header.Set("Origin", "http://curator.test")
+		return r
+	}
+	if _, ok := auth.sessionFromRequest(request(http.MethodGet)); !ok {
+		t.Fatal("remembered session lost on restart")
+	}
+	rotated := NewAuth([]byte("new-secret"), AuthOptions{RememberedSessions: db})
+	if _, ok := rotated.sessionFromRequest(request(http.MethodGet)); ok {
+		t.Fatal("token rotation retained an old session")
+	}
+	mux := http.NewServeMux()
+	auth.Register(mux)
+	logout := httptest.NewRecorder()
+	mux.ServeHTTP(logout, request(http.MethodPost))
+	if logout.Code != http.StatusOK {
+		t.Fatalf("logout status %d", logout.Code)
+	}
+	if _, ok := auth.sessionFromRequest(request(http.MethodGet)); ok {
+		t.Fatal("logout retained an old cookie")
 	}
 }

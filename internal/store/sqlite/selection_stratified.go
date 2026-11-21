@@ -14,8 +14,8 @@ import (
 type stratifiedWork struct {
 	id, artist, created int64
 	bookmarks, views    sql.NullInt64
-	pages               []selectionPage
-	tags                []string
+	pages               []int
+	tags                []int64
 	multiplier          float64
 }
 type stratifiedArtist struct {
@@ -34,28 +34,26 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 		return selectionPage{}, err
 	}
 	if !ok {
-		rows, err := tx.QueryContext(ctx, `SELECT `+selectionColumns+`,a.created_at,a.bookmarks,a.views FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...)
+		rows, err := tx.QueryContext(ctx, `SELECT a.id,a.artist_id,p.page_index,a.created_at,a.bookmarks,a.views FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...)
 		if err != nil {
 			return selectionPage{}, err
 		}
 		works = map[int64]*stratifiedWork{}
 		for rows.Next() {
-			var p selectionPage
+			var id, artist int64
+			var page int
 			var created int64
 			var bookmarks, views sql.NullInt64
-			if err = rows.Scan(&p.page.IllustID, &p.page.ArtistID, &p.page.PageIndex, &p.page.Width, &p.page.Height, &p.page.OriginalURL, &p.page.PreviewURL, &created, &bookmarks, &views); err != nil {
+			if err = rows.Scan(&id, &artist, &page, &created, &bookmarks, &views); err != nil {
 				rows.Close()
 				return selectionPage{}, err
 			}
-			if !domain.ValidImageURL(p.page.OriginalURL) {
-				continue
-			}
-			w := works[p.page.IllustID]
+			w := works[id]
 			if w == nil {
-				w = &stratifiedWork{id: p.page.IllustID, artist: p.page.ArtistID, created: created, bookmarks: bookmarks, views: views, multiplier: 1}
+				w = &stratifiedWork{id: id, artist: artist, created: created, bookmarks: bookmarks, views: views, multiplier: 1}
 				works[w.id] = w
 			}
-			w.pages = append(w.pages, p)
+			w.pages = append(w.pages, page)
 		}
 		if err = rows.Close(); err != nil {
 			return selectionPage{}, err
@@ -63,63 +61,35 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 		if err = rows.Err(); err != nil {
 			return selectionPage{}, err
 		}
-		if len(works) == 0 {
-			return selectionPage{}, nil
-		}
-		// Only tags of eligible works participate in each lottery; feedback remains
-		// global and is never used as a hard filter beyond the page exclusion in SQL.
-		rows, err = tx.QueryContext(ctx, `SELECT at.illust_id,t.normalized_name FROM artwork_tags at JOIN tags t ON t.id=at.tag_id`)
-		if err != nil {
-			return selectionPage{}, err
-		}
-		for rows.Next() {
-			var id int64
-			var tag string
-			if err = rows.Scan(&id, &tag); err != nil {
-				rows.Close()
-				return selectionPage{}, err
-			}
-			if w := works[id]; w != nil {
-				w.tags = append(w.tags, tag)
-			}
-		}
-		if err = rows.Close(); err != nil {
-			return selectionPage{}, err
-		}
-		if err = rows.Err(); err != nil {
-			return selectionPage{}, err
-		}
+
 	}
 	if len(works) == 0 {
 		return selectionPage{}, nil
 	}
 	var rows *sql.Rows
 
-	votes := map[string]*tagVote{}
+	votes := map[int64]*tagVote{}
 	artistVotes := map[int64][2]float64{}
-	rows, err = tx.QueryContext(ctx, `SELECT a.artist_id,f.value,t.normalized_name FROM image_feedback f JOIN artworks a ON a.id=f.illust_id LEFT JOIN artwork_tags at ON at.illust_id=a.id LEFT JOIN tags t ON t.id=at.tag_id`)
+	rows, err = tx.QueryContext(ctx, `SELECT f.value,at.tag_id FROM image_feedback f JOIN artwork_tags at ON at.illust_id=f.illust_id`)
 	if err != nil {
 		return selectionPage{}, err
 	}
 	for rows.Next() {
-		var id int64
 		var value string
-		var tag sql.NullString
-		if err = rows.Scan(&id, &value, &tag); err != nil {
+		var tag int64
+		if err = rows.Scan(&value, &tag); err != nil {
 			rows.Close()
 			return selectionPage{}, err
 		}
-		if tag.Valid {
-			v := votes[tag.String]
-			if v == nil {
-				v = &tagVote{}
-				votes[tag.String] = v
-			}
-			if value == "like" {
-				v.likes++
-			} else {
-				v.dislikes++
-			}
+		v := votes[tag]
+		if v == nil {
+			v = &tagVote{}
+			votes[tag] = v
+		}
+		if value == "like" {
+			v.likes++
+		} else {
+			v.dislikes++
 		}
 	}
 	if err = rows.Close(); err != nil {
@@ -147,12 +117,29 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 	if err = rows.Err(); err != nil {
 		return selectionPage{}, err
 	}
-	for _, w := range works {
-		for _, tag := range w.tags {
-			if v := votes[tag]; v != nil {
-				v.documents++
+	// Only tags with feedback affect the lottery. Read them through the tag index.
+	if len(votes) > 0 {
+		rows, err = tx.QueryContext(ctx, `SELECT at.illust_id,at.tag_id FROM artwork_tags at
+			WHERE at.tag_id IN (SELECT DISTINCT v.tag_id FROM image_feedback f JOIN artwork_tags v ON v.illust_id=f.illust_id)`)
+		if err != nil {
+			return selectionPage{}, err
+		}
+		for rows.Next() {
+			var id, tag int64
+			if err = rows.Scan(&id, &tag); err != nil {
+				rows.Close()
+				return selectionPage{}, err
+			}
+			if w := works[id]; w != nil {
+				w.tags = append(w.tags, tag)
+				votes[tag].documents++
 			}
 		}
+		if err = rows.Err(); err != nil {
+			rows.Close()
+			return selectionPage{}, err
+		}
+		rows.Close()
 	}
 	now := time.Now()
 	workExposure := map[int64]int64{}
@@ -194,9 +181,11 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 		return selectionPage{}, err
 	}
 	var rates []float64
-	for _, w := range works {
-		if w.views.Valid && w.views.Int64 > 0 && w.bookmarks.Valid && w.bookmarks.Int64 >= 0 {
-			rates = append(rates, float64(w.bookmarks.Int64)/float64(w.views.Int64))
+	if rules.Strategy == "popular" {
+		for _, w := range works {
+			if w.views.Valid && w.views.Int64 > 0 && w.bookmarks.Valid && w.bookmarks.Int64 >= 0 {
+				rates = append(rates, float64(w.bookmarks.Int64)/float64(w.views.Int64))
+			}
 		}
 	}
 	sort.Float64s(rates)
@@ -253,7 +242,34 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 	for id, exposed := range artistExposure {
 		artistCooling[id] = cooldownFactor(now, exposed, 3*time.Hour, 12*time.Hour, .6, .8)
 	}
-	return stratifiedLottery(pool, artistVotes, artistCooling), nil
+	// Fetch full page data only after selection and recheck live eligibility.
+	for len(pool) > 0 {
+		picked := stratifiedLottery(pool, artistVotes, artistCooling)
+		pointArgs := append(append([]any(nil), args...), picked.page.IllustID, picked.page.PageIndex)
+		rows, err := querySelectionRows(ctx, tx, selectionPageQuery(appendAnd(where, "p.illust_id=? AND p.page_index=?"), ""), pointArgs)
+		if err != nil {
+			return selectionPage{}, err
+		}
+		if len(rows) > 0 && domain.ValidImageURL(rows[0].page.OriginalURL) {
+			return rows[0], nil
+		}
+		work := works[picked.page.IllustID]
+		for i, page := range work.pages {
+			if page == picked.page.PageIndex {
+				work.pages = append(work.pages[:i], work.pages[i+1:]...)
+				break
+			}
+		}
+		if len(work.pages) == 0 {
+			for i, w := range pool {
+				if w == work {
+					pool = append(pool[:i], pool[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+	return selectionPage{}, nil
 }
 
 func stratifiedLottery(pool []*stratifiedWork, votes map[int64][2]float64, cooling map[int64]float64) selectionPage {
@@ -294,7 +310,7 @@ func stratifiedLottery(pool []*stratifiedWork, votes map[int64][2]float64, cooli
 		weights = append(weights, math.Pow(float64(len(w.pages)), .2)*w.multiplier)
 	}
 	w := a.works[weightedIndex(weights)]
-	return w.pages[rand.IntN(len(w.pages))]
+	return selectionPage{page: domain.SelectedPage{IllustID: w.id, ArtistID: w.artist, PageIndex: w.pages[rand.IntN(len(w.pages))]}}
 }
 func weightedIndex(weights []float64) int {
 	var total float64

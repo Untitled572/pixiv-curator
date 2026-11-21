@@ -19,13 +19,12 @@ type snapshotWork struct {
 	kind, rating, ai string
 	created          int64
 	bookmarks, views sql.NullInt64
-	tags             []string
 }
 type selectionSnapshot struct {
 	revision int64
 	works    map[int64]*snapshotWork
 	builtAt  time.Time
-	views    map[string]map[int64]map[int64][]domain.SelectedPage
+	views    map[string]map[int64]map[int64][]int
 }
 
 // StartSelectionSnapshots starts one refresh worker bound to ctx. Calling it
@@ -46,34 +45,19 @@ func (s *Store) StartSelectionSnapshots(ctx context.Context) <-chan struct{} {
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			s.rebuildSelectionSnapshotWith(ctx, reader)
+			lastBuild := time.Now()
 			for {
 				select {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					s.rebuildSelectionSnapshotWith(ctx, reader)
 				case <-s.selectionSnapshotRefresh:
-					timer := time.NewTimer(250 * time.Millisecond)
-				debounce:
-					for {
-						select {
-						case <-ctx.Done():
-							timer.Stop()
-							return
-						case <-timer.C:
-							break debounce
-						case <-s.selectionSnapshotRefresh:
-							if !timer.Stop() {
-								select {
-								case <-timer.C:
-								default:
-								}
-							}
-							timer.Reset(250 * time.Millisecond)
-						}
+					if time.Since(lastBuild) < time.Minute {
+						continue
 					}
-					s.rebuildSelectionSnapshotWith(ctx, reader)
 				}
+				s.rebuildSelectionSnapshotWith(ctx, reader)
+				lastBuild = time.Now()
 			}
 		}()
 	})
@@ -102,40 +86,41 @@ func (s *Store) rebuildSelectionSnapshotWith(ctx context.Context, reader *sql.DB
 	if err = tx.QueryRowContext(ctx, `SELECT revision FROM selection_catalog_revision WHERE id=1`).Scan(&revision); err != nil {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url,a.created_at,a.bookmarks,a.views,a.kind,a.rating,a.ai_status FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed'`)
+	if current := s.selectionSnapshot.Load(); current != nil && current.revision == revision {
+		return
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,a.created_at,a.bookmarks,a.views,a.kind,a.rating,a.ai_status FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed'`)
 	if err != nil {
 		return
 	}
-	next := &selectionSnapshot{builtAt: time.Now(), revision: revision, works: map[int64]*snapshotWork{}, views: map[string]map[int64]map[int64][]domain.SelectedPage{"any": {}, "landscape": {}, "portrait": {}}}
+	next := &selectionSnapshot{builtAt: time.Now(), revision: revision, works: map[int64]*snapshotWork{}, views: map[string]map[int64]map[int64][]int{"any": {}, "landscape": {}, "portrait": {}}}
 	for rows.Next() {
-		var p domain.SelectedPage
+		var id, artist int64
+		var page, width, height int
 		var created int64
 		var kind, rating, ai string
 		var bookmarks, views sql.NullInt64
-		if err = rows.Scan(&p.IllustID, &p.ArtistID, &p.PageIndex, &p.Width, &p.Height, &p.OriginalURL, &p.PreviewURL, &created, &bookmarks, &views, &kind, &rating, &ai); err != nil {
+		if err = rows.Scan(&id, &artist, &page, &width, &height, &created, &bookmarks, &views, &kind, &rating, &ai); err != nil {
 			rows.Close()
 			return
 		}
-		if !domain.ValidImageURL(p.OriginalURL) {
-			continue
-		}
-		if next.works[p.IllustID] == nil {
-			next.works[p.IllustID] = &snapshotWork{created: created, bookmarks: bookmarks, views: views, kind: kind, rating: rating, ai: ai}
+		if next.works[id] == nil {
+			next.works[id] = &snapshotWork{created: created, bookmarks: bookmarks, views: views, kind: kind, rating: rating, ai: ai}
 		}
 		names := []string{"any"}
-		if p.Width > 0 && p.Height > 0 {
-			if int64(p.Width)*10 > int64(p.Height)*11 {
+		if width > 0 && height > 0 {
+			if int64(width)*10 > int64(height)*11 {
 				names = append(names, "landscape")
-			} else if int64(p.Height)*10 > int64(p.Width)*11 {
+			} else if int64(height)*10 > int64(width)*11 {
 				names = append(names, "portrait")
 			}
 		}
 		for _, name := range names {
 			view := next.views[name]
-			if view[p.ArtistID] == nil {
-				view[p.ArtistID] = map[int64][]domain.SelectedPage{}
+			if view[artist] == nil {
+				view[artist] = map[int64][]int{}
 			}
-			view[p.ArtistID][p.IllustID] = append(view[p.ArtistID][p.IllustID], p)
+			view[artist][id] = append(view[artist][id], page)
 		}
 	}
 	if err = rows.Err(); err != nil {
@@ -143,28 +128,6 @@ func (s *Store) rebuildSelectionSnapshotWith(ctx context.Context, reader *sql.DB
 		return
 	}
 	if err = rows.Close(); err != nil {
-		return
-	}
-	rows, err = tx.QueryContext(ctx, `SELECT at.illust_id,t.normalized_name FROM artwork_tags at JOIN tags t ON t.id=at.tag_id`)
-	if err != nil {
-		return
-	}
-	for rows.Next() {
-		var id int64
-		var tag string
-		if err = rows.Scan(&id, &tag); err != nil {
-			rows.Close()
-			return
-		}
-		if w := next.works[id]; w != nil {
-			w.tags = append(w.tags, tag)
-		}
-	}
-	if rows.Err() != nil {
-		rows.Close()
-		return
-	}
-	if rows.Close() != nil {
 		return
 	}
 	if err = tx.Commit(); err != nil {
@@ -248,16 +211,16 @@ func snapshotCommonWorks(ctx context.Context, tx *sql.Tx, snap *selectionSnapsho
 			if recent[id] || excluded[id] || (rules.ExcludeManga && meta.kind == "manga") || !allowedSnapshot(meta.rating, rules.AllowedRatings) || !allowedSnapshot(meta.ai, rules.AllowedAI) {
 				continue
 			}
-			for _, p := range pages {
-				if disliked[snapshotPageKey{id, p.PageIndex}] {
+			for _, page := range pages {
+				if disliked[snapshotPageKey{id, page}] {
 					continue
 				}
 				w := works[id]
 				if w == nil {
-					w = &stratifiedWork{id: id, artist: artist, created: meta.created, bookmarks: meta.bookmarks, views: meta.views, tags: meta.tags, multiplier: 1}
+					w = &stratifiedWork{id: id, artist: artist, created: meta.created, bookmarks: meta.bookmarks, views: meta.views, multiplier: 1}
 					works[id] = w
 				}
-				w.pages = append(w.pages, selectionPage{page: p})
+				w.pages = append(w.pages, page)
 			}
 		}
 	}

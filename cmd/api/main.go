@@ -73,7 +73,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 			return fmt.Errorf("read OAuth configuration: %w", err)
 		}
 	}
-	auth := httpapi.NewAuth([]byte(token), httpapi.AuthOptions{PublicOrigin: cfg.PublicBaseURL, SecureCookies: len(cfg.PublicBaseURL) >= 8 && cfg.PublicBaseURL[:8] == "https://"})
+	auth := httpapi.NewAuth([]byte(token), httpapi.AuthOptions{PublicOrigin: cfg.PublicBaseURL, RememberedSessions: store, SecureCookies: len(cfg.PublicBaseURL) >= 8 && cfg.PublicBaseURL[:8] == "https://"})
 	service := app.NewCatalog(store)
 	images := app.NewImages(store, cfg.PublicBaseURL)
 	if err = store.CleanupSelectionHistory(ctx); err != nil {

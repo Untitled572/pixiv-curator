@@ -6,6 +6,7 @@
   let libraryPage = 1, libraryPages = 0, libraryLoading = false;
   let detailController = null, detailArtist = null, detailCursors = [""], detailPage = 0;
   let libraryGeneration = 0;
+  const libraryArtists = new Map();
   let preferenceVersion = 0;
   let activeTab = "stats";
   let recommendationRunID = "";
@@ -112,14 +113,14 @@
     });
   });
 
-  async function loadLibrary(reset = false) {
+  async function loadLibrary(reset = false, preserve = false) {
     if (reset) libraryPage = 1;
     if (!$("#library-list-panel").open) return;
     const generation = ++libraryGeneration;
     libraryLoading = true; updateLibraryPager();
     const list = $("#artist-list");
     list.setAttribute("aria-busy", "true");
-    list.replaceChildren(node("p", "empty-cell", "正在读取图库…"));
+    if (!preserve) list.replaceChildren(node("p", "empty-cell", "正在读取图库…"));
     try {
       const query = new URLSearchParams({ limit: $("#library-page-size").value, page: String(libraryPage) });
       const tag = $("#library-tag").value, account = $("#library-account").value, collection = $("#library-collection").value;
@@ -136,7 +137,11 @@
       if (libraryPages && libraryPage > libraryPages) { libraryPage = libraryPages; return loadLibrary(); }
       const artists = Array.isArray(result.items) ? result.items : [];
       list.replaceChildren();
-      artists.forEach((artist) => list.append(renderArtist(artist)));
+      libraryArtists.clear();
+      artists.forEach((artist) => {
+        libraryArtists.set(String(artist.id), artist);
+        list.append(renderArtist(artist));
+      });
       $("#artist-count").textContent = String(result.library_total ?? result.total ?? 0);
       $("#library-summary").textContent = "符合条件 " + (result.total || 0) + " 位 · 本页 " + artists.length + " 位";
       if (!artists.length) {
@@ -147,7 +152,7 @@
       }
     } catch (error) {
       if (generation !== libraryGeneration) return;
-      list.replaceChildren(node("p", "empty-cell", "图库暂时无法读取，请点击刷新重试。"));
+      if (!preserve) list.replaceChildren(node("p", "empty-cell", "图库暂时无法读取，请点击刷新重试。"));
       report(error, "读取图库");
     } finally {
       if (generation === libraryGeneration) {
@@ -208,6 +213,7 @@
     title.append(name);
     title.append(node("span", `status-pill ${artist.review_status || "pending"}${artist.review_status === "approved" && !artist.collection_enabled ? " is-paused" : ""}`, artist.review_status === "approved" && !artist.collection_enabled ? "已暂停" : statusText(artist.review_status)));
     body.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`));
+    if (Number.isInteger(artist.artwork_count)) body.append(node("p", "artist-id", artist.artwork_count.toLocaleString() + " 件作品"));
     const tags = Array.isArray(artist.tags) ? artist.tags : [];
     const tagList = node("div", "tag-list");
     if (tags.length) tags.slice(0, 10).forEach((tag) => tagList.append(node("span", "tag-chip", tag)));
@@ -363,10 +369,20 @@
       showMessage("画师已恢复并加入图库。"); await loadLibrary();
     } catch (error) { report(error, "恢复画师"); trigger.disabled = false; }
   }
+  function updateLibraryCollection(id, enabled) {
+    const artist = libraryArtists.get(String(id));
+    const card = $("#artist-list").querySelector('[data-artist-id="' + CSS.escape(String(id)) + '"]');
+    if (!artist || !card) return;
+    artist.collection_enabled = enabled;
+    if (!enabled) artist.artwork_count = 0;
+    card.replaceWith(renderArtist(artist));
+    const filtered = $("#library-collection").value !== "" || $("#library-tag").value !== "";
+    if (filtered || $("#library-sort").value.startsWith("artworks_")) loadLibrary(false, true);
+  }
   async function toggleCollection(id, enabled, trigger) {
     if (trigger?.disabled) return;
     if (trigger) trigger.disabled = true;
-    try { await api(`/admin/api/artists/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ collection_enabled: enabled }) }); showMessage(enabled ? "已恢复后续采集。" : "已停止采集和供图，并清理作品与链接。"); await loadLibrary(); }
+    try { await api(`/admin/api/artists/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ collection_enabled: enabled }) }); showMessage(enabled ? "已恢复后续采集。" : "已停止采集和供图，并清理作品与链接。"); updateLibraryCollection(id, enabled); }
     catch (error) { report(error, "更新采集状态"); if (trigger) trigger.disabled = false; }
   }
   $("#manual-artist-form").addEventListener("submit", async (event) => {
@@ -827,6 +843,7 @@
     const info = $("#artist-detail-info"); info.replaceChildren();
     info.append(node("p", "muted", "UID " + artist.id + (artist.account ? " · " + artist.account : "")));
     info.append(node("p", "muted", statusText(artist.review_status) + " · " + (artist.collection_enabled ? "采集已启用" : "采集已暂停") + " · " + (artist.remote_followed ? "Pixiv 关注中" : "历史或本地收录")));
+    if (Number.isInteger(artist.artwork_count)) info.append(node("p", "muted", artist.artwork_count.toLocaleString() + " 件作品"));
     const tags = node("div", "tag-list");
     (artist.tags || []).forEach((tag) => tags.append(node("span", "tag-chip", tag))); info.append(tags);
     const link = node("a", "button button-secondary button-small", "在 Pixiv 查看画师");
@@ -1310,7 +1327,7 @@
         const lines = $$("#artist-detail-info > p");
         if (lines[1]) lines[1].textContent = statusText(detailArtist.review_status) + " · " + (artist.collection_enabled ? "采集已启用" : "采集已暂停") + " · " + (detailArtist.remote_followed ? "Pixiv 关注中" : "历史或本地收录");
       }
-      if (activeTab === "library") loadLibrary();
+      if (activeTab === "library") updateLibraryCollection(artist.id, artist.collection_enabled);
     }
   });
   function initialize() {

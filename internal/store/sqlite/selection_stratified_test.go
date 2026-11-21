@@ -23,9 +23,9 @@ func TestStratifiedWeightingAndPageDamping(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &stratifiedWork{id: 1, artist: 1, multiplier: tc.multiplier}
 			for i := 0; i < tc.pages; i++ {
-				a.pages = append(a.pages, selectionPage{page: domain.SelectedPage{IllustID: 1, ArtistID: 1, PageIndex: i}})
+				a.pages = append(a.pages, i)
 			}
-			b := &stratifiedWork{id: 2, artist: 2, multiplier: 1, pages: []selectionPage{{page: domain.SelectedPage{IllustID: 2, ArtistID: 2}}}}
+			b := &stratifiedWork{id: 2, artist: 2, multiplier: 1, pages: []int{0}}
 			const n = 30000
 			count := 0
 			for i := 0; i < n; i++ {

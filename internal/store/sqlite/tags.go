@@ -73,7 +73,7 @@ func (s *Store) ArtistLibraryPage(ctx context.Context, tag, accountID, collectio
 	case "created_asc", "created_desc":
 		sortExpr = "a.created_at"
 	case "artworks_asc", "artworks_desc":
-		sortExpr = "(SELECT COUNT(*) FROM artworks w WHERE w.artist_id=a.id)"
+		sortExpr = libraryArtworkCountSQL
 	default:
 		return nil, 0, 0, 0, "", domain.ErrInvalid
 	}
@@ -135,6 +135,8 @@ func (s *Store) artistTagQuery(ctx context.Context, tag, accountID, collectionEn
 	return s.queryLibraryArtists(ctx, tag, where, args, "a.id", "ASC", offset, limit)
 }
 
+const libraryArtworkCountSQL = "(SELECT COUNT(*) FROM artworks w WHERE w.artist_id=a.id)"
+
 func (s *Store) queryLibraryArtists(ctx context.Context, tag, where string, args []any, sortExpr, direction string, offset, limit int) ([]domain.Artist, error) {
 	paged := tag == "" && limit > 0
 	orderBy := " ORDER BY a.sort_value " + direction + ",a.id ASC"
@@ -144,7 +146,11 @@ func (s *Store) queryLibraryArtists(ctx context.Context, tag, where string, args
 		query += " ORDER BY sort_value " + direction + ",a.id ASC LIMIT ? OFFSET ?"
 		args = append(args, limit, offset)
 	}
-	query += ")" + artistTagsCTEs + ` SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,
+	count := libraryArtworkCountSQL
+	if sortExpr == libraryArtworkCountSQL {
+		count = "a.sort_value"
+	}
+	query += ")" + artistTagsCTEs + ` SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed, ` + count + `,
  COALESCE((SELECT json_group_array(display_name) FROM (SELECT display_name FROM effective_tags e WHERE e.artist_id=a.id ORDER BY e.tag_order)), '[]')
  FROM selected_artists a` + orderBy
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -156,7 +162,7 @@ func (s *Store) queryLibraryArtists(ctx context.Context, tag, where string, args
 	for rows.Next() {
 		var a domain.Artist
 		var rawTags string
-		if err := rows.Scan(&a.ID, &a.Name, &a.Account, &a.AvatarURL, &a.ReviewStatus, &a.CollectionEnabled, &a.RemoteFollowed, &rawTags); err != nil {
+		if err := rows.Scan(&a.ID, &a.Name, &a.Account, &a.AvatarURL, &a.ReviewStatus, &a.CollectionEnabled, &a.RemoteFollowed, &a.ArtworkCount, &rawTags); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal([]byte(rawTags), &a.Tags); err != nil {

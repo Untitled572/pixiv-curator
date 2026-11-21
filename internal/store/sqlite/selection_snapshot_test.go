@@ -110,7 +110,7 @@ func TestSnapshotCommonCandidatesEqualSQL(t *testing.T) {
 	got := map[snapshotPageKey]bool{}
 	for _, w := range works {
 		for _, p := range w.pages {
-			got[snapshotPageKey{p.page.IllustID, p.page.PageIndex}] = true
+			got[snapshotPageKey{w.id, p}] = true
 		}
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT a.id,p.page_index FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...)
