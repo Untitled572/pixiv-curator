@@ -55,5 +55,11 @@ func (s *Store) CleanupSelectionHistory(ctx context.Context) error {
 	if err = trimDistributionHistory(ctx, tx, time.Now()); err != nil {
 		return err
 	}
+	cutoff := time.Now().Add(-distributionHistoryAge).UnixMilli()
+	for _, table := range []string{"exposure_artist", "exposure_work"} {
+		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE exposed_at<?", cutoff); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }

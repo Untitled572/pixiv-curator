@@ -2,10 +2,15 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
 	"github.com/Untitled572/pixiv-curator/internal/domain"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net"
 	"net/http"
@@ -130,6 +135,12 @@ func safeDial(ctx context.Context, network, address string) (net.Conn, error) {
 // Forward receives only a trusted catalog URL. Range is intentionally ignored;
 // both GET and HEAD preserve the fixed page identity supplied by the caller.
 func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request, target string) error {
+	return p.ForwardWithDimensions(w, r, target, nil)
+}
+
+// ForwardWithDimensions reports dimensions from a bounded prefix of a
+// successful transfer. The callback is omitted for known-size images.
+func (p *Proxy) ForwardWithDimensions(w http.ResponseWriter, r *http.Request, target string, observe func(int, int)) error {
 	if !domain.ValidImageURL(target) {
 		return &Error{Code: "INVALID_TARGET"}
 	}
@@ -183,7 +194,12 @@ func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request, target string) e
 	if r.Method == "HEAD" {
 		return nil
 	}
-	n, err := io.CopyBuffer(w, io.LimitReader(resp.Body, MaxImageBytes), make([]byte, 32<<10))
+	payload := io.LimitReader(resp.Body, MaxImageBytes)
+	var header imageHeaderPrefix
+	if observe != nil {
+		payload = io.TeeReader(payload, &header)
+	}
+	n, err := io.CopyBuffer(w, payload, make([]byte, 32<<10))
 	if err != nil {
 		return &Error{Code: "STREAM_FAILED", Started: true}
 	}
@@ -200,7 +216,48 @@ func (p *Proxy) Forward(w http.ResponseWriter, r *http.Request, target string) e
 	if resp.ContentLength >= 0 && n != resp.ContentLength {
 		return &Error{Code: "STREAM_FAILED", Started: true}
 	}
+	if observe != nil {
+		width, height := imageDimensions(header.Bytes())
+		if width > 0 && height > 0 && width <= 100000 && height <= 100000 {
+			observe(width, height)
+		}
+	}
 	return nil
+}
+
+type imageHeaderPrefix struct{ bytes.Buffer }
+
+func (p *imageHeaderPrefix) Write(data []byte) (int, error) {
+	_, _ = p.Buffer.Write(data[:min(len(data), (64<<10)-p.Len())])
+	return len(data), nil
+}
+
+func imageDimensions(data []byte) (int, int) {
+	if conf, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil {
+		return conf.Width, conf.Height
+	}
+	if len(data) < 30 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0
+	}
+	switch string(data[12:16]) {
+	case "VP8X":
+		to24 := func(b []byte) int { return int(b[0]) | int(b[1])<<8 | int(b[2])<<16 }
+		return 1 + to24(data[24:27]), 1 + to24(data[27:30])
+	case "VP8L":
+		if data[20] != 0x2f {
+			return 0, 0
+		}
+		width := int(data[21]) | int(data[22]&0x3f)<<8
+		height := int(data[22]>>6) | int(data[23])<<2 | int(data[24]&0x0f)<<10
+		return width + 1, height + 1
+	case "VP8 ":
+		if data[20]&1 != 0 || !bytes.Equal(data[23:26], []byte{0x9d, 0x01, 0x2a}) {
+			return 0, 0
+		}
+		return int(data[26]) | int(data[27]&0x3f)<<8, int(data[28]) | int(data[29]&0x3f)<<8
+	default:
+		return 0, 0
+	}
 }
 
 // EnablePreviewCache attaches a private, bounded cache used only by management previews.

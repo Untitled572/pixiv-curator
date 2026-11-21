@@ -230,3 +230,41 @@ func TestLibraryTagSearchAndQueryValidation(t *testing.T) {
 		t.Fatalf("legacy full result status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestLibraryUIDAndSort(t *testing.T) {
+	h, s := newLibraryHandler(t)
+	ctx := context.Background()
+	for _, id := range []int64{21, 22, 23} {
+		if err := s.UpsertArtist(ctx, domain.Artist{ID: id}, "manual", "test"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := app.NewCatalog(s).DecideArtist(ctx, id, "approve"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, w := range []domain.Artwork{{ID: 101, ArtistID: 22, MetadataState: "complete"}, {ID: 102, ArtistID: 22, MetadataState: "complete"}, {ID: 103, ArtistID: 23, MetadataState: "complete"}} {
+		if err := s.UpsertArtwork(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []int64{22, 23} {
+		if err := s.SetArtistTagOverride(ctx, id, []string{"蓝色"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{{"?page=1&uid=22", `"id":"22"`}, {"?page=1&sort=created_asc&limit=1", `"id":"21"`}, {"?page=1&sort=artworks_desc&limit=1", `"id":"22"`}, {"?page=2&sort=artworks_desc&limit=1", `"id":"23"`}, {"?page=1&sort=artworks_asc&limit=1", `"id":"21"`}, {"?page=1&sort=artworks_asc&tag=%E8%93%9D%E8%89%B2&limit=1", `"id":"23"`}, {"?page=1&uid=22&collection_enabled=1&tag=%E8%93%9D%E8%89%B2", `"id":"22"`}} {
+		rec := libraryRequest(h, http.MethodGet, "/admin/api/library/artists"+tc.query, "", true)
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
+			t.Fatalf("%s: %d %s", tc.query, rec.Code, rec.Body.String())
+		}
+	}
+	for _, query := range []string{"?page=1&uid=abc", "?page=1&sort=bad", "?sort=artworks_desc"} {
+		if rec := libraryRequest(h, http.MethodGet, "/admin/api/library/artists"+query, "", true); rec.Code != 422 {
+			t.Fatalf("%s: %d", query, rec.Code)
+		}
+	}
+}

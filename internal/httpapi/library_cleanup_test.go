@@ -10,7 +10,11 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
-type cleanupTestStore struct{ removed int64 }
+type cleanupTestStore struct {
+	removed  int64
+	decision bool
+	round    int64
+}
 
 func (s *cleanupTestStore) LibraryCleanupReview(context.Context) (int64, []domain.LibraryCleanupItem, []string, error) {
 	return 1, []domain.LibraryCleanupItem{{Artist: domain.Artist{ID: 7, ReviewStatus: "approved"}, SampleIllustIDs: []string{"70"}}}, []string{}, nil
@@ -24,6 +28,28 @@ func (s *cleanupTestStore) KeepLibraryCleanupArtist(ctx context.Context, id, rou
 func (s *cleanupTestStore) RemoveLibraryArtist(_ context.Context, id int64) error {
 	s.removed = id
 	return nil
+}
+
+func (s *cleanupTestStore) RemoveLibraryArtistWithDecision(_ context.Context, id int64, decision bool, round ...int64) error {
+	s.removed = id
+	s.decision = decision
+	if len(round) > 0 {
+		s.round = round[0]
+	}
+	return nil
+}
+
+func TestCleanupRemoveDecisionAndRound(t *testing.T) {
+	store := &cleanupTestStore{}
+	mux := http.NewServeMux()
+	RegisterLibraryCleanup(mux, store, NewAuth([]byte(adminTestToken), AuthOptions{}))
+	req := httptest.NewRequest("POST", "/admin/api/library/artists/7/remove", strings.NewReader(`{"round":5,"not_interested":true}`))
+	req.Header.Set("Authorization", "Bearer "+adminTestToken)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || store.removed != 7 || !store.decision || store.round != 5 {
+		t.Fatalf("status=%d store=%+v", rec.Code, store)
+	}
 }
 
 func TestLibraryCleanupRoutesRequireAuthAndRejectQuery(t *testing.T) {

@@ -111,7 +111,7 @@ func TestDirectedDiscoveryAppliesConditionsBeforeShowingCandidates(t *testing.T)
 	}
 }
 
-func TestDirectedRankingLooksPastSixPagesAndFillsThirtyCandidates(t *testing.T) {
+func TestDirectedRankingLooksPastSixPagesAndFillsFifteenCandidates(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "directed-ranking.db"))
 	if err != nil {
@@ -132,10 +132,10 @@ func TestDirectedRankingLooksPastSixPagesAndFillsThirtyCandidates(t *testing.T) 
 		t.Fatal(err)
 	}
 	run, items, err := service.Candidates(ctx, id)
-	if err != nil || run.State != "succeeded" || len(items) != 30 {
+	if err != nil || run.State != "succeeded" || len(items) != 15 {
 		t.Fatalf("run state=%q candidates=%d err=%v", run.State, len(items), err)
 	}
-	if client.rankingPages != legacyDirectedPages+8 || run.RequestCount != client.rankingPages+30 {
+	if client.rankingPages != legacyDirectedPages+4 || run.RequestCount != client.rankingPages+15 {
 		t.Fatalf("ranking pages=%d, requests=%d", client.rankingPages, run.RequestCount)
 	}
 	for _, item := range items {

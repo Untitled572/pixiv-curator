@@ -68,12 +68,12 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 		if e != nil {
 			return domain.SelectedPage{}, e
 		}
-		selected, err = choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, recentIDs, false)
+		selected, err = s.choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, recentIDs, false)
 		if err != nil {
 			return domain.SelectedPage{}, err
 		}
 		if selected.page.IllustID == 0 {
-			selected, err = choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, nil, true)
+			selected, err = s.choosePage(ctx, tx, rules, req.ArtistID, req.AccountID, nil, true)
 			if err != nil {
 				return domain.SelectedPage{}, err
 			}
@@ -90,7 +90,7 @@ func (s *Store) Select(ctx context.Context, req domain.SelectionRequest) (domain
 	if _, err = tx.ExecContext(ctx, `INSERT INTO selection_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,?,?,?,?,?)`, selectionID, selectionCollection, selected.page.IllustID, selected.page.PageIndex, now, selectionID); err != nil {
 		return domain.SelectedPage{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES(?,?,?,?,?,?)`, selectionID, selectionCollection, selected.page.IllustID, selected.page.PageIndex, now, selectionID); err != nil {
+	if err = insertDistributionSelection(ctx, tx, selected.page, rules, req, now, selectionID); err != nil {
 		return domain.SelectedPage{}, err
 	}
 	if err = trimDistributionHistory(ctx, tx, time.UnixMilli(now)); err != nil {
@@ -260,6 +260,8 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 		return domain.SelectionRules{}, false, err
 	}
 	result := global
+	result.OrientationFallback = req.OrientationFallback
+	result.DeliveryMode = req.DeliveryMode
 	result.ExcludeManga = global.ExcludeManga || req.ExcludeManga
 	result.AllowedRatings = intersectStrings(global.AllowedRatings, req.AllowedRatings)
 	result.AllowedAI = intersectStrings(global.AllowedAI, req.AllowedAI)
@@ -389,7 +391,7 @@ func normalizedOrientation(value string) string {
 }
 
 func recentArtworkIDs(ctx context.Context, tx *sql.Tx, since int64) ([]int64, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT illust_id FROM selection_history WHERE collection=? AND selected_at>=? GROUP BY illust_id ORDER BY MAX(selected_at) DESC LIMIT ?`, selectionCollection, since, selectionRecentMax)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT illust_id FROM (SELECT illust_id FROM selection_history WHERE collection=? AND selected_at>=? ORDER BY selected_at DESC,id DESC LIMIT ?)`, selectionCollection, since, selectionRecentMax)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +407,7 @@ func recentArtworkIDs(ctx context.Context, tx *sql.Tx, since int64) ([]int64, er
 	return ids, rows.Err()
 }
 
-func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64, fallback bool) (selectionPage, error) {
+func (s *Store) choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64, fallback bool) (selectionPage, error) {
 	where, args, err := selectionWhere(rules, artistID, accountID, recentIDs)
 	if err != nil {
 		return selectionPage{}, err
@@ -421,6 +423,9 @@ func choosePage(ctx context.Context, tx *sql.Tx, rules domain.SelectionRules, ar
 			}
 		}
 		return selectionPage{}, nil
+	}
+	if rules.Strategy == "stratified" || rules.Strategy == "popular" {
+		return s.chooseStratified(ctx, tx, rules, where, args, artistID, accountID, recentIDs)
 	}
 	if rules.Strategy == "random" {
 		counts, err := imageFeedbackInTx(ctx, tx)
@@ -532,13 +537,19 @@ func selectionWhere(rules domain.SelectionRules, artistID int64, accountID strin
 		where = appendAnd(where, `p.height>=?`)
 		args = append(args, rules.MinHeight)
 	}
+	orientationWidth := "p.width"
+	orientationHeight := "p.height"
+	if rules.OrientationFallback == "first_page" {
+		orientationWidth = "CASE WHEN (p.width=0 OR p.height=0) AND p.page_index>0 THEN COALESCE((SELECT p0.width FROM image_pages p0 WHERE p0.illust_id=p.illust_id AND p0.page_index=0),0) ELSE p.width END"
+		orientationHeight = "CASE WHEN (p.width=0 OR p.height=0) AND p.page_index>0 THEN COALESCE((SELECT p0.height FROM image_pages p0 WHERE p0.illust_id=p.illust_id AND p0.page_index=0),0) ELSE p.height END"
+	}
 	switch normalizedOrientation(rules.Orientation) {
 	case "portrait":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.height*10>p.width*11`)
+		where = appendAnd(where, orientationWidth+`>0 AND `+orientationHeight+`>0 AND (`+orientationHeight+`)*10>(`+orientationWidth+`)*11`)
 	case "landscape":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width*10>p.height*11`)
+		where = appendAnd(where, orientationWidth+`>0 AND `+orientationHeight+`>0 AND (`+orientationWidth+`)*10>(`+orientationHeight+`)*11`)
 	case "square":
-		where = appendAnd(where, `p.width>0 AND p.height>0 AND p.width*10<=p.height*11 AND p.height*10<=p.width*11`)
+		where = appendAnd(where, orientationWidth+`>0 AND `+orientationHeight+`>0 AND (`+orientationWidth+`)*10<=(`+orientationHeight+`)*11 AND (`+orientationHeight+`)*10<=(`+orientationWidth+`)*11`)
 	}
 	for _, group := range rules.IncludeTags {
 		where = appendAnd(where, `EXISTS (SELECT 1 FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id AND t.normalized_name IN (`+placeholders(len(group))+`))`)

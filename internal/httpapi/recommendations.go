@@ -49,7 +49,25 @@ func RegisterRecommendations(mux *http.ServeMux, s *app.Recommender, auth *Auth)
 		writeJSON(w, 200, map[string]any{"run": run, "items": items})
 	})))
 	mux.Handle("POST /admin/api/recommendations", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		runID, jobID, err := s.Start(r.Context())
+		if r.URL.RawQuery != "" {
+			apiError(w, domain.ErrInvalid)
+			return
+		}
+		var input struct {
+			ParentRun  string  `json:"parent_run"`
+			ExposedIDs []int64 `json:"exposed_ids"`
+		}
+		var runID, jobID string
+		var err error
+		if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+			runID, jobID, err = s.Start(r.Context())
+		} else {
+			r.Body = http.MaxBytesReader(w, r.Body, 4096)
+			if !decodeBody(w, r, &input) {
+				return
+			}
+			runID, jobID, err = s.StartWithExposure(r.Context(), input.ParentRun, input.ExposedIDs)
+		}
 		if err != nil {
 			apiError(w, err)
 			return

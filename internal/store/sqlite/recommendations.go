@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -34,6 +35,13 @@ func checkRecommendationLease(ctx context.Context, tx *sql.Tx, j domain.Job, run
 	if json.Unmarshal(j.Payload, &payload) != nil || payload.RunID != runID {
 		return domain.ErrLease
 	}
+	var legacyRefill bool
+	if err := tx.QueryRowContext(ctx, `SELECT json_type(budget_json,'$.refill_parent_run') IS NOT NULL FROM recommendation_runs WHERE id=?`, runID).Scan(&legacyRefill); err != nil {
+		return err
+	}
+	if legacyRefill {
+		return domain.ErrLease
+	}
 	return nil
 }
 
@@ -53,12 +61,35 @@ func (s *Store) StartRecommendation(ctx context.Context, budget json.RawMessage)
 		if !sameMode {
 			return "", "", domain.ErrConflict
 		}
+		var incoming struct {
+			Parent string  `json:"exposure_parent"`
+			IDs    []int64 `json:"exposure_ids"`
+		}
+		if json.Unmarshal(budget, &incoming) != nil {
+			return "", "", domain.ErrInvalid
+		}
+		if incoming.Parent != "" {
+			var frozen string
+			if err = tx.QueryRowContext(ctx, `SELECT budget_json FROM recommendation_runs WHERE id=?`, runID).Scan(&frozen); err != nil {
+				return "", "", err
+			}
+			var existing struct {
+				Parent string  `json:"exposure_parent"`
+				IDs    []int64 `json:"exposure_ids"`
+			}
+			if json.Unmarshal([]byte(frozen), &existing) != nil || existing.Parent != incoming.Parent || !slices.Equal(existing.IDs, incoming.IDs) {
+				return "", "", domain.ErrConflict
+			}
+		}
 		if err = tx.Commit(); err != nil {
 			return "", "", err
 		}
 		return runID, jobID, nil
 	}
 	if err != sql.ErrNoRows {
+		return "", "", err
+	}
+	if err = validateRecommendationExposure(ctx, tx, budget); err != nil {
 		return "", "", err
 	}
 	budget, err = freezeRecommendationExclusions(ctx, tx, budget, "")
@@ -244,12 +275,24 @@ func (s *Store) CommitRecommendationRecall(ctx context.Context, j domain.Job, ru
 		}
 	}
 	for _, id := range ids {
+		if id > 0 {
+			for _, source := range dedupeStrings(sources[id]) {
+				if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO recommendation_recall_events(run_id,artist_id,seed_artist_id,source) VALUES(?,?,?,?)`, runID, id, nextSeed, source); err != nil {
+					return err
+				}
+			}
+		}
 		if excluded[id] {
 			continue
 		}
 		a := candidates[id]
 		if id <= 0 || a.ID != id {
 			return domain.ErrInvalid
+		}
+		if nextSeed > 0 && (hasRecommendationMixSource(sources[id], recommend.SourceRelatedArtist) || hasRecommendationMixSource(sources[id], recommend.SourceRelatedArtwork)) {
+			if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO recommendation_seed_hits(run_id,artist_id,seed_artist_id) VALUES(?,?,?)`, runID, id, nextSeed); err != nil {
+				return err
+			}
 		}
 
 		var status string
@@ -569,7 +612,7 @@ func parseRecommendationSampleID(value string) (int64, error) {
 }
 
 func (s *Store) CommitRecommendationSamples(ctx context.Context, j domain.Job, runID string, artistID, nextID int64, artworks []domain.Artwork, result domain.Recommendation) error {
-	if runID == "" || artistID <= 0 || nextID < 0 || result.ArtistID != artistID || result.Score < 0 || result.Score > 1 || len(artworks) > 4 {
+	if runID == "" || artistID <= 0 || nextID < 0 || result.ArtistID != artistID || result.Score < 0 || result.Score > 1 || len(artworks) > 30 {
 		return domain.ErrInvalid
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -579,6 +622,13 @@ func (s *Store) CommitRecommendationSamples(ctx context.Context, j domain.Job, r
 	defer tx.Rollback()
 	if err = checkRecommendationLease(ctx, tx, j, runID); err != nil {
 		return err
+	}
+	var samplePlan string
+	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(json_extract(budget_json,'$.plan_version'),'') FROM recommendation_runs WHERE id=?`, runID).Scan(&samplePlan); err != nil {
+		return err
+	}
+	if len(result.SampleIDs) > 4 || (samplePlan == "v2" && len(result.SampleIDs) > 3) || (samplePlan != "v2" && len(artworks) > 4) {
+		return domain.ErrInvalid
 	}
 	var pending bool
 	if err = tx.QueryRowContext(ctx, `SELECT review_status='pending' FROM artists WHERE id=?`, artistID).Scan(&pending); err != nil {
@@ -677,7 +727,16 @@ func (s *Store) CompleteRecommendation(ctx context.Context, j domain.Job, runID 
 	if _, err = tx.ExecContext(ctx, `DELETE FROM recommendations WHERE run_id=? AND score_version='' AND EXISTS(SELECT 1 FROM recommendation_runs rr WHERE rr.id=? AND json_type(rr.budget_json,'$.directed')='object')`, runID, runID); err != nil {
 		return err
 	}
+	if err = recordRecommendationFunnel(ctx, tx, runID, false); err != nil {
+		return err
+	}
 	if err = selectRecommendationExploration(ctx, tx, runID); err != nil {
+		return err
+	}
+	if err = recordRecommendationFunnel(ctx, tx, runID, true); err != nil {
+		return err
+	}
+	if err = settleRecommendationExposure(ctx, tx, runID); err != nil {
 		return err
 	}
 	now := time.Now().UnixMilli()

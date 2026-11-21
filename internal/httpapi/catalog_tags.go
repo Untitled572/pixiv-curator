@@ -13,10 +13,8 @@ import (
 )
 
 type libraryTagStore interface {
-	ArtistTagPage(context.Context, string, string, int64, int) ([]domain.Artist, error)
-	ArtistTagPageStats(context.Context, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
+	ArtistLibraryPage(context.Context, string, string, string, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
 	ArtistTagPageFiltered(context.Context, string, string, string, int64, int) ([]domain.Artist, error)
-	ArtistTagPageStatsFiltered(context.Context, string, string, string, int, int) ([]domain.Artist, int64, int64, int, string, error)
 	ArtistTags(context.Context) ([]string, error)
 	ArtistTagsSearch(context.Context, string, int) ([]string, error)
 	SetArtistTagOverride(context.Context, int64, []string) error
@@ -81,7 +79,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			return
 		}
 		for key, values := range q {
-			if key != "tag" && key != "account_id" && key != "collection_enabled" && key != "after" && key != "limit" && key != "page" || len(values) != 1 {
+			if key != "tag" && key != "account_id" && key != "collection_enabled" && key != "after" && key != "limit" && key != "page" && key != "uid" && key != "sort" || len(values) != 1 {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
@@ -106,7 +104,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 		}
 		_, hasPage := q["page"]
 		_, hasAfter := q["after"]
-		if hasPage && hasAfter {
+		if hasPage && hasAfter || !hasPage && (q.Get("uid") != "" || q.Get("sort") != "") {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
@@ -126,7 +124,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 				apiError(w, domain.ErrInvalid)
 				return
 			}
-			items, total, libraryTotal, totalPages, next, err := store.ArtistTagPageStatsFiltered(r.Context(), tag, accountID, collectionEnabled, page, limit)
+			items, total, libraryTotal, totalPages, next, err := store.ArtistLibraryPage(r.Context(), tag, accountID, collectionEnabled, q.Get("uid"), q.Get("sort"), page, limit)
 			if err != nil {
 				apiError(w, err)
 				return

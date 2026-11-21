@@ -84,11 +84,36 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		if r.ContentLength > 0 {
+		var in struct {
+			NotInterested bool   `json:"not_interested"`
+			Round         *int64 `json:"round"`
+		}
+		if r.ContentLength != 0 {
+			if !decodeBody(w, r, &in) {
+				return
+			}
+		}
+		if in.Round != nil && *in.Round <= 0 {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		if err = store.RemoveLibraryArtist(r.Context(), id); err != nil {
+		if in.NotInterested || in.Round != nil {
+			extended, ok := store.(interface {
+				RemoveLibraryArtistWithDecision(context.Context, int64, bool, ...int64) error
+			})
+			if !ok {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			if in.Round != nil {
+				err = extended.RemoveLibraryArtistWithDecision(r.Context(), id, in.NotInterested, *in.Round)
+			} else {
+				err = extended.RemoveLibraryArtistWithDecision(r.Context(), id, in.NotInterested)
+			}
+		} else {
+			err = store.RemoveLibraryArtist(r.Context(), id)
+		}
+		if err != nil {
 			apiError(w, err)
 			return
 		}

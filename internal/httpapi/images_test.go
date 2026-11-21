@@ -172,12 +172,12 @@ func TestImagesRoutesPreserveIdentityAndEnforceEligibility(t *testing.T) {
 	if randomRec.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("random Cache-Control=%q", randomRec.Header().Get("Cache-Control"))
 	}
-	if selected["url"] != localURL || selected["original_url"] != original {
+	if selected["selection_id"] == "" || selected["url"] != localURL+"&selection_id="+fmt.Sprint(selected["selection_id"]) || selected["original_url"] != original {
 		t.Fatalf("random URL=%v; want %q", selected["url"], original)
 	}
 	randomRedirect := httptest.NewRecorder()
 	mux.ServeHTTP(randomRedirect, httptest.NewRequest(http.MethodGet, "/random?format=redirect", nil))
-	if randomRedirect.Code != http.StatusFound || randomRedirect.Header().Get("Location") != localURL {
+	if randomRedirect.Code != http.StatusFound || !strings.HasPrefix(randomRedirect.Header().Get("Location"), localURL+"&selection_id=") {
 		t.Fatalf("random redirect status=%d location=%q", randomRedirect.Code, randomRedirect.Header().Get("Location"))
 	}
 

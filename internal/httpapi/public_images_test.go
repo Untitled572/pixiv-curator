@@ -36,7 +36,7 @@ func TestPublicImageURLsStreamOriginalWithoutConsumerReferer(t *testing.T) {
 	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &selected) != nil {
 		t.Fatalf("JSON status=%d body=%s", rec.Code, rec.Body)
 	}
-	if !strings.HasPrefix(selected.URL, "https://curator.test/i/991/") || !strings.HasSuffix(selected.URL, "?format=image") || !strings.HasPrefix(selected.OriginalURL, "https://i.pximg.net/img-original/") {
+	if !strings.HasPrefix(selected.URL, "https://curator.test/i/991/") || selected.SelectionID == "" || !strings.HasSuffix(selected.URL, "?format=image&selection_id="+selected.SelectionID) || !strings.HasPrefix(selected.OriginalURL, "https://i.pximg.net/img-original/") {
 		t.Fatalf("delivery URLs=%+v", selected)
 	}
 	if len(upstream) != 0 {
@@ -61,6 +61,19 @@ func TestPublicImageURLsStreamOriginalWithoutConsumerReferer(t *testing.T) {
 	}
 	if got := previewRequest(mux, "GET", "/random?format=image", false); got.Code != 200 || got.Body.String() != "jpeg" {
 		t.Fatalf("random image status=%d", got.Code)
+	}
+	history, err := store.History(context.Background(), 1, 24)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := 0
+	for _, item := range history.Items {
+		if item.DeliveryMode == "proxy" && item.DeliveredAt != nil {
+			delivered++
+		}
+	}
+	if delivered != 2 {
+		t.Fatalf("confirmed proxy deliveries = %d, want 2", delivered)
 	}
 	calls := len(upstream)
 	for _, path := range []string{"/random?delivery=original", "/i/991/0?delivery=original"} {

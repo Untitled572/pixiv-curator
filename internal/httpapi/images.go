@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/url"
@@ -22,6 +23,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		var err error
+		var width, height int
 		if preview && !original && page.PreviewIsThumbnail {
 			err = p.ForwardPreviewAtGeneration(w, r, page.PreviewURL, generation)
 		} else {
@@ -29,9 +31,16 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			if preview && !original {
 				target = page.PreviewURL
 			}
-			err = p.Forward(w, r, target)
+			var observe func(int, int)
+			if target == page.OriginalURL && (page.Width == 0 || page.Height == 0) {
+				observe = func(w, h int) { width, height = w, h }
+			}
+			err = p.ForwardWithDimensions(w, r, target, observe)
 		}
 		if err == nil {
+			if r.Method == http.MethodGet {
+				s.ObserveTransfer(page, width, height)
+			}
 			return
 		}
 		var upstream *media.Error
@@ -53,12 +62,19 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			apiError(w, err)
 			return
 		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Allow", http.MethodGet)
+			writeAPIError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED")
+			return
+		}
+		req.DeliveryMode = r.URL.Query().Get("delivery")
 		out, err := s.Select(r.Context(), req)
 		if err != nil {
 			imageError(w, err)
 			return
 		}
 		out.URL = preserveSelectionOptions(out.URL, r.URL.Query())
+		out.URL = withSelectionID(out.URL, out.SelectionID)
 		if r.URL.Query().Get("delivery") == "original" {
 			out.URL = out.OriginalURL
 		}
@@ -140,6 +156,9 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 				return
 			}
 			if format == "stream" || format == "image" {
+				if !preview {
+					page.SelectionID = query.Get("selection_id")
+				}
 				forward(w, r, page, preview, original, generation)
 				return
 			}
@@ -162,6 +181,7 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 			}
 			out := s.Result(page)
 			out.URL = preserveSelectionOptions(out.URL, query)
+			out.URL = withSelectionID(out.URL, query.Get("selection_id"))
 			if delivery == "original" {
 				out.URL = out.OriginalURL
 			}
@@ -216,6 +236,20 @@ func RegisterImages(mux *http.ServeMux, s *app.Images, p *media.Proxy, auth *Aut
 	})))
 }
 
+func withSelectionID(target, selectionID string) string {
+	if selectionID == "" {
+		return target
+	}
+	u, err := url.Parse(target)
+	if err != nil {
+		return target
+	}
+	q := u.Query()
+	q.Set("selection_id", selectionID)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // preserveSelectionOptions carries explicit filters to the same fixed identity.
 func preserveSelectionOptions(target string, source url.Values) string {
 	u, err := url.Parse(target)
@@ -224,7 +258,7 @@ func preserveSelectionOptions(target string, source url.Values) string {
 	}
 	q := u.Query()
 	for key, values := range source {
-		if key == "format" || key == "delivery" || key == "collection" {
+		if key == "format" || key == "delivery" || key == "collection" || key == "selection_id" {
 			continue
 		}
 		q[key] = values
@@ -255,7 +289,14 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 		out.Overrides[k] = true
 		switch k {
 		case "included_tags", "excluded_tags":
-		case "delivery", "format", "collection", "orientation", "r18", "ai_type", "exclude_manga", "min_width", "min_height", "user_id", "strategy", "account_id":
+		case "selection_id":
+			if r.PathValue("id") == "" || len(v) != 1 || len(v[0]) != 32 {
+				return out, domain.ErrInvalid
+			}
+			if _, err := hex.DecodeString(v[0]); err != nil {
+				return out, domain.ErrInvalid
+			}
+		case "delivery", "format", "collection", "orientation", "orientation_fallback", "r18", "ai_type", "exclude_manga", "min_width", "min_height", "user_id", "strategy", "account_id":
 			if len(v) != 1 {
 				return out, domain.ErrInvalid
 			}
@@ -273,8 +314,9 @@ func selectionQuery(r *http.Request) (domain.SelectionRequest, error) {
 		return out, domain.ErrInvalid
 	}
 	out.Orientation = q.Get("orientation")
+	out.OrientationFallback = q.Get("orientation_fallback")
 	out.Strategy = q.Get("strategy")
-	for _, key := range []string{"orientation", "strategy"} {
+	for _, key := range []string{"orientation", "orientation_fallback", "strategy"} {
 		if values, present := q[key]; present && values[0] == "" {
 			return out, domain.ErrInvalid
 		}

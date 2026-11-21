@@ -1,0 +1,17 @@
+CREATE TABLE selection_catalog_revision (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL);
+INSERT INTO selection_catalog_revision VALUES(1,0);
+CREATE TRIGGER selection_revision_artists_insert AFTER INSERT ON artists BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artists_update AFTER UPDATE ON artists BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artists_delete AFTER DELETE ON artists BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artworks_insert AFTER INSERT ON artworks BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artworks_update AFTER UPDATE ON artworks BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artworks_delete AFTER DELETE ON artworks BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_image_pages_insert AFTER INSERT ON image_pages BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_image_pages_update AFTER UPDATE ON image_pages BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_image_pages_delete AFTER DELETE ON image_pages BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artwork_tags_insert AFTER INSERT ON artwork_tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artwork_tags_update AFTER UPDATE ON artwork_tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_artwork_tags_delete AFTER DELETE ON artwork_tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_tags_insert AFTER INSERT ON tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_tags_update AFTER UPDATE ON tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;
+CREATE TRIGGER selection_revision_tags_delete AFTER DELETE ON tags BEGIN UPDATE selection_catalog_revision SET revision=revision+1 WHERE id=1; END;

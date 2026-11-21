@@ -8,6 +8,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"github.com/Untitled572/pixiv-curator/internal/recommend"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -46,6 +47,25 @@ func NewRecommender(s RecommendationRepository, c RecommendationClient) *Recomme
 func (s *Recommender) Start(ctx context.Context) (string, string, error) {
 	return s.store.StartRecommendation(ctx, s.defaultRunBudget())
 }
+
+// StartWithExposure freezes the current card exposure set with the new run.
+func (s *Recommender) StartWithExposure(ctx context.Context, parent string, exposed []int64) (string, string, error) {
+	if len(exposed) > 30 || (parent == "" && len(exposed) > 0) {
+		return "", "", domain.ErrInvalid
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(s.defaultRunBudget(), &fields); err != nil {
+		return "", "", err
+	}
+	fields["exposure_parent"], _ = json.Marshal(parent)
+	fields["exposure_ids"], _ = json.Marshal(exposed)
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return "", "", err
+	}
+	return s.store.StartRecommendation(ctx, raw)
+}
+
 func (s *Recommender) Candidates(ctx context.Context, runID string) (domain.RecommendationRun, []domain.Recommendation, error) {
 	run, err := s.store.RecommendationRun(ctx, runID)
 	if err != nil {
@@ -104,6 +124,11 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 	if json.Unmarshal(run.Budget, &budget) != nil || budget.SeedArtists < 1 || budget.SeedArtists > 30 || budget.SeedSamplesPerArtist < 1 || budget.SeedSamplesPerArtist > 8 || budget.CandidateSamplesPerArtist < 1 || budget.CandidateSamplesPerArtist > 4 || budget.CandidateArtists < 1 || budget.CandidateArtists > 60 || budget.TotalRequests < 1 || budget.TotalRequests > 300 {
 		return taskInvalid()
 	}
+	var plan struct {
+		Version      string `json:"plan_version"`
+		WeakFeedback bool   `json:"weak_feedback_enabled"`
+	}
+	_ = json.Unmarshal(run.Budget, &plan)
 	recallLimit := budget.RecallArtists
 	if recallLimit == 0 {
 		recallLimit = budget.CandidateArtists
@@ -199,7 +224,11 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			if excluded[raw.ID] {
 				return
 			}
-			if _, exists := candidates[raw.ID]; !exists && len(candidates) >= recallLimit {
+			eventLimit := recallLimit
+			if plan.Version == "v2" {
+				eventLimit = 600
+			}
+			if _, exists := candidates[raw.ID]; !exists && len(candidates) >= eventLimit {
 				return
 			}
 			a, err := pixiv.NormalizeArtist(raw)
@@ -247,13 +276,32 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 				}
 			}
 		}
-		if len(samples) > 0 {
+		relatedSamples := samples
+		if plan.Version == "v2" {
+			if ageRepo, ok := s.store.(interface {
+				RecommendationArtistAge(context.Context, int64) (string, error)
+			}); ok {
+				age, ageErr := ageRepo.RecommendationArtistAge(ctx, seed.ID)
+				if ageErr != nil {
+					return classify(ageErr)
+				}
+				if age == "safe" {
+					relatedSamples = nil
+					for _, sample := range samples {
+						if sample.Rating == "safe" {
+							relatedSamples = append(relatedSamples, sample)
+						}
+					}
+				}
+			}
+		}
+		if len(relatedSamples) > 0 {
 			ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
 			if err != nil {
 				return err
 			}
 			if ok {
-				works, err := s.client.RelatedArtworks(ctx, samples[0].ID)
+				works, err := s.client.RelatedArtworks(ctx, relatedSamples[0].ID)
 				if err != nil {
 					if haltOptional(err) {
 						return classify(err)
@@ -319,6 +367,35 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			return classify(err)
 		}
 		profile = recommend.BuildProfile(input, negatives, budget)
+		if plan.Version == "v2" {
+			examples := []recommend.SimilarityExample{}
+			for _, seed := range input {
+				if seed.ReviewStatus != "approved" && !seed.RemoteFollowed {
+					continue
+				}
+				tags := []string{}
+				for _, work := range rankRepresentativeSamples(append([]domain.Artwork(nil), seed.Samples...), 3) {
+					tags = append(tags, work.Tags...)
+				}
+				examples = append(examples, recommend.SimilarityExample{Tags: tags, Weight: 1})
+			}
+			if repo, ok := s.store.(interface {
+				RecommendationSimilarityExamples(context.Context, string) ([]recommend.SimilarityExample, error)
+			}); ok {
+				examples = nil
+				feedback, e := repo.RecommendationSimilarityExamples(ctx, run.ID)
+				if e != nil {
+					return classify(e)
+				}
+				for _, example := range feedback {
+					if !example.Weak || plan.WeakFeedback {
+						examples = append(examples, example)
+					}
+				}
+			}
+			model := recommend.BuildSimilarityModel(examples)
+			profile.Similarity = &model
+		}
 		if repo, ok := s.store.(interface {
 			ImageFeedbackTags(context.Context) (map[string]float64, error)
 		}); ok {
@@ -365,11 +442,15 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		samples, err := s.store.RecommendationSamples(ctx, candidate.ArtistID, budget.CandidateSamplesPerArtist)
+		sampleLimit := budget.CandidateSamplesPerArtist
+		if plan.Version == "v2" {
+			sampleLimit = 30
+		}
+		samples, err := s.store.RecommendationSamples(ctx, candidate.ArtistID, sampleLimit)
 		if err != nil {
 			return classify(err)
 		}
-		if len(samples) == 0 || hasIndependentSource(candidate.Sources) && len(samples) < budget.CandidateSamplesPerArtist {
+		if len(samples) == 0 || hasIndependentSource(candidate.Sources) && len(samples) < budget.CandidateSamplesPerArtist || plan.Version == "v2" && len(samples) < 8 {
 			ok, err := s.reserve(ctx, j, run.ID, budget.TotalRequests)
 			if err != nil {
 				return err
@@ -382,18 +463,42 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 					}
 				} else {
 					var fetched []domain.Artwork
-					fetched, err = normalizeSamples(page.Artworks, candidate.ArtistID, budget.CandidateSamplesPerArtist)
+					fetched, err = normalizeSamples(page.Artworks, candidate.ArtistID, sampleLimit)
 					if err != nil {
 						return classify(err)
 					}
-					samples = mergeRecommendationPreviewSamples(samples, fetched, budget.CandidateSamplesPerArtist)
+					samples = mergeRecommendationPreviewSamples(samples, fetched, sampleLimit)
 				}
 			}
 		}
-		scored := recommend.ScoreCandidate(profile, recommend.Candidate{ArtistID: candidate.ArtistID, Sources: candidate.Sources, Samples: samples}, budget)
+		featureSamples := rankRepresentativeSamples(append([]domain.Artwork(nil), samples...), 3)
+		if plan.Version == "v2" {
+			known, adult := 0, 0
+			safe := []domain.Artwork{}
+			for _, work := range samples {
+				switch work.Rating {
+				case "safe":
+					known++
+					safe = append(safe, work)
+				case "r18", "r18g":
+					known++
+					adult++
+				}
+			}
+			if known >= 8 && known*4 >= len(samples)*3 && adult == 0 && len(safe) > 0 {
+				featureSamples = rankRepresentativeSamples(safe, 3)
+			}
+		}
+		scored := recommend.ScoreCandidate(profile, recommend.Candidate{ArtistID: candidate.ArtistID, Sources: candidate.Sources, Samples: featureSamples}, budget)
 		candidate.Score = scored.Score
 		candidate.Reasons = scored.Reasons
 		candidate.SampleIDs = scored.SampleIDs
+		if plan.Version == "v2" {
+			candidate.SampleIDs = nil
+			for _, work := range featureSamples {
+				candidate.SampleIDs = append(candidate.SampleIDs, strconv.FormatInt(work.ID, 10))
+			}
+		}
 		candidate.Confidence = scored.Confidence
 		candidate.Version = scored.Version
 		candidate.Components, _ = json.Marshal(scored.Components)
@@ -401,6 +506,24 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 			candidate.Score = 0
 			candidate.Version = "independent-v1"
 			candidate.Reasons = []string{"代表作供你参考"}
+		} else if plan.Version == "v2" && profile.Similarity != nil {
+			tags := []string{}
+			for _, work := range featureSamples {
+				tags = append(tags, work.Tags...)
+			}
+			hits := 0
+			if repo, ok := s.store.(interface {
+				RecommendationSeedHits(context.Context, string, int64) (int, error)
+			}); ok {
+				var e error
+				hits, e = repo.RecommendationSeedHits(ctx, run.ID, candidate.ArtistID)
+				if e != nil {
+					return classify(e)
+				}
+			}
+			candidate.Score = profile.Similarity.Score(tags, hits)
+			candidate.Version = "similarity-v2"
+			candidate.Reasons = []string{"根据代表作标签与相关画师线索排序"}
 		} else if profile.Regression != nil {
 			tags := []string{}
 			for _, work := range samples {

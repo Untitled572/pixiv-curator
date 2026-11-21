@@ -23,6 +23,30 @@ type CatalogStats struct {
 }
 
 type LibraryCleanupItem struct {
-	Artist          Artist   `json:"artist"`
-	SampleIllustIDs []string `json:"sample_illust_ids"`
+	Artist          Artist                 `json:"artist"`
+	SampleIllustIDs []string               `json:"sample_illust_ids"`
+	Samples         []LibraryCleanupSample `json:"samples"`
+	SlotType        string                 `json:"slot_type"`
+	AuditReason     string                 `json:"audit_reason"`
+	Summary         LibraryCleanupSummary  `json:"summary"`
+}
+
+// LibraryCleanupSample identifies the exact preview page selected for review.
+type LibraryCleanupSample struct {
+	IllustID  string `json:"illust_id"`
+	PageIndex int    `json:"page_index"`
+	Reason    string `json:"reason,omitempty"`
+}
+
+type LibraryCleanupSummary struct {
+	Artworks        int64 `json:"artworks"`
+	Pages           int64 `json:"pages"`
+	EligiblePages   int64 `json:"eligible_pages"`
+	R18             int64 `json:"r18"`
+	KnownRating     int64 `json:"known_rating"`
+	AI              int64 `json:"ai"`
+	KnownAI         int64 `json:"known_ai"`
+	Likes           int64 `json:"likes"`
+	Dislikes        int64 `json:"dislikes"`
+	LatestPublished int64 `json:"latest_published_at,omitempty"`
 }

@@ -30,21 +30,9 @@ const artistTagsCTEs = `, recent AS (
  WHERE ar.tag_rank<=8 AND NOT EXISTS(SELECT 1 FROM artist_tag_overrides o WHERE o.artist_id=ar.artist_id)
 )`
 
-const selectedArtistsCTE = `WITH selected_artists AS (
- SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed
- FROM artists a WHERE a.review_status IN ('approved','blocked')
+const libraryArtistFilter = ` FROM artists a WHERE a.review_status IN ('approved','blocked')
  AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))
- AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))
- AND a.id>?
-)`
-
-const pagedArtistsCTE = `WITH selected_artists AS (
- SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed
- FROM artists a WHERE a.review_status IN ('approved','blocked')
- AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))
- AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))
- AND a.id>? ORDER BY a.id LIMIT ? OFFSET ?
-)`
+ AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))`
 
 // ArtistTagPage returns the legacy keyset page, including one extra row when present.
 func (s *Store) ArtistTagPage(ctx context.Context, tag, accountID string, after int64, limit int) ([]domain.Artist, error) {
@@ -67,12 +55,40 @@ func (s *Store) ArtistTagPageStats(ctx context.Context, tag, accountID string, p
 
 // ArtistTagPageStatsFiltered returns a filtered page while libraryTotal remains the full catalog count.
 func (s *Store) ArtistTagPageStatsFiltered(ctx context.Context, tag, accountID, collectionEnabled string, page, pageSize int) ([]domain.Artist, int64, int64, int, string, error) {
+	return s.ArtistLibraryPage(ctx, tag, accountID, collectionEnabled, "", "", page, pageSize)
+}
+
+// ArtistLibraryPage returns a numbered page with optional UID search and ordering.
+func (s *Store) ArtistLibraryPage(ctx context.Context, tag, accountID, collectionEnabled, uid, order string, page, pageSize int) ([]domain.Artist, int64, int64, int, string, error) {
 	if page < 1 || pageSize < 1 || pageSize > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID || !validCollectionFilter(collectionEnabled) {
 		return nil, 0, 0, 0, "", domain.ErrInvalid
 	}
 	offset := (page - 1) * pageSize
 	if offset < 0 || offset/pageSize != page-1 || offset > int(^uint(0)>>1)-pageSize {
 		return nil, 0, 0, 0, "", domain.ErrInvalid
+	}
+	sortExpr, direction := "a.id", "ASC"
+	switch order {
+	case "":
+	case "created_asc", "created_desc":
+		sortExpr = "a.created_at"
+	case "artworks_asc", "artworks_desc":
+		sortExpr = "(SELECT COUNT(*) FROM artworks w WHERE w.artist_id=a.id)"
+	default:
+		return nil, 0, 0, 0, "", domain.ErrInvalid
+	}
+	if strings.HasSuffix(order, "_desc") {
+		direction = "DESC"
+	}
+	where := libraryArtistFilter
+	args := []any{accountID, accountID, collectionEnabled, collectionEnabled}
+	if uid != "" {
+		id, err := strconv.ParseInt(uid, 10, 64)
+		if err != nil || id <= 0 || strconv.FormatInt(id, 10) != uid {
+			return nil, 0, 0, 0, "", domain.ErrInvalid
+		}
+		where += " AND a.id=?"
+		args = append(args, id)
 	}
 	var total, libraryTotal int64
 	var items []domain.Artist
@@ -85,9 +101,9 @@ func (s *Store) ArtistTagPageStatsFiltered(ctx context.Context, tag, accountID, 
 		if err := s.db.QueryRowContext(ctx, countSQL, accountID, accountID, collectionEnabled, collectionEnabled).Scan(&total); err != nil {
 			return nil, 0, 0, 0, "", err
 		}
-		items, err = s.artistTagQuery(ctx, "", accountID, collectionEnabled, 0, offset, pageSize)
+		items, err = s.queryLibraryArtists(ctx, "", where, args, sortExpr, direction, offset, pageSize)
 	} else {
-		matches, err := s.artistTagQuery(ctx, tag, accountID, collectionEnabled, 0, 0, 0)
+		matches, err := s.queryLibraryArtists(ctx, tag, where, args, sortExpr, direction, 0, 0)
 		if err != nil {
 			return nil, 0, 0, 0, "", err
 		}
@@ -107,23 +123,30 @@ func (s *Store) ArtistTagPageStatsFiltered(ctx context.Context, tag, accountID, 
 		totalPages = int((total + int64(pageSize) - 1) / int64(pageSize))
 	}
 	next := ""
-	if page < totalPages && len(items) > 0 {
+	if order == "" && page < totalPages && len(items) > 0 {
 		next = strconv.FormatInt(items[len(items)-1].ID, 10)
 	}
 	return items, total, libraryTotal, totalPages, next, nil
 }
 
 func (s *Store) artistTagQuery(ctx context.Context, tag, accountID, collectionEnabled string, after int64, offset, limit int) ([]domain.Artist, error) {
-	paged := tag == ""
-	query := selectedArtistsCTE + artistTagsCTEs
+	where := libraryArtistFilter + " AND a.id>?"
 	args := []any{accountID, accountID, collectionEnabled, collectionEnabled, after}
+	return s.queryLibraryArtists(ctx, tag, where, args, "a.id", "ASC", offset, limit)
+}
+
+func (s *Store) queryLibraryArtists(ctx context.Context, tag, where string, args []any, sortExpr, direction string, offset, limit int) ([]domain.Artist, error) {
+	paged := tag == "" && limit > 0
+	orderBy := " ORDER BY a.sort_value " + direction + ",a.id ASC"
+	query := `WITH selected_artists AS (
+ SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,` + sortExpr + " AS sort_value" + where
 	if paged {
-		query = pagedArtistsCTE + artistTagsCTEs
-		args = []any{accountID, accountID, collectionEnabled, collectionEnabled, after, limit, offset}
+		query += " ORDER BY sort_value " + direction + ",a.id ASC LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
 	}
-	query += ` SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,
+	query += ")" + artistTagsCTEs + ` SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,
  COALESCE((SELECT json_group_array(display_name) FROM (SELECT display_name FROM effective_tags e WHERE e.artist_id=a.id ORDER BY e.tag_order)), '[]')
- FROM selected_artists a ORDER BY a.id`
+ FROM selected_artists a` + orderBy
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

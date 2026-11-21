@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Untitled572/pixiv-curator/internal/app"
@@ -70,5 +71,14 @@ func TestRecommendationRatingQueryValidationAuthAndLegacyRequests(t *testing.T) 
 	}
 	if got := request("/admin/api/recommendations?run_id="+runID+"&content_rating=unknown&ai_type=unknown", true).Code; got != http.StatusOK {
 		t.Fatalf("combined filtered candidates status=%d", got)
+	}
+	for _, body := range []string{`{"exposed_ids":[123]}`, `{"parent_run":"old","exposed_ids":[1],"extra":true}`, `{"parent_run":"old","exposed_ids":"wrong"}`} {
+		req := httptest.NewRequest(http.MethodPost, "/admin/api/recommendations", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer test-token")
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("body %s status=%d", body, rec.Code)
+		}
 	}
 }

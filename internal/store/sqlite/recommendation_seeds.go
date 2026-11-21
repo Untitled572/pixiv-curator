@@ -233,6 +233,41 @@ func freezeRecommendationSeeds(ctx context.Context, tx *sql.Tx, raw json.RawMess
 		return nil, err
 	}
 	b["library_adult_ratio"] = ratioJSON
+	var version string
+	_ = json.Unmarshal(b["plan_version"], &version)
+	if version == "v2" {
+		const ageSQL = `WITH ranked AS (
+          SELECT artist_id,rating,row_number() OVER(PARTITION BY artist_id ORDER BY COALESCE(published_at,0) DESC,id DESC) rn FROM artworks WHERE visible=1 AND metadata_state<>'unavailable'
+        ), counts AS (
+          SELECT artist_id,count(*) total,sum(rating IN ('safe','r18','r18g')) known,sum(rating IN ('r18','r18g')) adult FROM ranked WHERE rn<=30 GROUP BY artist_id
+        ), grouped AS (
+          SELECT a.id,CASE WHEN c.known<8 OR c.known*4<c.total*3 THEN 'unknown' WHEN c.adult=0 THEN 'safe' WHEN c.adult*10<c.known*3 THEN 'mixed' ELSE 'adult' END class,
+          CASE WHEN a.id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) THEN 0.2 ELSE 1.0 END weight FROM artists a JOIN counts c ON c.artist_id=a.id WHERE a.review_status='approved'
+        ) SELECT class,sum(weight) FROM grouped GROUP BY class`
+		rows, qerr := tx.QueryContext(ctx, ageSQL, string(recentJSON))
+		if qerr != nil {
+			return nil, qerr
+		}
+		weights := map[string]float64{"safe": 0, "mixed": 0, "adult": 0}
+		for rows.Next() {
+			var class string
+			var weight float64
+			if qerr = rows.Scan(&class, &weight); qerr != nil {
+				rows.Close()
+				return nil, qerr
+			}
+			if class != "unknown" {
+				weights[class] = weight
+			}
+		}
+		if qerr = rows.Err(); qerr != nil {
+			rows.Close()
+			return nil, qerr
+		}
+		rows.Close()
+		b["library_class_weights"], _ = json.Marshal(weights)
+	}
+
 	return json.Marshal(b)
 }
 func (s *Store) RecommendationSeedsForRun(ctx context.Context, runID string, limit int) ([]domain.Artist, error) {

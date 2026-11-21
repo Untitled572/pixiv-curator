@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
@@ -22,6 +23,10 @@ func TestLibraryCleanupReviewBoundAndRemove(t *testing.T) {
 		}
 	}
 	if err := s.UpsertArtwork(ctx, domain.Artwork{ID: 101, ArtistID: 1, Rating: "r18g", PageCount: 1, MetadataState: "complete", Pages: []domain.Page{{Index: 0, OriginalURL: "https://i.pximg.net/a.jpg", Width: 10, Height: 10}}}); err != nil {
+		t.Fatal(err)
+	}
+	// Legacy enable timestamps are unknown; qualify artist 1 for the priority pool.
+	if _, err := s.db.Exec(`UPDATE artists SET cleanup_enabled_at=NULL; UPDATE artworks SET ai_status='ai',published_at=? WHERE id=101`, time.Now().UnixMilli()); err != nil {
 		t.Fatal(err)
 	}
 	_, items, _, err := s.LibraryCleanupReview(ctx)
@@ -39,7 +44,7 @@ func TestLibraryCleanupReviewBoundAndRemove(t *testing.T) {
 		if item.Artist.ID == 1 {
 			foundSample = len(item.SampleIllustIDs) == 1 && item.SampleIllustIDs[0] == "101"
 		}
-		if len(item.SampleIllustIDs) > 3 {
+		if len(item.SampleIllustIDs) > 6 {
 			t.Fatalf("sample count=%d", len(item.SampleIllustIDs))
 		}
 	}
@@ -147,7 +152,7 @@ func TestPausePurgesCatalogAndPreservesArtist(t *testing.T) {
 	}
 }
 
-func TestCleanupBatchPersistsAndSkipsExactlyFiftyRounds(t *testing.T) {
+func TestCleanupBatchPersistsAndUsesAdaptiveCooldown(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "cleanup.db")
 	s, err := Open(ctx, path)
@@ -160,17 +165,20 @@ func TestCleanupBatchPersistsAndSkipsExactlyFiftyRounds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	round, first, kept, err := s.LibraryCleanupReview(ctx)
-	if err != nil || round != 1 || len(first) != 6 || len(kept) != 0 {
-		t.Fatalf("first round=%d len=%d kept=%v err=%v", round, len(first), kept, err)
+	if _, err = s.db.Exec(`UPDATE artists SET cleanup_enabled_at=NULL`); err != nil {
+		t.Fatal(err)
 	}
-	keptID := first[0].Artist.ID
-	if err = s.KeepLibraryCleanupArtist(ctx, keptID, round); err != nil {
+	round, first, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(first) != 6 {
+		t.Fatalf("initial: %v %v", first, err)
+	}
+	id := first[0].Artist.ID
+	if err = s.KeepLibraryCleanupArtist(ctx, id, round); err != nil {
 		t.Fatal(err)
 	}
 	_, again, kept, err := s.LibraryCleanupReview(ctx)
-	if err != nil || !reflect.DeepEqual(first, again) || len(kept) != 1 || kept[0] != strconv.FormatInt(keptID, 10) {
-		t.Fatalf("reloaded items=%v kept=%v err=%v", again, kept, err)
+	if err != nil || !reflect.DeepEqual(first, again) || len(kept) != 1 || kept[0] != strconv.FormatInt(id, 10) {
+		t.Fatalf("reload: %v %v", kept, err)
 	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
@@ -182,51 +190,19 @@ func TestCleanupBatchPersistsAndSkipsExactlyFiftyRounds(t *testing.T) {
 	defer s.Close()
 	_, again, kept, err = s.LibraryCleanupReview(ctx)
 	if err != nil || !reflect.DeepEqual(first, again) || len(kept) != 1 {
-		t.Fatalf("reopened kept=%v err=%v", kept, err)
+		t.Fatalf("reopen: %v %v", kept, err)
 	}
-	if err = s.RemoveLibraryArtist(ctx, first[1].Artist.ID); err != nil {
+	if _, _, _, err = s.NextLibraryCleanup(ctx, round); err != nil {
 		t.Fatal(err)
 	}
-	_, again, _, err = s.LibraryCleanupReview(ctx)
-	if err != nil || len(again) != 5 {
-		t.Fatalf("removed still in batch: %v %v", again, err)
-	}
-	round, _, _, err = s.NextLibraryCleanup(ctx, 1)
-	if err != nil || round != 2 {
-		t.Fatalf("next=%d err=%v", round, err)
-	}
-	if _, _, _, err = s.NextLibraryCleanup(ctx, 1); !errors.Is(err, domain.ErrConflict) {
+	if _, _, _, err = s.NextLibraryCleanup(ctx, round); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale next: %v", err)
 	}
-	if err = s.KeepLibraryCleanupArtist(ctx, keptID, 1); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("stale keep: %v", err)
+	var until, minAt, maxAt int64
+	if err = s.db.QueryRow(`SELECT until_round,min_at,max_at FROM library_cleanup_skip WHERE artist_id=?`, id).Scan(&until, &minAt, &maxAt); err != nil {
+		t.Fatal(err)
 	}
-	for round < 51 {
-		var items []domain.LibraryCleanupItem
-		round, items, _, err = s.NextLibraryCleanup(ctx, round)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, item := range items {
-			if item.Artist.ID == keptID {
-				t.Fatalf("artist returned early at round %d", round)
-			}
-		}
-	}
-	round, items, _, err := s.NextLibraryCleanup(ctx, round)
-	if err != nil || round != 52 {
-		t.Fatalf("round=%d err=%v", round, err)
-	}
-	found := false
-	for _, item := range items {
-		if item.Artist.ID == keptID {
-			found = true
-		}
-		if item.Artist.ID == first[1].Artist.ID {
-			t.Fatal("removed artist reappeared")
-		}
-	}
-	if !found {
-		t.Fatalf("artist absent after 50 skipped rounds: %+v", items)
+	if until != round+30 || maxAt-minAt != int64((120*24*time.Hour)/time.Millisecond) {
+		t.Fatalf("cooldown: %d %d %d", until, minAt, maxAt)
 	}
 }

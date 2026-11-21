@@ -20,8 +20,9 @@ type ImageRepository interface {
 	SetArtworkPreference(context.Context, int64, string) error
 }
 type Images struct {
-	store ImageRepository
-	base  string
+	store        ImageRepository
+	base         string
+	observations chan domain.ImageTransfer
 }
 
 func NewImages(s ImageRepository, base string) *Images { return &Images{store: s, base: base} }

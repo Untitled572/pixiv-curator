@@ -27,12 +27,13 @@ type independentExplorationCheckpoint interface {
 
 func (s *Recommender) defaultRunBudget() json.RawMessage {
 	raw, _ := json.Marshal(recommend.DefaultBudget())
-	if _, ok := s.client.(independentExplorationClient); !ok {
-		return raw
-	}
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(raw, &fields)
-	fields["independent_exploration"] = json.RawMessage("true")
+	fields["plan_version"] = json.RawMessage(`"v2"`)
+	fields["weak_feedback_enabled"] = json.RawMessage(`true`)
+	if _, ok := s.client.(independentExplorationClient); ok {
+		fields["independent_exploration"] = json.RawMessage("true")
+	}
 	raw, _ = json.Marshal(fields)
 	return raw
 }
@@ -187,6 +188,13 @@ func (s *Recommender) recallIndependent(ctx context.Context, j domain.Job, run d
 			break
 		}
 		illustID := b.UniformProbeIDs[i]
+		if recorder, ok := s.store.(interface {
+			RecordUniformProbe(context.Context, domain.Job, string) error
+		}); ok {
+			if err = recorder.RecordUniformProbe(ctx, j, run.ID); err != nil {
+				return classify(err)
+			}
+		}
 		raw, fetchErr := uniformClient.Artwork(ctx, illustID)
 		if fetchErr != nil {
 			if haltOptional(fetchErr) {
@@ -198,6 +206,15 @@ func (s *Recommender) recallIndependent(ctx context.Context, j domain.Job, run d
 			continue
 		}
 		artist, sample, valid := normalizeIndependentArtwork(raw, illustID)
+		if valid {
+			if recorder, ok := s.store.(interface {
+				RecordUniformHit(context.Context, domain.Job, string) error
+			}); ok {
+				if err = recorder.RecordUniformHit(ctx, j, run.ID); err != nil {
+					return classify(err)
+				}
+			}
+		}
 		if valid && !excluded[artist.ID] {
 			if err = s.store.CommitRecommendationRecall(ctx, j, run.ID, run.SeedCursor, map[int64]domain.Artist{artist.ID: artist}, map[int64][]string{artist.ID: {independentUniformSource}}, limit); err != nil {
 				return classify(err)

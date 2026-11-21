@@ -104,6 +104,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		return fmt.Errorf("load accounts: %w", err)
 	}
 	workerCtx, stopWorker := context.WithCancel(ctx)
+	snapshotDone := store.StartSelectionSnapshots(workerCtx)
+	observationDone := images.StartImageObservations(workerCtx)
 	workerDone := make(chan struct{})
 	maintenanceDone := make(chan struct{})
 	go func() {
@@ -121,7 +123,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	handlers["follow_artist"] = app.NewRemoteFollows(store, client).Handler
 	worker := jobs.NewWorker(store, handlers)
 	go func() { defer close(workerDone); _ = worker.Run(workerCtx) }()
-	defer func() { stopWorker(); <-workerDone; <-maintenanceDone }()
+	defer func() { stopWorker(); <-workerDone; <-maintenanceDone; <-observationDone; <-snapshotDone }()
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)

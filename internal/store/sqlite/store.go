@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -20,9 +21,13 @@ import (
 var migrations embed.FS
 
 type Store struct {
-	db               *sql.DB
-	hookMu           sync.RWMutex
-	previewPurgeHook func([]string) error
+	selectionSnapshot        atomic.Pointer[selectionSnapshot]
+	selectionSnapshotOnce    sync.Once
+	selectionSnapshotDSN     string
+	selectionSnapshotRefresh chan struct{}
+	db                       *sql.DB
+	hookMu                   sync.RWMutex
+	previewPurgeHook         func([]string) error
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -54,7 +59,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	s := &Store{db: db}
+	snapshotURL := u
+	snapshotQuery := url.Values{"mode": {"ro"}, "_pragma": {"busy_timeout(5000)", "query_only(1)"}}
+	snapshotURL.RawQuery = snapshotQuery.Encode()
+	s := &Store{db: db, selectionSnapshotDSN: snapshotURL.String(), selectionSnapshotRefresh: make(chan struct{}, 1)}
 	if err = db.PingContext(ctx); err == nil {
 		err = s.Migrate(ctx)
 	}

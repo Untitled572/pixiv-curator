@@ -64,9 +64,14 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 	default:
 		return "", domain.ErrInvalid
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE artists SET review_status=?,collection_enabled=?,updated_at=? WHERE id=?`, next, enabled, time.Now().UnixMilli(), id)
+	_, err = tx.ExecContext(ctx, `UPDATE artists SET review_status=?,collection_enabled=?,updated_at=?,cleanup_enabled_at=CASE WHEN collection_enabled=0 AND ? THEN ? ELSE cleanup_enabled_at END WHERE id=?`, next, enabled, time.Now().UnixMilli(), enabled, time.Now().UnixMilli(), id)
 	if err != nil {
 		return "", err
+	}
+	if state == "pending" && (action == "approve" || action == "reject") {
+		if err = recordRecommendationDecision(ctx, tx, id, action); err != nil {
+			return "", err
+		}
 	}
 	if action == "approve" && state == "pending" {
 		var accountID string
@@ -153,12 +158,37 @@ func cancelRemoteFollowJobs(ctx context.Context, tx *sql.Tx, id int64) error {
 }
 
 func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error {
+	return s.setCollection(ctx, id, enabled, false)
+}
+
+// RemoveLibraryArtistWithDecision optionally records an explicit discovery
+// rejection in the same transaction as the user-requested catalog purge.
+func (s *Store) RemoveLibraryArtistWithDecision(ctx context.Context, id int64, notInterested bool, expectedRound ...int64) error {
+	if id <= 0 {
+		return domain.ErrInvalid
+	}
+	return s.setCollection(ctx, id, false, notInterested, expectedRound...)
+}
+
+func (s *Store) setCollection(ctx context.Context, id int64, enabled, notInterested bool, expectedRound ...int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	r, err := tx.ExecContext(ctx, `UPDATE artists SET collection_enabled=?,updated_at=? WHERE id=? AND review_status='approved'`, enabled, time.Now().UnixMilli(), id)
+	if len(expectedRound) > 1 || len(expectedRound) == 1 && expectedRound[0] <= 0 {
+		return domain.ErrInvalid
+	}
+	if len(expectedRound) == 1 {
+		var current bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM library_cleanup_state s JOIN library_cleanup_batch b ON b.artist_id=? WHERE s.id=1 AND s.initialized=1 AND s.round=?)", id, expectedRound[0]).Scan(&current); err != nil {
+			return err
+		}
+		if !current {
+			return domain.ErrConflict
+		}
+	}
+	r, err := tx.ExecContext(ctx, `UPDATE artists SET collection_enabled=?,updated_at=?,cleanup_enabled_at=CASE WHEN collection_enabled=0 AND ? THEN ? ELSE cleanup_enabled_at END WHERE id=? AND review_status='approved'`, enabled, time.Now().UnixMilli(), enabled, time.Now().UnixMilli(), id)
 	if err != nil {
 		return err
 	}
@@ -168,6 +198,14 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 	}
 	if n != 1 {
 		return domain.ErrConflict
+	}
+	if notInterested {
+		if err = recordRecommendationDecision(ctx, tx, id, "reject"); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE artists SET review_status='rejected' WHERE id=?", id); err != nil {
+			return err
+		}
 	}
 	var urls []string
 	if !enabled {
@@ -218,6 +256,7 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 	if err = tx.Commit(); err != nil {
 		return err
 	}
+	s.RequestSelectionSnapshotRefresh()
 	if !enabled {
 		s.hookMu.RLock()
 		hook := s.previewPurgeHook
@@ -240,6 +279,9 @@ func (s *Store) SetCollection(ctx context.Context, id int64, enabled bool) error
 // purgeArtistCatalog removes dependent rows before deleting the artist's artwork.
 // The caller first cancels jobs while their artwork references still exist.
 func purgeArtistCatalog(ctx context.Context, tx *sql.Tx, id int64) error {
+	if _, err := tx.ExecContext(ctx, "DELETE FROM exposure_artist WHERE artist_id=?", id); err != nil {
+		return err
+	}
 	for _, table := range []string{"distribution_history", "selection_history", "image_feedback", "feedback_events", "artwork_preferences", "artwork_tags", "image_pages"} {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE illust_id IN (SELECT id FROM artworks WHERE artist_id=?)`, id); err != nil {
 			return err
@@ -327,7 +369,11 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.RequestSelectionSnapshotRefresh()
+	return nil
 }
 func finishedAt(cursor string, phase bool) any {
 	if cursor == "" && phase {
@@ -397,7 +443,7 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 		}
 		// The revised workflow treats following as enrollment, but never overrides
 		// an explicit rejection, block, or paused collection.
-		if _, err = tx.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1 WHERE id=? AND review_status='pending'`, a.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE artists SET review_status='approved',collection_enabled=1,cleanup_enabled_at=? WHERE id=? AND review_status='pending'`, time.Now().UnixMilli(), a.ID); err != nil {
 			return err
 		}
 		var enabled bool
@@ -448,7 +494,11 @@ func (s *Store) CommitFollowingBatch(ctx context.Context, j domain.Job, runID st
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.RequestSelectionSnapshotRefresh()
+	return nil
 }
 
 func incrementJobProgress(ctx context.Context, tx *sql.Tx, j domain.Job, items int) error {

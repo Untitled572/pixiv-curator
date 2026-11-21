@@ -152,7 +152,7 @@ func TestRecommendationExclusionsAreEmptyWithoutPreviousSuccess(t *testing.T) {
 	}
 }
 
-func TestRefillExclusionsKeepCarryoversAndSkipTheirRecallReplay(t *testing.T) {
+func TestManualReplacementKeepsHistoryAndSkipsPreviousRecallReplay(t *testing.T) {
 	s := openExclusionStore(t)
 	now := time.Now().UnixMilli()
 	oldIDs := make([]int64, 15)
@@ -160,35 +160,14 @@ func TestRefillExclusionsKeepCarryoversAndSkipTheirRecallReplay(t *testing.T) {
 		oldIDs[i] = int64(800000 + i)
 	}
 	insertExclusionRun(t, s, "parent", now-1000, oldIDs)
-	// Schedule and claim the existing coordinator using the same durable queue contract.
-	tx, err := s.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = scheduleRecommendationRefill(context.Background(), tx, oldIDs[0]); err != nil {
-		tx.Rollback()
-		t.Fatal(err)
-	}
-	if err = tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = s.db.Exec(`UPDATE jobs SET available_at=0 WHERE dedupe_key='recommendation-refill' AND state='pending'`); err != nil {
-		t.Fatal(err)
-	}
-	coordinator, err := s.Claim(context.Background(), time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = s.StartRecommendationRefill(context.Background(), coordinator, json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"recall_artists":60,"exploration_artists":6,"total_requests":80}`)); err != nil {
-		t.Fatal(err)
-	}
-	runID, err := s.LatestRecommendation(context.Background())
+	// The manual replacement freezes the old IDs without copying old cards.
+	runID, _, err := s.StartRecommendation(context.Background(), json.RawMessage(`{"seed_artists":8,"candidate_artists":15,"recall_artists":60,"total_requests":80}`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	excluded := readExcludedIDs(t, s, runID)
 	if len(excluded) != 15 || excluded[0] != oldIDs[0] || excluded[14] != oldIDs[14] {
-		t.Fatalf("refill exclusion snapshot=%v", excluded)
+		t.Fatalf("manual replacement exclusion snapshot=%v", excluded)
 	}
 	job, err := s.Claim(context.Background(), time.Now())
 	if err != nil {
@@ -204,12 +183,12 @@ func TestRefillExclusionsKeepCarryoversAndSkipTheirRecallReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err = s.db.QueryRow(`SELECT count(*) FROM recommendations WHERE run_id=?`, runID).Scan(&count); err != nil || count != 16 {
-		t.Fatalf("refill row count=%d err=%v, want 15 carryover + 1 new", count, err)
+	if err = s.db.QueryRow(`SELECT count(*) FROM recommendations WHERE run_id=?`, runID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("manual row count=%d err=%v, want exactly 1 new", count, err)
 	}
 	var score float64
 	var sampleIDs, components string
-	if err = s.db.QueryRow(`SELECT score,sample_illust_ids_json,components_json FROM recommendations WHERE run_id=? AND artist_id=?`, runID, oldIDs[0]).Scan(&score, &sampleIDs, &components); err != nil {
+	if err = s.db.QueryRow(`SELECT score,sample_illust_ids_json,components_json FROM recommendations WHERE run_id=? AND artist_id=?`, "parent", oldIDs[0]).Scan(&score, &sampleIDs, &components); err != nil {
 		t.Fatal(err)
 	}
 	if score != 0.01 || sampleIDs != `["12345"]` || !json.Valid([]byte(components)) {

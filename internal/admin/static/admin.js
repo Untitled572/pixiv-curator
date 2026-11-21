@@ -123,6 +123,9 @@
     try {
       const query = new URLSearchParams({ limit: $("#library-page-size").value, page: String(libraryPage) });
       const tag = $("#library-tag").value, account = $("#library-account").value, collection = $("#library-collection").value;
+      const uid = $("#library-uid").value.trim(), order = $("#library-sort").value;
+      if (uid) query.set("uid", uid);
+      if (order) query.set("sort", order);
       if (tag) query.set("tag", tag);
       if (account) query.set("account_id", account);
       if (collection !== "") query.set("collection_enabled", collection);
@@ -280,18 +283,26 @@
         });
         keep.disabled = kept.has(id);
         card.append(heading);
+        const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "可用作品较少", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
+        const summary = item.summary || {};
+        card.append(node("p", "field-help", `${reasons[item.audit_reason] || "常规巡检"} · 作品 ${summary.artworks || 0} · 图片 ${summary.pages || 0} · 可供图 ${summary.eligible_pages || 0} · R18 ${summary.r18 || 0}/${summary.known_rating || 0}（已知） · AI ${summary.ai || 0}/${summary.known_ai || 0}（已知） · 赞 ${summary.likes || 0} / 踩 ${summary.dislikes || 0}${summary.latest_published_at ? " · 最近 " + new Date(summary.latest_published_at).toLocaleDateString() : ""}`));
         const samples = node("div", "library-review-samples");
-        (Array.isArray(item.sample_illust_ids) ? item.sample_illust_ids : []).slice(0, 3).forEach((illustID) => {
-          const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 大图");
-          tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex: 0, title: "代表作 " + illustID, artistName: artist.name || "" }));
-          const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(String(illustID))}/0`; tile.append(image); samples.append(tile);
+        (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
+          const illustID = String(sample.illust_id), pageIndex = Number(sample.page_index) || 0;
+          const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 第 " + (pageIndex + 1) + " 页大图");
+          tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex, title: "代表作 " + illustID, artistName: artist.name || "" }));
+          const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(illustID)}/${pageIndex}`; tile.append(image);
+          if (sample.reason) tile.append(node("span", "sample-badge", sample.reason === "dislike" ? "已踩" : "AI"));
+          samples.append(tile);
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
         actions.append(node("p", "field-help", "移出与暂停相同：停止采集和供图，删除作品、链接及相关历史；不会取关。"));
+        const rejectLabel = node("label", "field-help");
+        const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 同时在发现画师中标为不感兴趣")); actions.append(rejectLabel);
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
           const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true;
-          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST" }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
+          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST", body: JSON.stringify({ not_interested: reject.checked, round: result.round }) }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
           catch (error) { report(error, "移出图库"); trigger.disabled = false; }
         });
         card.append(actions); fragment.append(card);
@@ -372,6 +383,9 @@
     if (!libraryLoading && Number.isInteger(page) && page >= 1 && page <= libraryPages) { libraryPage = page; loadLibrary(); }
   });
   $("#library-page-size").addEventListener("change", () => loadLibrary(true));
+  let libraryUIDTimer;
+  $("#library-uid").addEventListener("input", () => { clearTimeout(libraryUIDTimer); libraryUIDTimer = setTimeout(() => loadLibrary(true), 300); });
+  $("#library-sort").addEventListener("change", () => loadLibrary(true));
   $("#library-tag").addEventListener("change", () => loadLibrary(true));
   $("#library-account").addEventListener("change", () => loadLibrary(true));
   $("#library-collection").addEventListener("change", () => loadLibrary(true));
@@ -536,6 +550,43 @@
       document.addEventListener("scroll", queueVisibleRecommendationPreviews, { capture: true, passive: true });
     }
   }
+  // An exposure requires a continuously visible card and a visible loaded sample.
+  let exposureRunID = "", exposureEligible = new Set(), exposureSince = new Map(), exposureObserver = null;
+  function resetDiscoveryExposure(runID = "") {
+    exposureObserver?.disconnect(); exposureRunID = runID;
+    exposureEligible = new Set(); exposureSince = new Map();
+  }
+  function visibleIntersection(rect, bounds) {
+    return Math.max(0, Math.min(rect.right, bounds.right) - Math.max(rect.left, bounds.left)) * Math.max(0, Math.min(rect.bottom, bounds.bottom) - Math.max(rect.top, bounds.top));
+  }
+  function updateDiscoveryExposure() {
+    const viewport = {left: 0, top: 0, right: innerWidth, bottom: innerHeight};
+    for (const card of $$("#recommendation-list .recommendation-card[data-artist-id]")) {
+      const id = card.dataset.artistId, rect = card.getBoundingClientRect();
+      const targetArea = Math.min(rect.width, innerWidth) * Math.min(rect.height, innerHeight);
+      const cardVisible = targetArea > 0 && visibleIntersection(rect, viewport) >= targetArea * 0.98;
+      const sampleVisible = Array.from(card.querySelectorAll('img[data-preview-loaded="true"]')).some((image) => {
+        const imageRect = image.getBoundingClientRect(), slider = image.closest(".candidate-samples")?.getBoundingClientRect();
+        if (!slider || image.hidden) return false;
+        const clipped = {left: Math.max(slider.left, viewport.left), top: Math.max(slider.top, viewport.top), right: Math.min(slider.right, viewport.right), bottom: Math.min(slider.bottom, viewport.bottom)};
+        return visibleIntersection(imageRect, clipped) > 0;
+      });
+      if (!exposureRunID || activeTab !== "discover" || document.visibilityState !== "visible" || !cardVisible || !sampleVisible || card.dataset.decisionPending) { exposureSince.delete(id); continue; }
+      if (!exposureSince.has(id)) exposureSince.set(id, performance.now());
+      if (performance.now() - exposureSince.get(id) >= 1500) exposureEligible.add(id);
+    }
+  }
+  function observeDiscoveryExposure(runID, root) {
+    if (exposureRunID !== runID) resetDiscoveryExposure(runID);
+    exposureObserver?.disconnect();
+    if ("IntersectionObserver" in window) {
+      exposureObserver = new IntersectionObserver(updateDiscoveryExposure, {threshold: [0, 0.25, 0.5, 0.75, 1]});
+      root.querySelectorAll(".recommendation-card[data-artist-id]").forEach((card) => exposureObserver.observe(card));
+    }
+    updateDiscoveryExposure();
+  }
+  setInterval(updateDiscoveryExposure, 250);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible") exposureSince.clear(); });
   function prepareRecommendationCards(items) {
     const fragment = document.createDocumentFragment();
     const oldCards = new Map($$("#recommendation-list .recommendation-card[data-artist-id]").map((card) => [card.dataset.artistId, card]));
@@ -591,7 +642,7 @@
       const fragment = prepareRecommendationCards(items);
       if (!fragment || controller.signal.aborted || activeTab !== "discover") return;
       if (!fragment.children.length) fragment.append(node("p", "empty-cell", "当前筛选下没有带代表作的候选，可调整筛选或生成下一批。"));
-      list.replaceChildren(fragment); observeRecommendationPreviews(list, previewController.signal); recommendationRenderedKey = key; updateRecommendationStatus(run); startRecommendationPolling(30000);
+      list.replaceChildren(fragment); observeRecommendationPreviews(list, previewController.signal); observeDiscoveryExposure(run.budget?.directed ? "" : recommendationRunID, list); recommendationRenderedKey = key; updateRecommendationStatus(run); startRecommendationPolling(30000);
     } catch (error) {
       if (controller.signal.aborted || activeTab !== "discover") return;
       $("#start-recommendations").disabled = false; $("#start-recommendations").textContent = "开始发现";
@@ -603,8 +654,8 @@
   }
   function loadLatestRecommendations() { return readRecommendations(); }
   function loadRecommendationByID(runID) { return readRecommendations(runID); }
-  $("#recommendation-rating").addEventListener("change", () => readRecommendations("", true));
-  $("#recommendation-ai").addEventListener("change", () => readRecommendations("", true));
+  $("#recommendation-rating").addEventListener("change", () => { resetDiscoveryExposure(); readRecommendations("", true); });
+  $("#recommendation-ai").addEventListener("change", () => { resetDiscoveryExposure(); readRecommendations("", true); });
   async function submitDiscovery(options) {
     const trigger = $("#start-recommendations");
     if (trigger.disabled) return;
@@ -615,6 +666,7 @@
       const path = options ? "/admin/api/recommendations/directed" : "/admin/api/recommendations";
       const request = { method: "POST" };
       if (options) request.body = JSON.stringify(options);
+      else request.body = JSON.stringify({parent_run: exposureRunID, exposed_ids: Array.from(exposureEligible).filter((id) => document.querySelector(`#recommendation-list .recommendation-card[data-artist-id="${CSS.escape(id)}"]`)).map(Number)});
       const result = await api(path, request);
       recommendationRunID = String(result.run_id || "");
       if (options) {
@@ -655,15 +707,6 @@
     if (document.visibilityState !== "visible") { stopRecommendationPolling(); stopAccountPolling(); }
     else { if (activeTab === "discover") loadLatestRecommendations(); if (activeTab === "settings") { refreshAccountStatuses(); startAccountPolling(); } }
   });
-  let lastDiscoveryActivity = 0, discoveryActivityTimer = null;
-  function sendDiscoveryActivity() { lastDiscoveryActivity = Date.now(); api("/admin/api/recommendations/activity", { method: "POST", body: "{}" }).catch(() => {}); }
-  function touchDiscoveryActivity() {
-    if (activeTab !== "discover" || document.visibilityState !== "visible") return;
-    clearTimeout(discoveryActivityTimer);
-    if (Date.now() - lastDiscoveryActivity >= 30000) sendDiscoveryActivity();
-    discoveryActivityTimer = setTimeout(sendDiscoveryActivity, 1000);
-  }
-  for (const event of ["pointerdown", "keydown", "scroll"]) document.addEventListener(event, touchDiscoveryActivity, { passive: true, capture: true });
   function runLabel(state) { return ({ pending: "排队中", running: "正在发现", retry_wait: "稍后重试", succeeded: "已完成", failed: "未完成", paused_auth: "需要检查账号" })[state] || "状态更新中"; }
   function renderRecommendation(item) {
     const artist = item.artist || {}, id = String(artist.id || item.artist_id || "");
@@ -682,7 +725,7 @@
     const identity = node("div"); identity.append(title, node("p", "artist-id", `UID ${id}${artist.account ? ` · ${artist.account}` : ""}`)); heading.append(identity);
     const score = Number(item.components?.display_score ?? item.score);
     const directedRandom = Array.isArray(item.sources) && item.sources.includes("directed_random");
-    if (!item.components?.uniform_id) {
+    if (!item.components?.uniform_id && !item.components?.exploration) {
       const scoreBadge = node("span", "score-badge", directedRandom ? "定向随机" : Number.isFinite(score) ? `推荐指数 ${score.toFixed(2)}` : "推荐候选");
       scoreBadge.title = directedRandom ? "来自定向随机候选，不表示模型评分" : "仅用于候选排序参考，不代表喜欢概率";
       heading.append(scoreBadge);
@@ -979,6 +1022,7 @@
     $("#api-include-tags").value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean).forEach((v) => query.append("included_tags", v));
     $("#api-exclude-tags").value.split(/[,，\r\n]+/).map((v) => v.trim()).filter(Boolean).forEach((v) => query.append("excluded_tags", v));
     if (!$("#api-exclude-manga").checked) query.set("exclude_manga", "0");
+    if ($("#api-orientation-fallback").checked) query.set("orientation_fallback", "first_page");
     return query;
   }
   function updateAPIURL() {

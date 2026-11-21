@@ -67,139 +67,62 @@ func claimRefill(t *testing.T, s *Store) domain.Job {
 	return j
 }
 
-func TestRecommendationRefillSchedulesAndDebounces(t *testing.T) {
+func TestRecommendationRefillNoLongerSchedulesFromReviewOrActivity(t *testing.T) {
 	s := openRecommendationStore(t)
 	_, ids := seedRefillRun(t, s, 15, 1)
-	scheduleRefillForTest(t, s, ids[0])
-	var firstID string
-	var firstAvailable int64
-	if err := s.db.QueryRow(`SELECT id,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&firstID, &firstAvailable); err != nil {
-		t.Fatal(err)
+	for _, id := range ids[:2] {
+		scheduleRefillForTest(t, s, id)
+		if err := s.TouchRecommendationActivity(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if delta := time.Until(time.UnixMilli(firstAvailable)); delta < 4*time.Minute || delta > 5*time.Minute+time.Second {
-		t.Fatalf("initial deadline delta=%s", delta)
-	}
-	if _, err := s.db.Exec(`UPDATE jobs SET available_at=0 WHERE id=?`, firstID); err != nil {
-		t.Fatal(err)
-	}
-	scheduleRefillForTest(t, s, ids[1])
-	var id string
-	var secondAvailable int64
-	if err := s.db.QueryRow(`SELECT id,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&id, &secondAvailable); err != nil {
-		t.Fatal(err)
-	}
-	if id != firstID {
-		t.Fatalf("reschedule changed job or failed to debounce: id %q -> %q, available %d -> %d", firstID, id, firstAvailable, secondAvailable)
-	}
-	if _, err := s.db.Exec(`UPDATE jobs SET available_at=0 WHERE id=?`, id); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.TouchRecommendationActivity(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	var touchedAvailable int64
-	if err := s.db.QueryRow(`SELECT available_at FROM jobs WHERE id=?`, id).Scan(&touchedAvailable); err != nil {
-		t.Fatal(err)
-	}
-	if touchedAvailable < time.Now().Add(4*time.Minute).UnixMilli() {
-		t.Fatalf("activity did not extend deadline: %d", touchedAvailable)
-	}
+	assertNoQueuedRefill(t, s)
 }
 
-func TestRecommendationRefillCarriesPendingRowsAndBoundsNewBudget(t *testing.T) {
+func TestLegacyRefillCoordinatorDoesNotCreateOrCopyRecommendations(t *testing.T) {
+	ctx := context.Background()
 	s := openRecommendationStore(t)
 	oldRun, ids := seedRefillRun(t, s, 15, 2)
-	// One coordinator is scheduled from a decision on the previous run.
-	scheduleRefillForTest(t, s, ids[0])
+	seedLegacyRefillJob(t, s, oldRun)
 	j := claimRefill(t, s)
-	if err := s.StartRecommendationRefill(context.Background(), j, json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"recall_artists":60,"exploration_artists":6,"total_requests":80}`)); err != nil {
+	if err := s.StartRecommendationRefill(ctx, j, json.RawMessage(`{"seed_artists":8,"candidate_artists":30}`)); err != nil {
 		t.Fatal(err)
 	}
-	newRun, err := s.LatestRecommendation(context.Background())
-	if err != nil || newRun == oldRun {
-		t.Fatalf("LatestRecommendation() = %q, %v; old=%q", newRun, err, oldRun)
-	}
-	var budget string
-	if err = s.db.QueryRow(`SELECT budget_json FROM recommendation_runs WHERE id=?`, newRun).Scan(&budget); err != nil {
+	var runCount, retained, follows int
+	if err := s.db.QueryRow(`SELECT (SELECT count(*) FROM recommendation_runs),
+		(SELECT count(*) FROM recommendations WHERE run_id=?),
+		(SELECT count(*) FROM jobs WHERE kind='follow_artist')`, oldRun).Scan(&runCount, &retained, &follows); err != nil {
 		t.Fatal(err)
 	}
-	var got struct {
-		CandidateArtists   int `json:"candidate_artists"`
-		RecallArtists      int `json:"recall_artists"`
-		ExplorationArtists int `json:"exploration_artists"`
-		TotalRequests      int `json:"total_requests"`
+	if runCount != 1 || retained != len(ids) || follows != 0 {
+		t.Fatalf("run count=%d, retained=%d, follow jobs=%d", runCount, retained, follows)
 	}
-	if err = json.Unmarshal([]byte(budget), &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.CandidateArtists != 15 || got.RecallArtists != 45 || got.ExplorationArtists != 3 || got.TotalRequests != 80 {
-		t.Fatalf("refill budget = %#v", got)
-	}
-	var n int
-	if err = s.db.QueryRow(`SELECT count(*) FROM recommendations WHERE run_id=?`, newRun).Scan(&n); err != nil || n != 15 {
-		t.Fatalf("carried candidates=%d, err=%v; want 15", n, err)
-	}
-	for _, id := range ids[:15] {
-		var score float64
-		var reasons, samples, sources, components string
-		if err = s.db.QueryRow(`SELECT score,reasons_json,sample_illust_ids_json,sources_json,components_json FROM recommendations WHERE run_id=? AND artist_id=?`, newRun, id).Scan(&score, &reasons, &samples, &sources, &components); err != nil {
-			t.Fatal(err)
-		}
-		var originalScore float64
-		if err = s.db.QueryRow(`SELECT score FROM recommendations WHERE run_id=? AND artist_id=?`, oldRun, id).Scan(&originalScore); err != nil {
-			t.Fatal(err)
-		}
-		if score != originalScore || reasons != `["reason"]` || samples != `["12345"]` || sources != `["source"]` {
-			t.Fatalf("candidate %d metadata changed: score=%v reasons=%s samples=%s sources=%s", id, score, reasons, samples, sources)
-		}
-		var flags map[string]any
-		if err = json.Unmarshal([]byte(components), &flags); err != nil || flags["carryover"] != true || flags["raw"] != true {
-			t.Fatalf("candidate %d components=%s err=%v", id, components, err)
-		}
-	}
-	var countApproved int
-	if err = s.db.QueryRow(`SELECT count(*) FROM recommendations WHERE run_id=? AND artist_id=?`, newRun, ids[15]).Scan(&countApproved); err != nil || countApproved != 0 {
-		t.Fatalf("approved candidate carried: count=%d err=%v", countApproved, err)
-	}
-	var jobState string
-	if err = s.db.QueryRow(`SELECT state FROM jobs WHERE id=?`, j.ID).Scan(&jobState); err != nil || jobState != "succeeded" {
-		t.Fatalf("coordinator state=%q err=%v", jobState, err)
-	}
-	var followJobs int
-	if err = s.db.QueryRow(`SELECT count(*) FROM jobs WHERE kind='follow_artist'`).Scan(&followJobs); err != nil || followJobs != 0 {
-		t.Fatalf("refill created follow jobs=%d err=%v", followJobs, err)
-	}
+	assertRefillJobState(t, s, j.ID, "succeeded")
 }
 
-func TestRecommendationRefillActivityRevokesRunningCoordinator(t *testing.T) {
+func TestPrepareRecommendationRefillRevokesRunningCoordinatorWithoutReplacement(t *testing.T) {
+	ctx := context.Background()
 	s := openRecommendationStore(t)
-	_, ids := seedRefillRun(t, s, 15, 0)
-	scheduleRefillForTest(t, s, ids[0])
+	run, _ := seedRefillRun(t, s, 15, 0)
+	seedLegacyRefillJob(t, s, run)
 	j := claimRefill(t, s)
-	if err := s.TouchRecommendationActivity(context.Background()); err != nil {
+	if err := s.PrepareRecommendationRefill(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var state string
-	if err := s.db.QueryRow(`SELECT state FROM jobs WHERE id=?`, j.ID).Scan(&state); err != nil || state != "canceled" {
-		t.Fatalf("old coordinator state=%q err=%v", state, err)
-	}
-	var replacement string
-	var due int64
-	if err := s.db.QueryRow(`SELECT id,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&replacement, &due); err != nil {
+	if err := s.TouchRecommendationActivity(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if replacement == j.ID || due < time.Now().Add(4*time.Minute).UnixMilli() {
-		t.Fatalf("replacement id=%q due=%d", replacement, due)
-	}
-	if err := s.StartRecommendationRefill(context.Background(), j, json.RawMessage(`{"seed_artists":8}`)); err != domain.ErrLease {
-		t.Fatalf("stale coordinator StartRecommendationRefill() error=%v, want ErrLease", err)
+	assertRefillJobState(t, s, j.ID, "canceled")
+	assertNoQueuedRefill(t, s)
+	if err := s.StartRecommendationRefill(ctx, j, json.RawMessage(`{}`)); err != domain.ErrLease {
+		t.Fatalf("canceled coordinator error=%v, want ErrLease", err)
 	}
 }
 
 func TestRecommendationRefillStaleRunIsNoop(t *testing.T) {
 	s := openRecommendationStore(t)
-	oldRun, ids := seedRefillRun(t, s, 15, 0)
-	scheduleRefillForTest(t, s, ids[0])
+	oldRun, _ := seedRefillRun(t, s, 15, 0)
+	seedLegacyRefillJob(t, s, oldRun)
 	j := claimRefill(t, s)
 	newerRun := randomID()
 	now := time.Now().UnixMilli()
@@ -223,24 +146,15 @@ func TestRecommendationRefillStaleRunIsNoop(t *testing.T) {
 	}
 }
 
-func TestPrepareRecommendationRefillRestoresWithoutResettingDeadline(t *testing.T) {
+func TestPrepareRecommendationRefillCancelsPersistedJobOnRestart(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "refill-restart.db")
 	s, err := Open(ctx, path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, ids := seedRefillRun(t, s, 12, 0)
-	scheduleRefillForTest(t, s, ids[0])
-	var beforeID string
-	var beforeDue int64
-	if err = s.db.QueryRow(`SELECT id,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&beforeID, &beforeDue); err != nil {
-		t.Fatal(err)
-	}
-	var accountsBefore int
-	if err = s.db.QueryRow(`SELECT count(*) FROM accounts`).Scan(&accountsBefore); err != nil {
-		t.Fatal(err)
-	}
+	oldRun, _ := seedRefillRun(t, s, 12, 0)
+	id := seedLegacyRefillJob(t, s, oldRun)
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -252,164 +166,51 @@ func TestPrepareRecommendationRefillRestoresWithoutResettingDeadline(t *testing.
 	if err = s.PrepareRecommendationRefill(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var afterID string
-	var afterDue int64
-	if err = s.db.QueryRow(`SELECT id,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&afterID, &afterDue); err != nil {
-		t.Fatal(err)
-	}
-	if afterID != beforeID || afterDue != beforeDue {
-		t.Fatalf("bootstrap reset existing job: id %q -> %q due %d -> %d", beforeID, afterID, beforeDue, afterDue)
-	}
-	var accountsAfter int
-	if err = s.db.QueryRow(`SELECT count(*) FROM accounts`).Scan(&accountsAfter); err != nil || accountsAfter != accountsBefore {
-		t.Fatalf("startup changed accounts: before=%d after=%d err=%v", accountsBefore, accountsAfter, err)
+	assertRefillJobState(t, s, id, "canceled")
+	assertNoQueuedRefill(t, s)
+	run, err := s.LatestRecommendation(ctx)
+	if err != nil || run != oldRun {
+		t.Fatalf("run=%q previous=%q err=%v", run, oldRun, err)
 	}
 }
 
-func TestRecommendationRefillFinalizationPreservesCarryoverAndSelectsNewCohort(t *testing.T) {
+func TestRecommendationRefillFinalizationCannotPublishOldCarryover(t *testing.T) {
+	ctx := context.Background()
 	s := openRecommendationStore(t)
-	oldRun, ids := seedRefillRun(t, s, 15, 0)
-	scheduleRefillForTest(t, s, ids[0])
-	coordinator := claimRefill(t, s)
-	budget := json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"recall_artists":60,"exploration_artists":6,"total_requests":80}`)
-	if err := s.StartRecommendationRefill(context.Background(), coordinator, budget); err != nil {
+	parent, ids := seedRefillRun(t, s, 15, 0)
+	run, job := seedLegacyRefillWork(t, s, parent)
+	if err := s.CompleteRecommendation(ctx, job, run); err != domain.ErrLease {
+		t.Fatalf("obsolete refill finalization error=%v, want ErrLease", err)
+	}
+	if err := s.PrepareRecommendationRefill(ctx); err != nil {
 		t.Fatal(err)
 	}
-	newRun, err := s.LatestRecommendation(context.Background())
-	if err != nil || newRun == oldRun {
-		t.Fatalf("LatestRecommendation()=%q err=%v", newRun, err)
+	assertRefillJobState(t, s, job.ID, "canceled")
+	var state, samples string
+	if err := s.db.QueryRow("SELECT state FROM recommendation_runs WHERE id=?", run).Scan(&state); err != nil || state != "canceled" {
+		t.Fatalf("obsolete run state=%q err=%v", state, err)
 	}
-	work, err := s.Claim(context.Background(), time.Now())
-	if err != nil || work.Kind != "recommend_artists" {
-		t.Fatalf("claim refill work: kind=%q err=%v", work.Kind, err)
-	}
-	now := time.Now().UnixMilli()
-	for i := int64(0); i < 15; i++ {
-		artistID := int64(900000) + i
-		illustID := int64(950000) + i
-		if _, err = s.db.Exec(`INSERT INTO artists(id,name,account,review_status,created_at,updated_at) VALUES(?, 'new candidate','new','pending',?,?)`, artistID, now, now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = s.db.Exec(`INSERT INTO artworks(id,artist_id,title,kind,page_count,rating,ai_status,metadata_state,visible,created_at,updated_at) VALUES(?,?,'sample','illust',1,'safe','non_ai','complete',1,?,?)`, illustID, artistID, now, now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err = s.db.Exec(`INSERT INTO image_pages(illust_id,page_index,original_url,width,height,media_state,created_at,updated_at) VALUES(?,0,'https://i.pximg.net/img-original/sample.jpg',100,100,'indexed',?,?)`, illustID, now, now); err != nil {
-			t.Fatal(err)
-		}
-		components := json.RawMessage(`{"score":1}`)
-		if _, err = s.db.Exec(`INSERT INTO recommendations(run_id,artist_id,score,reasons_json,sample_illust_ids_json,sources_json,confidence,score_version,components_json,created_at,updated_at) VALUES(?,?,?,'["new"]',?, '["refill"]','high','v1',?,?,?)`, newRun, artistID, float64(100-i)/100, mustJSONStrings(t, illustID), string(components), now, now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err = s.CompleteRecommendation(context.Background(), work, newRun); err != nil {
-		t.Fatal(err)
-	}
-	items, err := s.RecommendationCandidates(context.Background(), newRun, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 30 {
-		t.Fatalf("final candidates=%d, want 30", len(items))
-	}
-	carryCount, normalCount, exploreCount := 0, 0, 0
-	for _, item := range items {
-		switch item.ArtistID {
-		case ids[0], ids[1], ids[2], ids[3], ids[4], ids[5], ids[6], ids[7], ids[8], ids[9], ids[10], ids[11], ids[12], ids[13], ids[14]:
-			carryCount++
-			if item.Exploration || item.Score != float64(item.ArtistID-800000+1)/100 || len(item.SampleIDs) != 1 || item.SampleIDs[0] != "12345" {
-				t.Fatalf("carryover metadata changed: %+v", item)
-			}
-		default:
-			if item.Exploration {
-				exploreCount++
-			} else {
-				normalCount++
-			}
-		}
-	}
-	if carryCount != 15 || normalCount != 12 || exploreCount != 3 {
-		t.Fatalf("cohorts carry=%d normal=%d exploration=%d", carryCount, normalCount, exploreCount)
+	if err := s.db.QueryRow("SELECT sample_illust_ids_json FROM recommendations WHERE run_id=? AND artist_id=?", parent, ids[0]).Scan(&samples); err != nil || samples != `["12345"]` {
+		t.Fatalf("parent samples=%q err=%v", samples, err)
 	}
 }
 
-func TestRecommendationRefillBudgetDisablesTinyExplorationCohort(t *testing.T) {
+func TestRecommendationSingleVacancyStillDoesNotScheduleRefill(t *testing.T) {
 	s := openRecommendationStore(t)
-	oldRun, ids := seedRefillRun(t, s, 29, 1)
+	_, ids := seedRefillRun(t, s, 14, 1)
 	scheduleRefillForTest(t, s, ids[0])
-	coordinator := claimRefill(t, s)
-	if err := s.StartRecommendationRefill(context.Background(), coordinator, json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"exploration_artists":6,"total_requests":80}`)); err != nil {
-		t.Fatal(err)
-	}
-	newRun, err := s.LatestRecommendation(context.Background())
-	if err != nil || newRun == oldRun {
-		t.Fatalf("LatestRecommendation()=%q err=%v", newRun, err)
-	}
-	var raw string
-	if err = s.db.QueryRow(`SELECT budget_json FROM recommendation_runs WHERE id=?`, newRun).Scan(&raw); err != nil {
-		t.Fatal(err)
-	}
-	var b struct {
-		CandidateArtists   int `json:"candidate_artists"`
-		ExplorationArtists int `json:"exploration_artists"`
-	}
-	if err = json.Unmarshal([]byte(raw), &b); err != nil {
-		t.Fatal(err)
-	}
-	if b.CandidateArtists != 1 || b.ExplorationArtists != 0 {
-		t.Fatalf("tiny refill budget=%+v", b)
-	}
+	assertNoQueuedRefill(t, s)
 }
 
-func TestRecommendationRefillCompletionSchedulesOnlyHandledCarryover(t *testing.T) {
-	for _, handled := range []bool{false, true} {
-		t.Run(map[bool]string{false: "ordinary_shortage_does_not_loop", true: "handled_carryover_schedules_once"}[handled], func(t *testing.T) {
+func TestRecommendationDecisionsDoNotScheduleRefill(t *testing.T) {
+	for _, action := range []string{"approve", "reject"} {
+		t.Run(action, func(t *testing.T) {
 			s := openRecommendationStore(t)
-			oldRun, ids := seedRefillRun(t, s, 15, 0)
-			scheduleRefillForTest(t, s, ids[0])
-			coordinator := claimRefill(t, s)
-			if err := s.StartRecommendationRefill(context.Background(), coordinator, json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"exploration_artists":6,"total_requests":80}`)); err != nil {
+			_, ids := seedRefillRun(t, s, 15, 0)
+			if _, err := s.DecideArtist(context.Background(), ids[0], action); err != nil {
 				t.Fatal(err)
 			}
-			newRun, err := s.LatestRecommendation(context.Background())
-			if err != nil || newRun == oldRun {
-				t.Fatalf("LatestRecommendation()=%q err=%v", newRun, err)
-			}
-			work, err := s.Claim(context.Background(), time.Now())
-			if err != nil || work.Kind != "recommend_artists" {
-				t.Fatalf("claim recommendation work: kind=%q err=%v", work.Kind, err)
-			}
-			if handled {
-				if _, err = s.db.Exec(`UPDATE artists SET review_status='approved',collection_enabled=1 WHERE id=?`, ids[0]); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err = s.CompleteRecommendation(context.Background(), work, newRun); err != nil {
-				t.Fatal(err)
-			}
-			var count int
-			if err = s.db.QueryRow(`SELECT count(*) FROM jobs WHERE dedupe_key='recommendation-refill' AND state IN ('pending','running','retry_wait','paused_auth')`).Scan(&count); err != nil {
-				t.Fatal(err)
-			}
-			if handled && count != 1 {
-				t.Fatalf("handled carryover scheduled %d coordinators, want 1", count)
-			}
-			if !handled && count != 0 {
-				t.Fatalf("ordinary shortage scheduled %d coordinators, want 0", count)
-			}
-			if handled {
-				var payload string
-				var due int64
-				if err = s.db.QueryRow(`SELECT payload_json,available_at FROM jobs WHERE dedupe_key='recommendation-refill' AND state='pending'`).Scan(&payload, &due); err != nil {
-					t.Fatal(err)
-				}
-				var p recommendationRefillPayload
-				if err = json.Unmarshal([]byte(payload), &p); err != nil || p.RunID != newRun {
-					t.Fatalf("scheduled payload=%s err=%v", payload, err)
-				}
-				if due < time.Now().Add(4*time.Minute).UnixMilli() {
-					t.Fatalf("scheduled refill due too early: %d", due)
-				}
-			}
+			assertNoQueuedRefill(t, s)
 		})
 	}
 }
@@ -425,32 +226,67 @@ func mustJSONStrings(t *testing.T, id int64) string {
 
 func jsonInt64(id int64) string { return strconv.FormatInt(id, 10) }
 
-func TestRecommendationRefillRecallAdmitsNewCohortBesideCarryover(t *testing.T) {
+func TestRecommendationRefillRecallCannotAdmitObsoleteCohort(t *testing.T) {
 	ctx := context.Background()
 	s := openRecommendationStore(t)
-	_, ids := seedRefillRun(t, s, 15, 2)
-	scheduleRefillForTest(t, s, ids[0])
-	j := claimRefill(t, s)
-	if err := s.StartRecommendationRefill(ctx, j, json.RawMessage(`{"seed_artists":8,"candidate_artists":30,"recall_artists":60,"exploration_artists":6,"total_requests":80}`)); err != nil {
-		t.Fatal(err)
-	}
-	run, err := s.LatestRecommendation(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err := s.Claim(ctx, time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidates := map[int64]domain.Artist{}
-	for id := int64(9000); id < 9060; id++ {
-		candidates[id] = domain.Artist{ID: id}
-	}
-	if err = s.CommitRecommendationRecall(ctx, job, run, 0, candidates, nil, 45); err != nil {
-		t.Fatal(err)
+	parent, _ := seedRefillRun(t, s, 15, 2)
+	run, job := seedLegacyRefillWork(t, s, parent)
+	candidate := domain.Artist{ID: 950000}
+	err := s.CommitRecommendationRecall(ctx, job, run, 0, map[int64]domain.Artist{candidate.ID: candidate}, nil, 45)
+	if err != domain.ErrLease {
+		t.Fatalf("recall error=%v, want ErrLease", err)
 	}
 	var total int
-	if err = s.db.QueryRow(`SELECT count(*) FROM recommendations WHERE run_id=?`, run).Scan(&total); err != nil || total != 45 {
-		t.Fatalf("recall pool total=%d err=%v", total, err)
+	if err = s.db.QueryRow("SELECT count(*) FROM recommendations WHERE run_id=?", run).Scan(&total); err != nil || total != 0 {
+		t.Fatalf("obsolete candidates=%d err=%v", total, err)
 	}
+}
+
+func assertNoQueuedRefill(t *testing.T, s *Store) {
+	t.Helper()
+	var count int
+	err := s.db.QueryRow(`SELECT count(*) FROM jobs WHERE kind='recommendation_refill' AND state IN ('pending','running','retry_wait','paused_auth')`).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("active refill jobs=%d err=%v", count, err)
+	}
+}
+
+func assertRefillJobState(t *testing.T, s *Store, id, want string) {
+	t.Helper()
+	var state string
+	if err := s.db.QueryRow("SELECT state FROM jobs WHERE id=?", id).Scan(&state); err != nil || state != want {
+		t.Fatalf("refill state=%q want=%q err=%v", state, want, err)
+	}
+}
+
+func seedLegacyRefillJob(t *testing.T, s *Store, parent string) string {
+	t.Helper()
+	payload, err := json.Marshal(recommendationRefillPayload{RunID: parent})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := randomID()
+	now := time.Now().UnixMilli()
+	if _, err := s.db.Exec(`INSERT INTO jobs(id,kind,dedupe_key,payload_json,state,available_at,created_at,updated_at)
+		VALUES(?,'recommendation_refill','recommendation-refill',?,'pending',0,?,?)`, id, string(payload), now, now); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func seedLegacyRefillWork(t *testing.T, s *Store, parent string) (string, domain.Job) {
+	t.Helper()
+	ctx := context.Background()
+	run, _, err := s.StartRecommendation(ctx, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec(`UPDATE recommendation_runs SET budget_json=json_set(budget_json,'$.refill_parent_run',?) WHERE id=?`, parent, run); err != nil {
+		t.Fatal(err)
+	}
+	j, err := s.Claim(ctx, time.Now())
+	if err != nil || j.Kind != "recommend_artists" {
+		t.Fatalf("claim kind=%q err=%v", j.Kind, err)
+	}
+	return run, j
 }

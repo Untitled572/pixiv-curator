@@ -118,7 +118,7 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 		if p.State == "" {
 			p.State = "indexed"
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO image_pages(illust_id,page_index,original_url,preview_url,width,height,media_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(illust_id,page_index) DO UPDATE SET original_url=excluded.original_url,preview_url=excluded.preview_url,width=excluded.width,height=excluded.height,media_state=excluded.media_state,updated_at=excluded.updated_at`, a.ID, p.Index, p.OriginalURL, p.PreviewURL, p.Width, p.Height, p.State, now, now)
+		_, err = tx.ExecContext(ctx, `INSERT INTO image_pages(illust_id,page_index,original_url,preview_url,width,height,media_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(illust_id,page_index) DO UPDATE SET original_url=excluded.original_url,preview_url=excluded.preview_url,width=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.width WHEN image_pages.original_url=excluded.original_url THEN image_pages.width ELSE 0 END,height=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.height WHEN image_pages.original_url=excluded.original_url THEN image_pages.height ELSE 0 END,media_state=excluded.media_state,updated_at=excluded.updated_at`, a.ID, p.Index, p.OriginalURL, p.PreviewURL, p.Width, p.Height, p.State, now, now)
 		if err != nil {
 			return err
 		}

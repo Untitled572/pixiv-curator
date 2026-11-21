@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"github.com/Untitled572/pixiv-curator/internal/feedback"
@@ -22,13 +23,16 @@ const (
 )
 
 type recommendationMixBudget struct {
-	CandidateArtists    int     `json:"candidate_artists"`
-	ExplorationArtists  int     `json:"exploration_artists"`
-	AlgorithmArtists    int     `json:"algorithm_artists"`
-	RankingArtists      int     `json:"ranking_artists"`
-	UniformSampleTarget int     `json:"uniform_sample_target"`
-	LibraryAdultRatio   float64 `json:"library_adult_ratio"`
-	Independent         bool    `json:"independent_exploration"`
+	CandidateArtists    int                `json:"candidate_artists"`
+	ExplorationArtists  int                `json:"exploration_artists"`
+	AlgorithmArtists    int                `json:"algorithm_artists"`
+	RankingArtists      int                `json:"ranking_artists"`
+	UniformSampleTarget int                `json:"uniform_sample_target"`
+	LibraryAdultRatio   float64            `json:"library_adult_ratio"`
+	Independent         bool               `json:"independent_exploration"`
+	PlanVersion         string             `json:"plan_version"`
+	WeakFeedback        bool               `json:"weak_feedback_enabled"`
+	LibraryClassWeights map[string]float64 `json:"library_class_weights"`
 }
 
 type recommendationMixCandidate struct {
@@ -122,7 +126,23 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 			continue
 		}
 		c.class, c.tags = classifyRecommendationMixSamples(profiles)
+		if b.PlanVersion == "v2" {
+			c.class, err = recommendationArtistAge(ctx, tx, c.artistID)
+			if err != nil {
+				return err
+			}
+		}
 		c.weight = math.Exp(4*c.score) * feedback.Weight(stats.FeedbackTagCounts, c.tags)
+		if b.PlanVersion == "v2" {
+			c.weight = math.Exp(math.Log(4)*c.score) * feedback.Weight(stats.FeedbackTagCounts, c.tags)
+		}
+		if b.PlanVersion == "v2" && b.WeakFeedback && !hasRecommendationMixSource(c.sources, independentRankingSource) && !hasRecommendationMixSource(c.sources, independentUniformSource) {
+			weight, weightErr := recommendationSkipWeight(ctx, tx, c.artistID, time.Now())
+			if weightErr != nil {
+				return weightErr
+			}
+			c.weight *= weight
+		}
 		candidates = append(candidates, c)
 	}
 
@@ -172,13 +192,16 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 		selectedIDs[c.artistID] = true
 		actualCounts[independentRankingSource]++
 	}
-	selectedNormal := selectRecommendationMixNormal(normal, b.AlgorithmArtists, b.LibraryAdultRatio, stats.FeedbackTagCounts)
+	selectedNormal := selectRecommendationMixNormalVersion(normal, b.AlgorithmArtists, b.LibraryAdultRatio, stats.FeedbackTagCounts, false)
+	if b.PlanVersion == "v2" {
+		selectedNormal = selectRecommendationMixV2(normal, b.AlgorithmArtists, b.LibraryClassWeights)
+	}
 	for _, c := range selectedNormal {
 		selectedIDs[c.artistID] = true
 		actualCounts["algorithm"]++
 	}
 	fillSlots := b.CandidateArtists - len(selectedIndependent) - len(selectedNormal)
-	if fillSlots > 0 {
+	if fillSlots > 0 && b.PlanVersion != "v2" {
 		remainingNormal := filterRecommendationMixCandidates(normal, selectedIDs)
 		moreNormal := selectRecommendationMixNormal(remainingNormal, fillSlots, b.LibraryAdultRatio, stats.FeedbackTagCounts)
 		selectedNormal = append(selectedNormal, moreNormal...)
@@ -188,7 +211,7 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 		}
 	}
 	fillSlots = b.CandidateArtists - len(selectedIndependent) - len(selectedNormal)
-	if fillSlots > 0 {
+	if fillSlots > 0 && b.PlanVersion != "v2" {
 		remainingRanking := filterRecommendationMixCandidates(rankingPool, selectedIDs)
 		moreRanking := chooseRecommendationMixUniform(remainingRanking, fillSlots)
 		selectedIndependent = append(selectedIndependent, moreRanking...)
@@ -239,6 +262,17 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 		component, marshalErr := mergeRecommendationMixComponents(ordered[i], i)
 		if marshalErr != nil {
 			return marshalErr
+		}
+		if b.PlanVersion == "v2" && ordered[i].exploration {
+			var fields map[string]json.RawMessage
+			if err = json.Unmarshal([]byte(component), &fields); err != nil {
+				return err
+			}
+			delete(fields, "display_score")
+			component, err = stringMustJSON(fields)
+			if err != nil {
+				return err
+			}
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE recommendations SET components_json=? WHERE run_id=? AND artist_id=?`, component, runID, ordered[i].artistID); err != nil {
 			return err
@@ -416,6 +450,10 @@ type recommendationMixEntry struct {
 }
 
 func selectRecommendationMixNormal(candidates []recommendationMixCandidate, slots int, libraryRatio float64, counts map[string]float64) []recommendationMixCandidate {
+	return selectRecommendationMixNormalVersion(candidates, slots, libraryRatio, counts, false)
+}
+
+func selectRecommendationMixNormalVersion(candidates []recommendationMixCandidate, slots int, libraryRatio float64, counts map[string]float64, capped bool) []recommendationMixCandidate {
 	if slots <= 0 || len(candidates) == 0 {
 		return nil
 	}
@@ -441,7 +479,8 @@ func selectRecommendationMixNormal(candidates []recommendationMixCandidate, slot
 	}
 	unknownSlots := min(len(unknown), int(math.Round(float64(slots)*0.10)))
 	classSlots := slots - unknownSlots
-	adultSlots := min(len(adult), int(math.Round(float64(classSlots)*ratio)))
+	adultTarget := int(math.Round(float64(classSlots) * ratio))
+	adultSlots := min(len(adult), adultTarget)
 	safeSlots := min(len(safe), classSlots-adultSlots)
 	selected := make([]recommendationMixCandidate, 0, min(slots, len(candidates)))
 	chosen := make(map[int64]bool)
@@ -458,11 +497,22 @@ func selectRecommendationMixNormal(candidates []recommendationMixCandidate, slot
 	take(adult, adultSlots)
 	take(safe, safeSlots)
 	take(unknown, unknownSlots)
-	for _, pool := range [][]recommendationMixCandidate{adult, safe, unknown} {
+	pools := [][]recommendationMixCandidate{adult, safe, unknown}
+	if capped {
+		pools = [][]recommendationMixCandidate{safe, adult, unknown}
+	}
+	for _, pool := range pools {
 		if len(selected) == slots {
 			break
 		}
-		take(filterRecommendationMixCandidates(pool, chosen), slots-len(selected))
+		remaining := slots - len(selected)
+		if capped && len(pool) > 0 && pool[0].class == "adult" {
+			remaining = min(remaining, max(0, adultTarget+1-adultSlots))
+		}
+		if capped && len(pool) > 0 && pool[0].class == "unknown" {
+			remaining = min(remaining, max(0, 1-unknownSlots))
+		}
+		take(filterRecommendationMixCandidates(pool, chosen), remaining)
 	}
 	return selected
 }
@@ -651,4 +701,125 @@ func containsString(values []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// selectRecommendationMixV2 allocates the known classes by largest remainder,
+// then fills shortages without exceeding the adult or unknown limits.
+func selectRecommendationMixV2(candidates []recommendationMixCandidate, slots int, weights map[string]float64) []recommendationMixCandidate {
+	if slots <= 0 {
+		return nil
+	}
+	classes := []string{"safe", "mixed", "adult"}
+	pools := map[string][]recommendationMixCandidate{}
+	for _, c := range candidates {
+		pools[c.class] = append(pools[c.class], c)
+	}
+	unknownSlots := 0
+	if len(pools["unknown"]) > 0 {
+		unknownSlots = 1
+	}
+	knownSlots := slots - unknownSlots
+	total := 0.0
+	for _, class := range classes {
+		if weights[class] > 0 {
+			total += weights[class]
+		}
+	}
+	normalized := map[string]float64{}
+	for _, class := range classes {
+		if total > 0 {
+			normalized[class] = math.Max(0, weights[class]) / total
+		} else {
+			normalized[class] = 1.0 / 3
+		}
+	}
+	targets := map[string]int{}
+	remainders := map[string]float64{}
+	assigned := 0
+	for _, class := range classes {
+		v := float64(knownSlots) * normalized[class]
+		targets[class] = int(math.Floor(v))
+		remainders[class] = v - float64(targets[class])
+		assigned += targets[class]
+	}
+	for assigned < knownSlots {
+		best := classes[0]
+		for _, class := range classes[1:] {
+			if remainders[class] > remainders[best] {
+				best = class
+			}
+		}
+		targets[best]++
+		remainders[best] = -1
+		assigned++
+	}
+	targets["unknown"] = unknownSlots
+	allClasses := []string{"safe", "mixed", "adult", "unknown"}
+	relatedTargets := map[string]int{}
+	relatedRemainders := map[string]float64{}
+	relatedAssigned := 0
+	for _, class := range allClasses {
+		v := float64(targets[class]) * relatedArtistShare
+		relatedTargets[class] = int(math.Floor(v))
+		relatedRemainders[class] = v - float64(relatedTargets[class])
+		relatedAssigned += relatedTargets[class]
+	}
+	relatedTotal := int(math.Round(float64(slots) * relatedArtistShare))
+	for relatedAssigned < relatedTotal {
+		best := ""
+		for _, class := range allClasses {
+			if relatedTargets[class] >= targets[class] {
+				continue
+			}
+			if best == "" || relatedRemainders[class] > relatedRemainders[best] {
+				best = class
+			}
+		}
+		if best == "" {
+			break
+		}
+		relatedTargets[best]++
+		relatedRemainders[best] = -1
+		relatedAssigned++
+	}
+	chosen := map[int64]bool{}
+	selected := []recommendationMixCandidate{}
+	adultTaken := 0
+	unknownTaken := 0
+	relatedTaken := 0
+	take := func(class string, n, relatedTarget int) {
+		pool := filterRecommendationMixCandidates(pools[class], chosen)
+		n = min(n, len(pool))
+		if n <= 0 {
+			return
+		}
+		for _, c := range chooseRecommendationMixBySource(pool, n, min(n, max(0, relatedTarget))) {
+			selected = append(selected, c)
+			if hasRecommendationMixSource(c.sources, recommend.SourceRelatedArtist) {
+				relatedTaken++
+			}
+			chosen[c.artistID] = true
+			if class == "adult" {
+				adultTaken++
+			}
+			if class == "unknown" {
+				unknownTaken++
+			}
+		}
+	}
+	for _, class := range classes {
+		take(class, targets[class], relatedTargets[class])
+	}
+	take("unknown", unknownSlots, relatedTargets["unknown"])
+	for _, class := range []string{"safe", "mixed", "adult", "unknown"} {
+		remaining := slots - len(selected)
+		if class == "adult" {
+			remaining = min(remaining, max(0, targets[class]+1-adultTaken))
+		}
+		if class == "unknown" {
+			remaining = min(remaining, max(0, 1-unknownTaken))
+		}
+		take(class, remaining, int(math.Round(float64(len(selected)+remaining)*relatedArtistShare))-relatedTaken)
+	}
+	return selected
 }

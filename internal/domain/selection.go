@@ -6,15 +6,17 @@ var ErrCatalogEmpty = errors.New("catalog empty")
 var ErrNoMatch = errors.New("no matching image")
 
 type SelectionRules struct {
-	AllowedRatings []string   `json:"allowed_ratings"`
-	AllowedAI      []string   `json:"allowed_ai"`
-	ExcludeManga   bool       `json:"exclude_manga"`
-	IncludeTags    [][]string `json:"included_tags"`
-	ExcludeTags    []string   `json:"excluded_tags"`
-	MinWidth       int        `json:"min_width"`
-	MinHeight      int        `json:"min_height"`
-	Orientation    string     `json:"orientation"`
-	Strategy       string     `json:"strategy"`
+	DeliveryMode        string     `json:"-"`
+	AllowedRatings      []string   `json:"allowed_ratings"`
+	AllowedAI           []string   `json:"allowed_ai"`
+	ExcludeManga        bool       `json:"exclude_manga"`
+	IncludeTags         [][]string `json:"included_tags"`
+	ExcludeTags         []string   `json:"excluded_tags"`
+	MinWidth            int        `json:"min_width"`
+	MinHeight           int        `json:"min_height"`
+	Orientation         string     `json:"orientation"`
+	OrientationFallback string     `json:"orientation_fallback"`
+	Strategy            string     `json:"strategy"`
 }
 
 func DefaultRules() SelectionRules {
@@ -60,8 +62,13 @@ func ValidateRules(r SelectionRules) error {
 	default:
 		return ErrInvalid
 	}
+	switch r.OrientationFallback {
+	case "", "first_page":
+	default:
+		return ErrInvalid
+	}
 	switch r.Strategy {
-	case "", "balanced", "random":
+	case "", "balanced", "random", "stratified", "popular":
 	default:
 		return ErrInvalid
 	}

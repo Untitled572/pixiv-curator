@@ -26,8 +26,14 @@ func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMes
 	if err := json.Unmarshal(b["candidate_artists"], &candidates); err != nil || candidates < 0 || candidates > 60 {
 		return nil, domain.ErrInvalid
 	}
+	var version string
+	_ = json.Unmarshal(b["plan_version"], &version)
 	rankingTarget := int(float64(candidates)*10/30 + 0.5)
 	uniformTarget := min(int(float64(candidates)*2/30+0.5), max(0, uniformRecommendationLimit-carriedUniform))
+	if version == "v2" {
+		rankingTarget = int(float64(candidates)*5/15 + 0.5)
+		uniformTarget = min(int(float64(candidates)/15+0.5), max(0, 1-carriedUniform))
+	}
 	algorithmTarget := candidates - rankingTarget - uniformTarget
 	explorationTarget := rankingTarget + uniformTarget
 	set := func(key string, value any) error {
@@ -85,7 +91,11 @@ func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMes
 		}
 		queries = append(queries, query{Mode: "day", Date: time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02"), Offset: 0, Seed: seed + 1})
 		modes := []string{"day", "week", "month", "day_male", "day_female", "week_original", "week_rookie", "day_r18", "week_r18"}
-		for i := 0; i < 3; i++ {
+		historyPages := 3
+		if version == "v2" {
+			historyPages = 2
+		}
+		for i := 0; i < historyPages; i++ {
 			m, err := randomExplorationInt(int64(len(modes)))
 			if err != nil {
 				return nil, err
@@ -163,7 +173,13 @@ func (s *Store) AdvanceExploration(ctx context.Context, j domain.Job, runID stri
 		var existing []int64
 		_ = json.Unmarshal(fields["uniform_probe_ids"], &existing)
 		if target > 0 && len(existing) == 0 {
-			probes, probeErr := randomExplorationProbeIDs(currentMax, 18)
+			var version string
+			_ = json.Unmarshal(fields["plan_version"], &version)
+			probeLimit := 18
+			if version == "v2" {
+				probeLimit = 5
+			}
+			probes, probeErr := randomExplorationProbeIDs(currentMax, probeLimit)
 			if probeErr != nil {
 				return probeErr
 			}
@@ -212,4 +228,36 @@ func randomExplorationProbeIDs(maxID int64, limit int) ([]int64, error) {
 		ids[i], ids[j] = ids[j], ids[i]
 	}
 	return ids, nil
+}
+
+func (s *Store) RecordUniformProbe(ctx context.Context, j domain.Job, runID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkRecommendationLease(ctx, tx, j, runID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE recommendation_runs SET budget_json=json_set(budget_json,'$.uniform_requests',COALESCE(json_extract(budget_json,'$.uniform_requests'),0)+1) WHERE id=? AND json_extract(budget_json,'$.plan_version')='v2'`, runID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) RecordUniformHit(ctx context.Context, j domain.Job, runID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = checkRecommendationLease(ctx, tx, j, runID); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE recommendation_runs SET budget_json=json_set(budget_json,'$.uniform_hits',COALESCE(json_extract(budget_json,'$.uniform_hits'),0)+1) WHERE id=? AND json_extract(budget_json,'$.plan_version')='v2'`, runID)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
 }

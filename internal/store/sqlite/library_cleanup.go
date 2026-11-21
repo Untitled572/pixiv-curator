@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
@@ -38,28 +39,26 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) (int64, []domain.Libra
 	return round, items, kept, nil
 }
 
-func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO library_cleanup_batch(artist_id,position) SELECT id, row_number() OVER () FROM (SELECT a.id FROM artists a LEFT JOIN library_cleanup_skip s ON s.artist_id=a.id WHERE a.review_status='approved' AND a.collection_enabled=1 AND COALESCE(s.until_round,0)<? ORDER BY EXISTS(SELECT 1 FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=a.id AND w.visible=1 AND p.media_state='indexed') DESC, random() LIMIT 6)`, round)
-	return err
-}
-
 func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem, []string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.slot_type,b.audit_reason,b.trigger_ai_id FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
 	if err != nil {
 		return nil, nil, err
 	}
 	items := []domain.LibraryCleanupItem{}
 	kept := []string{}
+	triggers := map[int64]sql.NullInt64{}
 	for rows.Next() {
 		var item domain.LibraryCleanupItem
 		var isKept bool
-		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept); err != nil {
+		var trigger sql.NullInt64
+		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept, &item.SlotType, &item.AuditReason, &trigger); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
 		if isKept {
 			kept = append(kept, fmt.Sprint(item.Artist.ID))
 		}
+		triggers[item.Artist.ID] = trigger
 		items = append(items, item)
 	}
 	err = rows.Err()
@@ -68,18 +67,135 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		return nil, nil, err
 	}
 	for i := range items {
-		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 WHERE w.artist_id=? AND w.visible=1 AND p.media_state='indexed' ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC LIMIT 3`, items[i].Artist.ID)
+		item := &items[i]
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0) FROM artworks WHERE artist_id=? AND visible=1`, item.Artist.ID).Scan(&item.Summary.Artworks, &item.Summary.R18, &item.Summary.KnownRating, &item.Summary.AI, &item.Summary.KnownAI, &item.Summary.LatestPublished)
 		if err != nil {
 			return nil, nil, err
 		}
-		items[i].SampleIllustIDs = []string{}
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE w.artist_id=? AND w.visible=1 AND p.media_state='indexed'`, item.Artist.ID).Scan(&item.Summary.Pages)
+		if err != nil {
+			return nil, nil, err
+		}
+		err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(f.value='like'),0),COALESCE(SUM(f.value='dislike'),0) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=?`, item.Artist.ID).Scan(&item.Summary.Likes, &item.Summary.Dislikes)
+		if err != nil {
+			return nil, nil, err
+		}
+		rules, e := preferencesInTx(ctx, tx)
+		if e != nil {
+			return nil, nil, e
+		}
+		where, args, e := selectionWhere(rules, item.Artist.ID, "", nil)
+		if e != nil {
+			return nil, nil, e
+		}
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...).Scan(&item.Summary.EligiblePages)
+		if err != nil {
+			return nil, nil, err
+		}
+		item.SampleIllustIDs = []string{}
+		item.Samples = []domain.LibraryCleanupSample{}
+		seen := map[string]bool{}
+		add := func(id string, page int, reason string) {
+			if len(item.Samples) >= 6 || seen[id] {
+				return
+			}
+			seen[id] = true
+			item.Samples = append(item.Samples, domain.LibraryCleanupSample{IllustID: id, PageIndex: page, Reason: reason})
+			item.SampleIllustIDs = append(item.SampleIllustIDs, id)
+		}
+		if trigger := triggers[item.Artist.ID]; trigger.Valid {
+			var id string
+			err = tx.QueryRowContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.id=? AND w.visible=1`, trigger.Int64).Scan(&id)
+			if err == nil {
+				add(id, 0, "ai")
+			} else if err != sql.ErrNoRows {
+				return nil, nil, err
+			}
+		}
+		// Prefer the exact disliked page; one sample per work.
+		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT), f.page_index FROM artworks w JOIN image_feedback f ON f.illust_id=w.id AND f.value='dislike' JOIN image_pages p ON p.illust_id=f.illust_id AND p.page_index=f.page_index AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY f.updated_at DESC,w.id DESC`, item.Artist.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		for rows.Next() {
+			var id string
+			var page int
+			if err = rows.Scan(&id, &page); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			if len(item.Samples) < 2 {
+				add(id, page, "dislike")
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(item.Samples) < 2 && (len(item.Samples) == 0 || item.Samples[0].Reason != "ai") {
+			rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 AND w.ai_status='ai' AND w.published_at>=? ORDER BY w.published_at DESC,w.id DESC`, item.Artist.ID, time.Now().Add(-30*24*time.Hour).UnixMilli())
+			if err != nil {
+				return nil, nil, err
+			}
+			for rows.Next() {
+				var id string
+				if err = rows.Scan(&id); err != nil {
+					rows.Close()
+					return nil, nil, err
+				}
+				if !seen[id] {
+					add(id, 0, "ai")
+					break
+				}
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		risk := len(item.Samples)
+		recentLimit := 3
+		if risk == 2 {
+			recentLimit = 2
+		}
+		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC,CASE WHEN w.kind='illust' THEN 0 ELSE 1 END`, item.Artist.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		recent := []string{}
 		for rows.Next() {
 			var id string
 			if err = rows.Scan(&id); err != nil {
 				rows.Close()
 				return nil, nil, err
 			}
-			items[i].SampleIllustIDs = append(items[i].SampleIllustIDs, id)
+			recent = append(recent, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, id := range recent {
+			if len(item.Samples) >= risk+recentLimit {
+				break
+			}
+			add(id, 0, "")
+		}
+		historicalArgs := append([]any{item.Artist.ID}, args...)
+		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages preview ON preview.illust_id=w.id AND preview.page_index=0 AND preview.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY CASE WHEN w.kind='illust' AND EXISTS (SELECT 1 FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` AND a.id=w.id) THEN 0 ELSE 1 END,COALESCE(w.bookmarks,0) DESC,w.id DESC`, historicalArgs...)
+		if err != nil {
+			return nil, nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err = rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, nil, err
+			}
+			add(id, 0, "")
 		}
 		err = rows.Err()
 		rows.Close()
@@ -108,7 +224,7 @@ func (s *Store) NextLibraryCleanup(ctx context.Context, expected int64) (int64, 
 	if !initialized || round != expected {
 		return 0, nil, nil, domain.ErrConflict
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO library_cleanup_skip(artist_id,until_round) SELECT b.artist_id,? FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ON CONFLICT(artist_id) DO UPDATE SET until_round=MAX(until_round,excluded.until_round)`, round+50); err != nil {
+	if err = coolCleanupBatch(ctx, tx, round); err != nil {
 		return 0, nil, nil, err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM library_cleanup_batch`); err != nil {
@@ -161,7 +277,7 @@ func (s *Store) KeepLibraryCleanupArtist(ctx context.Context, id, expected int64
 	if n != 1 {
 		return domain.ErrConflict
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO library_cleanup_skip(artist_id,until_round) VALUES(?,?) ON CONFLICT(artist_id) DO UPDATE SET until_round=MAX(until_round,excluded.until_round)`, id, round+50); err != nil {
+	if err = startCleanupCooldown(ctx, tx, id, round, true); err != nil {
 		return err
 	}
 	return tx.Commit()

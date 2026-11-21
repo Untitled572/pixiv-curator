@@ -31,8 +31,8 @@ type Budget struct {
 func DefaultBudget() Budget {
 	return Budget{
 		SeedArtists: 8, SeedSamplesPerArtist: 4,
-		CandidateArtists: 30, CandidateSamplesPerArtist: 3,
-		TotalRequests: 80, RecallArtists: 60, ExplorationArtists: 13,
+		CandidateArtists: 15, CandidateSamplesPerArtist: 3,
+		TotalRequests: 80, RecallArtists: 60, ExplorationArtists: 6,
 	}
 }
 
@@ -60,6 +60,7 @@ type Candidate struct {
 type Profile struct {
 	FeedbackTagCounts  map[string]float64 `json:"feedback_tag_counts,omitempty"`
 	Regression         *RegressionModel   `json:"regression,omitempty"`
+	Similarity         *SimilarityModel   `json:"similarity,omitempty"`
 	TagWeights         map[string]float64
 	NegativeTagWeights map[string]float64
 	SeedArtistCount    int

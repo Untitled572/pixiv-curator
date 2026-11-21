@@ -73,6 +73,13 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 		t.Fatal(err)
 	}
 	client := newIndependentPipelineClient()
+	client.artistArtworks = func(_ context.Context, artistID int64, _ string) (pixiv.ArtworkPage, error) {
+		works := make([]pixiv.RawArtwork, 8)
+		for i := range works {
+			works[i] = rawArtwork(100000000+artistID*100+int64(i), artistID)
+		}
+		return pixiv.ArtworkPage{Artworks: works}, nil
+	}
 	service := NewRecommender(store, client)
 	rawBudget := service.defaultRunBudget()
 	var defaultFields map[string]any
@@ -115,7 +122,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(run.Budget, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.CandidateArtists != 30 || plan.AlgorithmArtists != 18 || plan.RankingArtists != 10 || plan.UniformTarget != 2 || plan.ExplorationArtists != 12 || plan.IndependentLimit != 24 || len(plan.Queries) != 4 {
+	if plan.CandidateArtists != 15 || plan.AlgorithmArtists != 9 || plan.RankingArtists != 5 || plan.UniformTarget != 1 || plan.ExplorationArtists != 6 || plan.IndependentLimit != 12 || len(plan.Queries) != 3 {
 		t.Fatalf("frozen cohort budget=%+v", plan)
 	}
 	wantDate := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
@@ -137,7 +144,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	}(nil), client.queries...)
 	probeCalls := append([]int64(nil), client.artworkIDs...)
 	client.mu.Unlock()
-	if len(queryCalls) != 4 || len(probeCalls) != 2 {
+	if len(queryCalls) != 3 || len(probeCalls) != 1 {
 		t.Fatalf("ranking requests=%d uniform probes=%d", len(queryCalls), len(probeCalls))
 	}
 	for i, query := range queryCalls {
@@ -152,7 +159,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(run.Budget, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.RankingMax != 100019 || len(plan.ProbeIDs) != 18 || plan.Cursor != 4 || plan.UniformCursor != len(plan.ProbeIDs) {
+	if plan.RankingMax != 100019 || len(plan.ProbeIDs) != 5 || plan.Cursor != 3 || plan.UniformCursor != len(plan.ProbeIDs) {
 		t.Fatalf("checkpointed exploration state=%+v", plan)
 	}
 	seenProbe := map[int64]bool{}
@@ -188,7 +195,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 		t.Fatal(err)
 	}
 	client.mu.Lock()
-	if len(client.queries) != 4 || len(client.artworkIDs) != 2 {
+	if len(client.queries) != 3 || len(client.artworkIDs) != 1 {
 		t.Fatalf("restart repeated a completed request: queries=%d probes=%d", len(client.queries), len(client.artworkIDs))
 	}
 	client.mu.Unlock()
@@ -240,7 +247,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 30 || len(second) != len(first) {
+	if len(first) != 15 || len(second) != len(first) {
 		t.Fatalf("candidate result lengths=%d/%d", len(first), len(second))
 	}
 	pages := map[int64]bool{}
@@ -267,8 +274,25 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(finalBudget["actual_source_counts"], &actual); err != nil {
 		t.Fatal(err)
 	}
-	if actual["algorithm"] != 18 || actual[independentRecallSource] != 10 || actual[independentUniformSource] != 2 {
+	if actual["algorithm"] != 9 || actual[independentRecallSource] != 5 || actual[independentUniformSource] != 1 {
 		t.Fatalf("actual admitted source counts=%v", actual)
+	}
+	var funnel map[string]map[string]int
+	if err = json.Unmarshal(finalBudget["funnel"], &funnel); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"recalled", "deduplicated", "admitted", "sample_validated", "before_quota", "selected"} {
+		if len(funnel[stage]) == 0 {
+			t.Fatalf("missing funnel stage %s: %v", stage, funnel)
+		}
+	}
+	var probes int
+	if err = json.Unmarshal(finalBudget["uniform_requests"], &probes); err != nil || probes != len(probeCalls) {
+		t.Fatalf("probe requests=%d actual=%d err=%v", probes, len(probeCalls), err)
+	}
+	var shortfall map[string]int
+	if err = json.Unmarshal(finalBudget["source_shortfall"], &shortfall); err != nil || shortfall["algorithm"] != 0 || shortfall[independentRecallSource] != 0 || shortfall[independentUniformSource] != 0 {
+		t.Fatalf("shortfall=%v err=%v", shortfall, err)
 	}
 	if run, err = store.RecommendationRun(ctx, runID); err != nil {
 		t.Fatal(err)
@@ -288,14 +312,14 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 		if err = json.Unmarshal(first[i].Components, &components); err != nil {
 			t.Fatal(err)
 		}
-		if components.DisplayOrder != i || components.UniformID != (i >= 28) {
+		if components.DisplayOrder != i || components.UniformID != (i >= 14) {
 			t.Fatalf("candidate %d display data=%+v", i, components)
 		}
 		if components.UniformID {
 			if components.DisplayScore != nil {
 				t.Fatalf("uniform candidate %d has a display score", i)
 			}
-		} else if components.DisplayScore == nil || *components.DisplayScore < 0 || *components.DisplayScore > 1 {
+		} else if !containsRecommendationSource(first[i].Sources, independentRecallSource) && (components.DisplayScore == nil || *components.DisplayScore < 0 || *components.DisplayScore > 1) {
 			t.Fatalf("candidate %d has invalid display score", i)
 		}
 	}

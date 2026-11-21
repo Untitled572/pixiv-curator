@@ -1,0 +1,10 @@
+ALTER TABLE artists ADD COLUMN cleanup_enabled_at INTEGER;
+ALTER TABLE library_cleanup_batch ADD COLUMN slot_type TEXT NOT NULL DEFAULT 'routine';
+ALTER TABLE library_cleanup_batch ADD COLUMN audit_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE library_cleanup_batch ADD COLUMN trigger_ai_id INTEGER;
+ALTER TABLE library_cleanup_skip ADD COLUMN started_at INTEGER;
+ALTER TABLE library_cleanup_skip ADD COLUMN min_at INTEGER;
+ALTER TABLE library_cleanup_skip ADD COLUMN max_at INTEGER;
+ALTER TABLE library_cleanup_skip ADD COLUMN last_batch_round INTEGER;
+ALTER TABLE library_cleanup_skip ADD COLUMN pending_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE library_cleanup_skip ADD COLUMN pending_ai_id INTEGER;
