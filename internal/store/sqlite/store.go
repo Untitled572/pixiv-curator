@@ -191,10 +191,15 @@ func (s *Store) enableIncrementalVacuum(ctx context.Context) error {
 	return err
 }
 
-func (s *Store) reclaimFreePages(ctx context.Context) error {
+// ReclaimFreePages releases free SQLite pages during maintenance, after catalog writes commit.
+func (s *Store) ReclaimFreePages(ctx context.Context) error {
+	var free int64
+	if err := s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free); err != nil || free == 0 {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`)
+	_, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)
 	return err
 }

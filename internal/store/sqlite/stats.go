@@ -9,8 +9,21 @@ import (
 // CatalogStats reads aggregate counts from the local database only.
 func (s *Store) CatalogStats(ctx context.Context) (domain.CatalogStats, error) {
 	var stats domain.CatalogStats
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return stats, err
+	}
+	defer tx.Rollback()
+	rules, err := defaultSelectionRulesInTx(ctx, tx)
+	if err != nil {
+		return stats, err
+	}
+	where, args, err := selectionWhere(rules, 0, "", nil)
+	if err != nil {
+		return stats, err
+	}
 	var knownSizes int64
-	err := s.db.QueryRowContext(ctx, `WITH pages AS (
+	err = tx.QueryRowContext(ctx, `WITH pages AS (
 	  SELECT COUNT(*) AS total,
 	     COUNT(*) FILTER (WHERE a.rating IN ('r18','r18g')) AS adult,
 	     COUNT(*) FILTER (WHERE p.media_state='indexed') AS indexed,
@@ -29,14 +42,18 @@ func (s *Store) CatalogStats(ctx context.Context) (domain.CatalogStats, error) {
 	 total, adult, COALESCE(1.0*adult/NULLIF(total,0),0), indexed, unavailable,
 	 known_size, landscape, portrait,
 	 (SELECT COUNT(*) FROM artworks WHERE rating='unknown'),
-	 (SELECT COUNT(*) FROM artworks WHERE ai_status='unknown') FROM pages`).Scan(
+	 (SELECT COUNT(*) FROM artworks WHERE ai_status='unknown'),
+	 (SELECT COUNT(*) FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+`) FROM pages`, args...).Scan(
 		&stats.Accounts, &stats.Artists, &stats.LibraryArtists, &stats.BlockedArtists,
 		&stats.CollectingArtists, &stats.Artworks, &stats.ImagePages, &stats.R18ImagePages,
 		&stats.R18ImageRatio, &stats.IndexedPages,
 		&stats.UnavailablePages, &knownSizes, &stats.LandscapePages, &stats.PortraitPages,
-		&stats.UnknownRatingArtworks, &stats.UnknownAIArtworks,
+		&stats.UnknownRatingArtworks, &stats.UnknownAIArtworks, &stats.EligibleImagePages,
 	)
+	if err != nil {
+		return stats, err
+	}
 	stats.SquarePages = knownSizes - stats.LandscapePages - stats.PortraitPages
 	stats.UnknownOrientationPages = stats.ImagePages - knownSizes
-	return stats, err
+	return stats, tx.Commit()
 }

@@ -285,7 +285,7 @@
         card.append(heading);
         const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "可用作品较少", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
         const summary = item.summary || {};
-        card.append(node("p", "field-help", `${reasons[item.audit_reason] || "常规巡检"} · 作品 ${summary.artworks || 0} · 图片 ${summary.pages || 0} · 可供图 ${summary.eligible_pages || 0} · R18 ${summary.r18 || 0}/${summary.known_rating || 0}（已知） · AI ${summary.ai || 0}/${summary.known_ai || 0}（已知） · 赞 ${summary.likes || 0} / 踩 ${summary.dislikes || 0}${summary.latest_published_at ? " · 最近 " + new Date(summary.latest_published_at).toLocaleDateString() : ""}`));
+        card.append(node("p", "field-help", `${reasons[item.audit_reason] || "常规巡检"} · 作品 ${summary.artworks || 0} · 图片 ${summary.pages || 0} · 默认可出图 ${summary.eligible_pages || 0} · R18 ${summary.r18 || 0}/${summary.known_rating || 0}（已知） · AI ${summary.ai || 0}/${summary.known_ai || 0}（已知） · 赞 ${summary.likes || 0} / 踩 ${summary.dislikes || 0}${summary.latest_published_at ? " · 最近 " + new Date(summary.latest_published_at).toLocaleDateString() : ""}`));
         const samples = node("div", "library-review-samples");
         (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
           const illustID = String(sample.illust_id), pageIndex = Number(sample.page_index) || 0;
@@ -301,9 +301,9 @@
         const rejectLabel = node("label", "field-help");
         const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 同时在发现画师中标为不感兴趣")); actions.append(rejectLabel);
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
-          const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true;
-          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST", body: JSON.stringify({ not_interested: reject.checked, round: result.round }) }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); await loadLibrary(); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); }
-          catch (error) { report(error, "移出图库"); trigger.disabled = false; }
+          const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true; trigger.textContent = "移出中…";
+          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST", body: JSON.stringify({ not_interested: reject.checked, round: result.round }) }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); if ($("#library-list-panel").open) loadLibrary(); }
+          catch (error) { report(error, "移出图库"); trigger.disabled = false; trigger.textContent = "移出图库"; }
         });
         card.append(actions); fragment.append(card);
       });
@@ -966,6 +966,9 @@
     $("#stats-updated").textContent = "正在读取…";
     try {
       const result = await api("/admin/api/stats");
+      const total = Number(result.image_pages) || 0;
+      const eligible = Number(result.eligible_image_pages) || 0;
+      const ratio = (count, denominator) => denominator > 0 ? (count / denominator * 100).toFixed(1) + "%" : "—";
       const metrics = [
         ["image_pages", "全部图片", "按作品分页计数，包含历史记录"],
         ["artworks", "全部作品", "一个作品可包含多张图片"],
@@ -975,7 +978,7 @@
         ["unavailable_pages", "不可用图片", "已记录失效或不可用"],
         ["collecting_artists", "启用采集", "持续更新目录的画师"],
         ["blocked_artists", "已屏蔽画师", "始终排除公开供图"],
-        ["unknown_rating_artworks", "分级未知作品", "默认不供图，可在偏好中允许"],
+        ["eligible_image_pages", "默认可出图图片", "占全部图片 " + ratio(eligible, total)],
         ["unknown_ai_artworks", "AI 状态未知作品", "默认不供图，可在偏好中允许"],
         ["r18_image_pages", "R18 图片", "含 R18G 的已知 R18 图片分页"],
         ["r18_image_ratio", "R18 占比", "含 R18G；分母为全部图片，包含未知分级"]
@@ -986,10 +989,8 @@
         const value = key === "r18_image_ratio" ? `${(Math.max(0, Math.min(1, Number(result[key]) || 0) * 100).toFixed(1))}%` : Number(result[key] || 0).toLocaleString();
         card.append(node("p", "muted", label), node("strong", "stat-value", value), node("p", "field-help", note)); list.append(card);
       }
-      const total = Number(result.image_pages) || 0;
       const unknown = Number(result.unknown_orientation_pages) || 0;
       const known = total - unknown;
-      const ratio = (count, denominator) => denominator > 0 ? `${(count / denominator * 100).toFixed(1)}%` : "—";
       const directions = [["横图", "landscape_pages"], ["竖图", "portrait_pages"], ["方图", "square_pages"]];
       for (const [label, key] of directions) {
         const count = Number(result[key]) || 0;
@@ -1265,7 +1266,7 @@
       setChecked("rating", (rules.allowed_ratings || []).map((v) => v === "r18g" ? "r18" : v)); setChecked("ai", rules.allowed_ai);
       $("#min-width").value = String(rules.min_width || 0); $("#min-height").value = String(rules.min_height || 0);
       $("#exclude-manga").checked = !!rules.exclude_manga;
-      $("#orientation").value = rules.orientation || "any"; $("#strategy").value = rules.strategy || "balanced";
+      $("#orientation").value = rules.orientation || "any"; $("#strategy").value = rules.strategy || "stratified";
       $("#include-tags").value = (rules.included_tags || []).map((group) => group.join(", ")).join("\n");
       $("#exclude-tags").value = (rules.excluded_tags || []).join(", ");
       $("#preference-version").textContent = `当前版本 ${preferenceVersion}`;

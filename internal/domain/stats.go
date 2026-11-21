@@ -16,6 +16,7 @@ type CatalogStats struct {
 	UnknownOrientationPages int64   `json:"unknown_orientation_pages"`
 	R18ImagePages           int64   `json:"r18_image_pages"`
 	R18ImageRatio           float64 `json:"r18_image_ratio"`
+	EligibleImagePages      int64   `json:"eligible_image_pages"`
 	IndexedPages            int64   `json:"indexed_pages"`
 	UnavailablePages        int64   `json:"unavailable_pages"`
 	UnknownRatingArtworks   int64   `json:"unknown_rating_artworks"`

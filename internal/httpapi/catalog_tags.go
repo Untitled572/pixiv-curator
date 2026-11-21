@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,16 +30,17 @@ type catalogStatsStore interface {
 const catalogStatsTTL = 30 * time.Second
 
 type catalogStatsCache struct {
-	mu         sync.Mutex
-	stats      domain.CatalogStats
-	validUntil time.Time
-	refreshing chan struct{}
+	mu                 sync.Mutex
+	stats              domain.CatalogStats
+	preferencesVersion int64
+	validUntil         time.Time
+	refreshing         chan struct{}
 }
 
-func (c *catalogStatsCache) get(ctx context.Context, store catalogStatsStore) (domain.CatalogStats, error) {
+func (c *catalogStatsCache) get(ctx context.Context, store catalogStatsStore, preferencesVersion int64) (domain.CatalogStats, error) {
 	for {
 		c.mu.Lock()
-		if time.Now().Before(c.validUntil) {
+		if c.preferencesVersion == preferencesVersion && time.Now().Before(c.validUntil) {
 			stats := c.stats
 			c.mu.Unlock()
 			return stats, nil
@@ -59,6 +62,7 @@ func (c *catalogStatsCache) get(ctx context.Context, store catalogStatsStore) (d
 		c.mu.Lock()
 		if err == nil {
 			c.stats = stats
+			c.preferencesVersion = preferencesVersion
 			c.validUntil = time.Now().Add(catalogStatsTTL)
 		}
 		close(c.refreshing)
@@ -150,12 +154,20 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		statsStore, ok := store.(catalogStatsStore)
+		statsStore, ok := store.(interface {
+			catalogStatsStore
+			Setting(context.Context, string) (json.RawMessage, int64, error)
+		})
 		if !ok {
 			apiError(w, domain.ErrNotFound)
 			return
 		}
-		stats, err := statsCache.get(r.Context(), statsStore)
+		_, version, err := statsStore.Setting(r.Context(), "preferences")
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			apiError(w, err)
+			return
+		}
+		stats, err := statsCache.get(r.Context(), statsStore, version)
 		if err != nil {
 			apiError(w, err)
 			return

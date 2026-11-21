@@ -198,6 +198,12 @@ func TestPauseReclaimsDatabasePages(t *testing.T) {
 	if err = s.SetCollection(ctx, 81, false); err != nil {
 		t.Fatal(err)
 	}
+	if err = s.db.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free == 0 {
+		t.Fatalf("expected deleted catalog pages to await maintenance: free=%d err=%v", free, err)
+	}
+	if err = s.ReclaimFreePages(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.db.QueryRow(`PRAGMA page_count`).Scan(&pagesAfter); err != nil {
 		t.Fatal(err)
 	}

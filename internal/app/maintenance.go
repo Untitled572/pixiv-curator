@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"time"
+
+	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
 type MaintenanceRepository interface {
 	Artists(context.Context, int64, int) ([]domain.Artist, error)
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
 	CleanupSelectionHistory(context.Context) error
+	ReclaimFreePages(context.Context) error
 }
 
 // RunMaintenance starts periodic work after the first interval, giving newly
@@ -27,6 +29,9 @@ func RunMaintenance(ctx context.Context, s MaintenanceRepository, onError func(e
 			return
 		case <-history.C:
 			if err := s.CleanupSelectionHistory(ctx); err != nil {
+				onError(err)
+			}
+			if err := s.ReclaimFreePages(ctx); err != nil {
 				onError(err)
 			}
 		case <-syncTick.C:

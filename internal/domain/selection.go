@@ -19,8 +19,10 @@ type SelectionRules struct {
 	Strategy            string     `json:"strategy"`
 }
 
+const DefaultSelectionStrategy = "stratified"
+
 func DefaultRules() SelectionRules {
-	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, ExcludeManga: true, Orientation: "any", Strategy: "balanced"}
+	return SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, ExcludeManga: true, Orientation: "any", Strategy: DefaultSelectionStrategy}
 }
 
 type SelectionRequest struct {

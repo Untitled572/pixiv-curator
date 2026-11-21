@@ -124,7 +124,7 @@ func (s *Images) PutPreferences(ctx context.Context, r domain.SelectionRules, v 
 		return domain.ErrInvalid
 	}
 	if r.Strategy == "" {
-		r.Strategy = "balanced"
+		r.Strategy = domain.DefaultSelectionStrategy
 	}
 	if r.Orientation == "" {
 		r.Orientation = "any"

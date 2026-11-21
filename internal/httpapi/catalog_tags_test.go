@@ -107,7 +107,7 @@ func TestCatalogStatsCacheSharesRefreshAndExpires(t *testing.T) {
 			close(started)
 			<-finish
 			return domain.CatalogStats{ImagePages: 10}, nil
-		}))
+		}), 0)
 		finished <- err
 	}()
 	<-started
@@ -119,7 +119,7 @@ func TestCatalogStatsCacheSharesRefreshAndExpires(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := cache.get(ctx, load)
+	_, err := cache.get(ctx, load, 0)
 	close(finish)
 	if loadErr := <-finished; loadErr != nil {
 		t.Fatal(loadErr)
@@ -127,17 +127,20 @@ func TestCatalogStatsCacheSharesRefreshAndExpires(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || loads != 0 {
 		t.Fatalf("waiting request: err=%v loads=%d", err, loads)
 	}
-	if stats, err := cache.get(context.Background(), load); err != nil || stats.ImagePages != 10 || loads != 0 {
+	if stats, err := cache.get(context.Background(), load, 0); err != nil || stats.ImagePages != 10 || loads != 0 {
 		t.Fatalf("cache hit: stats=%+v err=%v loads=%d", stats, err, loads)
+	}
+	if stats, err := cache.get(context.Background(), load, 1); err != nil || stats.ImagePages != 20 || loads != 1 {
+		t.Fatalf("preferences changed: stats=%+v err=%v loads=%d", stats, err, loads)
 	}
 	cache.validUntil = time.Time{}
 	fail := errors.New("temporary failure")
 	if _, err := cache.get(context.Background(), statsSourceFunc(func(context.Context) (domain.CatalogStats, error) {
 		return domain.CatalogStats{}, fail
-	})); !errors.Is(err, fail) {
+	}), 1); !errors.Is(err, fail) {
 		t.Fatalf("cache miss error=%v, want %v", err, fail)
 	}
-	if stats, err := cache.get(context.Background(), load); err != nil || stats.ImagePages != 20 || loads != 1 {
+	if stats, err := cache.get(context.Background(), load, 1); err != nil || stats.ImagePages != 20 || loads != 2 {
 		t.Fatalf("cache refresh: stats=%+v err=%v loads=%d", stats, err, loads)
 	}
 }

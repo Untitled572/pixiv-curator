@@ -272,7 +272,7 @@ func TestBalancedSelectPrefersLikedPagesWithoutBypassingHardFilters(t *testing.T
 		(1051,'like',1),(1053,'like',1),(1054,'like',1),(1055,'dislike',1)`); err != nil {
 		t.Fatal(err)
 	}
-	request := domain.SelectionRequest{ArtistID: 1050}
+	request := domain.SelectionRequest{ArtistID: 1050, SelectionRules: domain.SelectionRules{Strategy: "balanced"}}
 
 	first, err := s.Select(ctx, request)
 	if err != nil {

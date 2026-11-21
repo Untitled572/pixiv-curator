@@ -66,6 +66,13 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 	if err != nil {
 		return nil, nil, err
 	}
+	if len(items) == 0 {
+		return items, kept, nil
+	}
+	rules, err := defaultSelectionRulesInTx(ctx, tx)
+	if err != nil {
+		return nil, nil, err
+	}
 	for i := range items {
 		item := &items[i]
 		err = tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0) FROM artworks WHERE artist_id=? AND visible=1`, item.Artist.ID).Scan(&item.Summary.Artworks, &item.Summary.R18, &item.Summary.KnownRating, &item.Summary.AI, &item.Summary.KnownAI, &item.Summary.LatestPublished)
@@ -80,15 +87,11 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		if err != nil {
 			return nil, nil, err
 		}
-		rules, e := preferencesInTx(ctx, tx)
-		if e != nil {
-			return nil, nil, e
-		}
 		where, args, e := selectionWhere(rules, item.Artist.ID, "", nil)
 		if e != nil {
 			return nil, nil, e
 		}
-		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...).Scan(&item.Summary.EligiblePages)
+		err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM artists ar JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where, args...).Scan(&item.Summary.EligiblePages)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -160,7 +163,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		if risk == 2 {
 			recentLimit = 2
 		}
-		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC,CASE WHEN w.kind='illust' THEN 0 ELSE 1 END`, item.Artist.ID)
+		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC,CASE WHEN w.kind='illust' THEN 0 ELSE 1 END LIMIT 6`, item.Artist.ID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -185,7 +188,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 			add(id, 0, "")
 		}
 		historicalArgs := append([]any{item.Artist.ID}, args...)
-		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages preview ON preview.illust_id=w.id AND preview.page_index=0 AND preview.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY CASE WHEN w.kind='illust' AND EXISTS (SELECT 1 FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` AND a.id=w.id) THEN 0 ELSE 1 END,COALESCE(w.bookmarks,0) DESC,w.id DESC`, historicalArgs...)
+		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages preview ON preview.illust_id=w.id AND preview.page_index=0 AND preview.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY CASE WHEN w.kind='illust' AND EXISTS (SELECT 1 FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` AND a.id=w.id) THEN 0 ELSE 1 END,COALESCE(w.bookmarks,0) DESC,w.id DESC LIMIT 6`, historicalArgs...)
 		if err != nil {
 			return nil, nil, err
 		}

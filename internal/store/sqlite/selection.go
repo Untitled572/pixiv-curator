@@ -215,7 +215,7 @@ func preferences(ctx context.Context, db *sql.DB) (domain.SelectionRules, error)
 		rules.Orientation = "any"
 	}
 	if rules.Strategy == "" {
-		rules.Strategy = "balanced"
+		rules.Strategy = domain.DefaultSelectionStrategy
 	}
 	return rules, nil
 }
@@ -240,9 +240,19 @@ func preferencesInTx(ctx context.Context, tx *sql.Tx) (domain.SelectionRules, er
 		rules.Orientation = "any"
 	}
 	if rules.Strategy == "" {
-		rules.Strategy = "balanced"
+		rules.Strategy = domain.DefaultSelectionStrategy
 	}
 	return rules, nil
+}
+
+// defaultSelectionRulesInTx applies the same preferences as an unfiltered /random request.
+func defaultSelectionRulesInTx(ctx context.Context, tx *sql.Tx) (domain.SelectionRules, error) {
+	global, err := preferencesInTx(ctx, tx)
+	if err != nil {
+		return domain.SelectionRules{}, err
+	}
+	rules, _, err := combineSelectionRules(global, domain.SelectionRequest{})
+	return rules, err
 }
 
 func validateStoredRules(rules domain.SelectionRules) error {
@@ -285,7 +295,7 @@ func combineSelectionRules(global domain.SelectionRules, req domain.SelectionReq
 		result.Strategy = req.Strategy
 	}
 	if result.Strategy == "" {
-		result.Strategy = "balanced"
+		result.Strategy = domain.DefaultSelectionStrategy
 	}
 	if result.Orientation == "" {
 		result.Orientation = "any"

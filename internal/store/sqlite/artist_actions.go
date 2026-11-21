@@ -261,17 +261,9 @@ func (s *Store) setCollection(ctx context.Context, id int64, enabled, notInteres
 		s.hookMu.RLock()
 		hook := s.previewPurgeHook
 		s.hookMu.RUnlock()
-		var hookErr error
 		if hook != nil {
-			hookErr = hook(urls)
+			return hook(urls)
 		}
-		reclaimCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		reclaimErr := s.reclaimFreePages(reclaimCtx)
-		cancel()
-		if hookErr != nil {
-			return hookErr
-		}
-		return reclaimErr
 	}
 	return nil
 }

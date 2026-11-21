@@ -31,7 +31,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	if err != nil {
 		return err
 	}
-	rules, err := preferencesInTx(ctx, tx)
+	rules, err := defaultSelectionRulesInTx(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -39,34 +39,42 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	if err != nil {
 		return err
 	}
-	queryArgs := []any{now - 30*day, now - 30*day, now - 30*day, now - 30*day}
+	queryArgs := []any{now, round, now, round, now - 30*day, now - 30*day, now - 30*day, now - 30*day}
 	queryArgs = append(queryArgs, args...)
-	rows, err := tx.QueryContext(ctx, `WITH artwork_stats AS (
-      SELECT artist_id,COUNT(*) AS total,SUM(kind='manga' AND published_at>=?) AS recent_manga,SUM(published_at>=?) AS recent_works,SUM(ai_status='ai' AND published_at>=?) AS recent_ai FROM artworks WHERE visible=1 GROUP BY artist_id
+	rows, err := tx.QueryContext(ctx, `WITH candidates AS MATERIALIZED (
+      SELECT ar.id,ar.cleanup_enabled_at,ar.last_synced_at,COALESCE(s.last_batch_round,0) AS last_batch_round,
+        COALESCE(s.pending_reason,'') AS pending_reason,s.pending_ai_id
+      FROM artists ar LEFT JOIN library_cleanup_skip s ON s.artist_id=ar.id
+      WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND (
+        s.pending_reason<>'' OR
+        (s.started_at IS NOT NULL AND (s.max_at<=? OR (s.until_round<=? AND s.min_at<=?))) OR
+        (s.started_at IS NULL AND COALESCE(s.until_round,0)<?)
+      )
+    ), artwork_stats AS (
+      SELECT w.artist_id,COUNT(*) AS total,SUM(kind='manga' AND published_at>=?) AS recent_manga,SUM(published_at>=?) AS recent_works,SUM(ai_status='ai' AND published_at>=?) AS recent_ai FROM candidates c CROSS JOIN artworks w INDEXED BY artworks_artist ON w.artist_id=c.id WHERE w.visible=1 GROUP BY w.artist_id
     ), page_stats AS (
-      SELECT w.artist_id,COUNT(*) AS pages,COUNT(DISTINCT CASE WHEN p.page_index=0 THEN p.illust_id END) AS previews FROM artworks w JOIN image_pages p ON p.illust_id=w.id WHERE w.visible=1 AND p.media_state='indexed' GROUP BY w.artist_id
+      SELECT w.artist_id,COUNT(*) AS pages,SUM(p.page_index=0) AS previews FROM candidates c CROSS JOIN artworks w INDEXED BY artworks_artist ON w.artist_id=c.id JOIN image_pages p ON p.illust_id=w.id WHERE w.visible=1 AND p.media_state='indexed' GROUP BY w.artist_id
     ), feedback_stats AS (
       SELECT w.artist_id,SUM(f.value='like') AS likes,SUM(f.value='dislike') AS dislikes,SUM(f.value='dislike' AND f.updated_at>=?) AS recent_dislikes FROM artworks w JOIN image_feedback f ON f.illust_id=w.id GROUP BY w.artist_id
     ), eligible_stats AS (
-      SELECT a.artist_id,COUNT(DISTINCT a.id) AS qualified FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` GROUP BY a.artist_id
-    ) SELECT ar.id,ar.cleanup_enabled_at,ar.last_synced_at,COALESCE(s.until_round,0),s.started_at,s.min_at,s.max_at,COALESCE(s.last_batch_round,0),COALESCE(s.pending_reason,''),s.pending_ai_id,
+      SELECT a.artist_id,COUNT(DISTINCT a.id) AS qualified FROM candidates c CROSS JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=c.id JOIN artists ar ON ar.id=c.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` GROUP BY a.artist_id
+    ) SELECT c.id,c.cleanup_enabled_at,c.last_synced_at,c.last_batch_round,c.pending_reason,c.pending_ai_id,
       COALESCE(ast.total,0),COALESCE(ast.recent_manga,0),COALESCE(ast.recent_works,0),COALESCE(ast.recent_ai,0),COALESCE(ps.pages,0),COALESCE(ps.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(es.qualified,0)
-      FROM artists ar LEFT JOIN library_cleanup_skip s ON s.artist_id=ar.id LEFT JOIN artwork_stats ast ON ast.artist_id=ar.id LEFT JOIN page_stats ps ON ps.artist_id=ar.id LEFT JOIN feedback_stats fs ON fs.artist_id=ar.id LEFT JOIN eligible_stats es ON es.artist_id=ar.id
-      WHERE ar.review_status='approved' AND ar.collection_enabled=1`, queryArgs...)
+      FROM candidates c LEFT JOIN artwork_stats ast ON ast.artist_id=c.id LEFT JOIN page_stats ps ON ps.artist_id=c.id LEFT JOIN feedback_stats fs ON fs.artist_id=c.id LEFT JOIN eligible_stats es ON es.artist_id=c.id`, queryArgs...)
 	if err != nil {
 		return err
 	}
 	type base struct {
 		id                                                                                                     int64
-		enabled, synced, started, minAt, maxAt, ai                                                             sql.NullInt64
-		until, last                                                                                            int64
+		enabled, synced, ai                                                                                    sql.NullInt64
+		last                                                                                                   int64
 		pending                                                                                                string
 		total, recentManga, recentWorks, recentAI, pages, previews, likes, dislikes, recentDislikes, qualified int64
 	}
 	bases := []base{}
 	for rows.Next() {
 		var b base
-		if err = rows.Scan(&b.id, &b.enabled, &b.synced, &b.until, &b.started, &b.minAt, &b.maxAt, &b.last, &b.pending, &b.ai, &b.total, &b.recentManga, &b.recentWorks, &b.recentAI, &b.pages, &b.previews, &b.likes, &b.dislikes, &b.recentDislikes, &b.qualified); err != nil {
+		if err = rows.Scan(&b.id, &b.enabled, &b.synced, &b.last, &b.pending, &b.ai, &b.total, &b.recentManga, &b.recentWorks, &b.recentAI, &b.pages, &b.previews, &b.likes, &b.dislikes, &b.recentDislikes, &b.qualified); err != nil {
 			rows.Close()
 			return err
 		}
@@ -82,15 +90,6 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		total, pages, previews, likes, dislikes, recentDislikes, recentWorks, recentManga, recentAI, qualified := b.total, b.pages, b.previews, b.likes, b.dislikes, b.recentDislikes, b.recentWorks, b.recentManga, b.recentAI, b.qualified
 		if b.enabled.Valid && !(b.synced.Valid && b.synced.Int64 >= b.enabled.Int64) && previews < 3 {
 			continue
-		}
-		if b.pending == "" {
-			if b.started.Valid {
-				if !(b.maxAt.Valid && now >= b.maxAt.Int64) && !(round >= b.until && b.minAt.Valid && now >= b.minAt.Int64) {
-					continue
-				}
-			} else if b.until >= round {
-				continue
-			}
 		}
 		c := cleanupCandidate{id: b.id, last: b.last, weight: 1, aiID: b.ai, pending: b.pending != ""}
 		net := dislikes - likes
