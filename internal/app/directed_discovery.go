@@ -20,11 +20,12 @@ import (
 )
 
 const (
-	legacyDirectedPages  = 6
-	directedSearchPages  = 16
-	directedRankingPages = 24
-	directedRequestLimit = 160
-	directedSource       = "directed_random"
+	legacyDirectedPages    = 6
+	directedSearchPages    = 16
+	directedRankingPages   = 24
+	directedCandidateLimit = 15
+	directedRequestLimit   = 160
+	directedSource         = "directed_random"
 )
 
 type DirectedDiscovery struct {
@@ -85,6 +86,7 @@ func (s *Recommender) StartDirected(ctx context.Context, options DirectedDiscove
 		return "", "", domain.ErrInvalid
 	}
 	base := recommend.DefaultBudget()
+	base.CandidateArtists = directedCandidateLimit
 	base.ExplorationArtists = 0
 	base.TotalRequests = directedRequestLimit
 	pages := directedRankingPages

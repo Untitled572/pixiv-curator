@@ -32,6 +32,9 @@ func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMes
 	uniformTarget := min(int(float64(candidates)*2/30+0.5), max(0, uniformRecommendationLimit-carriedUniform))
 	if version == "v2" {
 		rankingTarget = int(float64(candidates)*5/15 + 0.5)
+		if candidates == 16 {
+			rankingTarget = 6
+		}
 		uniformTarget = min(int(float64(candidates)/15+0.5), max(0, 1-carriedUniform))
 	}
 	algorithmTarget := candidates - rankingTarget - uniformTarget

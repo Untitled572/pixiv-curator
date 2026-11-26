@@ -109,7 +109,7 @@ func (s *Store) DecideArtist(ctx context.Context, id int64, action string) (stri
 }
 
 func cancelArtistJobs(ctx context.Context, tx *sql.Tx, id int64) error {
-	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE state IN ('pending','running','retry_wait','paused_auth') AND ((kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=?) OR (kind IN ('hydrate_artwork','repair_media') AND EXISTS (SELECT 1 FROM artworks w WHERE w.id=json_extract(jobs.payload_json,'$.illust_id') AND w.artist_id=?)))`, time.Now().UnixMilli(), id, id)
+	_, err := tx.ExecContext(ctx, `UPDATE jobs SET cancel_requested=1,state=CASE WHEN state='running' THEN state ELSE 'canceled' END,updated_at=? WHERE state IN ('pending','running','retry_wait','paused_auth') AND ((kind='sync_artist' AND json_extract(payload_json,'$.artist_id')=?) OR (kind IN ('hydrate_artwork','repair_media') AND json_extract(jobs.payload_json,'$.illust_id') IN (SELECT id FROM artworks WHERE artist_id=?)))`, time.Now().UnixMilli(), id, id)
 	return err
 }
 

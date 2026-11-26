@@ -46,8 +46,9 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	if err != nil {
 		return err
 	}
-	queryArgs := []any{now, round, now, round, now - 30*day, now - 30*day, now - 30*day, now - 30*day}
-	queryArgs = append(queryArgs, args...)
+	queryArgs := append([]any{now, round, now, round}, args...)
+	cutoff := now - 30*day
+	queryArgs = append(queryArgs, cutoff, cutoff, cutoff, cutoff)
 	rows, err := tx.QueryContext(ctx, `WITH candidates AS MATERIALIZED (
       SELECT ar.id,ar.cleanup_enabled_at,ar.last_synced_at,COALESCE(s.last_batch_round,0) AS last_batch_round,
         COALESCE(s.pending_reason,'') AS pending_reason,s.pending_ai_id
@@ -57,17 +58,25 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
         (s.started_at IS NOT NULL AND (s.max_at<=? OR (s.until_round<=? AND s.min_at<=?))) OR
         (s.started_at IS NULL AND COALESCE(s.until_round,0)<?)
       )
+    ), work_stats AS (
+      SELECT a.artist_id,a.published_at,a.kind,a.ai_status,
+        COUNT(p.illust_id) AS pages,SUM(CASE WHEN p.page_index=0 THEN 1 ELSE 0 END) AS previews,
+        MAX(CASE WHEN `+where+` THEN 1 ELSE 0 END) AS qualified
+      FROM candidates c CROSS JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=c.id JOIN artists ar ON ar.id=c.id
+      LEFT JOIN image_pages p ON p.illust_id=a.id AND p.media_state='indexed'
+      WHERE a.visible=1 GROUP BY a.id
     ), artwork_stats AS (
-      SELECT w.artist_id,COUNT(*) AS total,SUM(kind='manga' AND published_at>=?) AS recent_manga,SUM(published_at>=?) AS recent_works,SUM(ai_status='ai' AND published_at>=?) AS recent_ai FROM candidates c CROSS JOIN artworks w INDEXED BY artworks_artist ON w.artist_id=c.id WHERE w.visible=1 GROUP BY w.artist_id
-    ), page_stats AS (
-      SELECT w.artist_id,COUNT(*) AS pages,SUM(p.page_index=0) AS previews FROM candidates c CROSS JOIN artworks w INDEXED BY artworks_artist ON w.artist_id=c.id JOIN image_pages p ON p.illust_id=w.id WHERE w.visible=1 AND p.media_state='indexed' GROUP BY w.artist_id
+      SELECT artist_id,COUNT(*) AS total,SUM(kind='manga' AND published_at>=?) AS recent_manga,
+        SUM(published_at>=?) AS recent_works,SUM(ai_status='ai' AND published_at>=?) AS recent_ai,
+        SUM(pages) AS pages,SUM(previews) AS previews,SUM(qualified) AS qualified
+      FROM work_stats GROUP BY artist_id
     ), feedback_stats AS (
-      SELECT w.artist_id,SUM(f.value='like') AS likes,SUM(f.value='dislike') AS dislikes,SUM(f.value='dislike' AND f.updated_at>=?) AS recent_dislikes FROM artworks w JOIN image_feedback f ON f.illust_id=w.id GROUP BY w.artist_id
-    ), eligible_stats AS (
-      SELECT a.artist_id,COUNT(DISTINCT a.id) AS qualified FROM candidates c CROSS JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=c.id JOIN artists ar ON ar.id=c.id JOIN image_pages p ON p.illust_id=a.id WHERE `+where+` GROUP BY a.artist_id
+      SELECT w.artist_id,SUM(f.value='like') AS likes,SUM(f.value='dislike') AS dislikes,
+        SUM(f.value='dislike' AND f.updated_at>=?) AS recent_dislikes
+      FROM image_feedback f CROSS JOIN artworks w ON f.illust_id=w.id GROUP BY w.artist_id
     ) SELECT c.id,c.cleanup_enabled_at,c.last_synced_at,c.last_batch_round,c.pending_reason,c.pending_ai_id,
-      COALESCE(ast.total,0),COALESCE(ast.recent_manga,0),COALESCE(ast.recent_works,0),COALESCE(ast.recent_ai,0),COALESCE(ps.pages,0),COALESCE(ps.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(es.qualified,0)
-      FROM candidates c LEFT JOIN artwork_stats ast ON ast.artist_id=c.id LEFT JOIN page_stats ps ON ps.artist_id=c.id LEFT JOIN feedback_stats fs ON fs.artist_id=c.id LEFT JOIN eligible_stats es ON es.artist_id=c.id`, queryArgs...)
+      COALESCE(ast.total,0),COALESCE(ast.recent_manga,0),COALESCE(ast.recent_works,0),COALESCE(ast.recent_ai,0),COALESCE(ast.pages,0),COALESCE(ast.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(ast.qualified,0)
+      FROM candidates c LEFT JOIN artwork_stats ast ON ast.artist_id=c.id LEFT JOIN feedback_stats fs ON fs.artist_id=c.id`, queryArgs...)
 	if err != nil {
 		return err
 	}

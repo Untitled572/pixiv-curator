@@ -198,7 +198,8 @@ func (s *Store) ReclaimFreePages(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free); err != nil || free == 0 {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum`); err != nil {
+	// Limit maintenance work per tick so catalog requests can use the writer.
+	if _, err := s.db.ExecContext(ctx, `PRAGMA incremental_vacuum(512)`); err != nil {
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `PRAGMA wal_checkpoint(PASSIVE)`)

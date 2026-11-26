@@ -122,7 +122,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(run.Budget, &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.CandidateArtists != 15 || plan.AlgorithmArtists != 9 || plan.RankingArtists != 5 || plan.UniformTarget != 1 || plan.ExplorationArtists != 6 || plan.IndependentLimit != 12 || len(plan.Queries) != 3 {
+	if plan.CandidateArtists != 16 || plan.AlgorithmArtists != 9 || plan.RankingArtists != 6 || plan.UniformTarget != 1 || plan.ExplorationArtists != 7 || plan.IndependentLimit != 14 || len(plan.Queries) != 3 {
 		t.Fatalf("frozen cohort budget=%+v", plan)
 	}
 	wantDate := time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02")
@@ -255,7 +255,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first) != 15 || len(second) != len(first) {
+	if len(first) != plan.CandidateArtists || len(second) != len(first) {
 		t.Fatalf("candidate result lengths=%d/%d", len(first), len(second))
 	}
 	pages := map[int64]bool{}
@@ -282,7 +282,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if err = json.Unmarshal(finalBudget["actual_source_counts"], &actual); err != nil {
 		t.Fatal(err)
 	}
-	if actual["algorithm"] != 9 || actual[independentRecallSource] != 5 || actual[independentUniformSource] != 1 {
+	if actual["algorithm"] != plan.AlgorithmArtists || actual[independentRecallSource] != plan.RankingArtists || actual[independentUniformSource] != plan.UniformTarget {
 		t.Fatalf("actual admitted source counts=%v", actual)
 	}
 	var funnel map[string]map[string]int
@@ -320,7 +320,7 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 		if err = json.Unmarshal(first[i].Components, &components); err != nil {
 			t.Fatal(err)
 		}
-		if components.DisplayOrder != i || components.UniformID != (i >= 14) {
+		if components.DisplayOrder != i || components.UniformID != (i >= plan.CandidateArtists-plan.UniformTarget) {
 			t.Fatalf("candidate %d display data=%+v", i, components)
 		}
 		if components.UniformID {
