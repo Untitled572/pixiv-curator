@@ -90,12 +90,17 @@ func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMes
 			return nil, err
 		}
 		queries = append(queries, query{Mode: "day", Date: time.Now().UTC().AddDate(0, 0, -2).Format("2006-01-02"), Offset: 0, Seed: seed + 1})
-		modes := []string{"day", "week", "month", "day_male", "day_female", "week_original", "week_rookie", "day_r18", "week_r18"}
+		generalModes := []string{"day", "week", "month", "day_male", "day_female", "week_original", "week_rookie"}
+		allModes := append(append([]string(nil), generalModes...), "day_r18", "week_r18")
 		historyPages := 3
 		if version == "v2" {
 			historyPages = 2
 		}
 		for i := 0; i < historyPages; i++ {
+			modes := allModes
+			if version == "v2" && i == 0 {
+				modes = generalModes
+			}
 			m, err := randomExplorationInt(int64(len(modes)))
 			if err != nil {
 				return nil, err
@@ -104,7 +109,13 @@ func freezeExplorationPlan(raw json.RawMessage, carriedUniform int) (json.RawMes
 			if err != nil {
 				return nil, err
 			}
-			offset, err := randomExplorationInt(10)
+			maxPages := int64(10)
+			if version == "v2" && i == 0 {
+				maxPages = 4
+			} else if version == "v2" && (modes[m] == "day_r18" || modes[m] == "week_r18") {
+				maxPages = 3
+			}
+			offset, err := randomExplorationInt(maxPages)
 			if err != nil {
 				return nil, err
 			}

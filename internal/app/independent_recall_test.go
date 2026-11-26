@@ -129,6 +129,14 @@ func TestIndependentRecommendationPipelineFreezesRankingAndUniformSources(t *tes
 	if plan.Queries[0].Mode != "day" || plan.Queries[0].Date != wantDate || plan.Queries[0].Offset != 0 {
 		t.Fatalf("first query=%+v, want fixed day query on %s", plan.Queries[0], wantDate)
 	}
+	firstHistory := plan.Queries[1]
+	if firstHistory.Mode == "day_r18" || firstHistory.Mode == "week_r18" || firstHistory.Offset > 90 {
+		t.Fatalf("first history query should cover the first four pages of a general ranking: %+v", firstHistory)
+	}
+	secondHistory := plan.Queries[2]
+	if (secondHistory.Mode == "day_r18" || secondHistory.Mode == "week_r18") && secondHistory.Offset > 60 {
+		t.Fatalf("adult ranking query reached beyond the first three pages: %+v", secondHistory)
+	}
 	for _, query := range plan.Queries {
 		if query.Seed == 0 || query.Offset < 0 || query.Offset > 270 || query.Offset%30 != 0 {
 			t.Fatalf("query outside frozen bounds: %+v", query)

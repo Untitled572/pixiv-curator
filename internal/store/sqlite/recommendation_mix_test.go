@@ -416,3 +416,28 @@ func TestIndependentMixDoesNotMarkOrdinaryAsRandomAndDoesNotOverfill(t *testing.
 		}
 	}
 }
+
+func TestRecommendationMixV2FillsMissingRankingWithNormalCandidates(t *testing.T) {
+	s := openTestStore(t)
+	const run = "mix-v2-no-ranking"
+	budget := `{"plan_version":"v2","candidate_artists":15,"algorithm_artists":9,"ranking_artists":5,"exploration_artists":6,"uniform_sample_target":1,"library_class_weights":{"safe":1},"independent_exploration":true}`
+	addRecommendationMixTestRun(t, s, run, budget, "{}")
+	for i := int64(0); i < 15; i++ {
+		addRecommendationMixCandidate(t, s, run, 3800+i, 4800+i, "safe", 0.5, []string{"related"}, "")
+		for j := int64(1); j <= 7; j++ {
+			// Age classification needs eight works with known ratings.
+			seedSelectionArtwork(t, s, 6000+i*10+j, 3800+i, "safe", "non_ai", nil, 1)
+		}
+	}
+	addRecommendationMixCandidate(t, s, run, 3899, 4899, "safe", 0, []string{independentUniformSource}, "")
+	completeRecommendationMixForTest(t, s, run, []byte(budget))
+	rows := readRecommendationMixRows(t, s, run)
+	if len(rows) != 15 || rows[len(rows)-1].id != 3899 {
+		t.Fatalf("got %d results, want 14 ordinary and the uniform candidate last: %+v", len(rows), rows)
+	}
+	for _, row := range rows[:14] {
+		if row.components["exploration"] == true {
+			t.Fatalf("ordinary candidate mislabeled as exploration: %+v", row)
+		}
+	}
+}

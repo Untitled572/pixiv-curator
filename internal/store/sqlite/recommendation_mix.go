@@ -192,9 +192,13 @@ func selectIndependentRecommendations(ctx context.Context, tx *sql.Tx, runID str
 		selectedIDs[c.artistID] = true
 		actualCounts[independentRankingSource]++
 	}
-	selectedNormal := selectRecommendationMixNormalVersion(normal, b.AlgorithmArtists, b.LibraryAdultRatio, stats.FeedbackTagCounts, false)
+	var selectedNormal []recommendationMixCandidate
 	if b.PlanVersion == "v2" {
-		selectedNormal = selectRecommendationMixV2(normal, b.AlgorithmArtists, b.LibraryClassWeights)
+		// Use the unclaimed exploration slots for eligible ordinary results.
+		// Apply the same content and source quotas across the expanded cohort.
+		selectedNormal = selectRecommendationMixV2(normal, b.CandidateArtists-len(selectedIndependent), b.LibraryClassWeights)
+	} else {
+		selectedNormal = selectRecommendationMixNormal(normal, b.AlgorithmArtists, b.LibraryAdultRatio, stats.FeedbackTagCounts)
 	}
 	for _, c := range selectedNormal {
 		selectedIDs[c.artistID] = true
