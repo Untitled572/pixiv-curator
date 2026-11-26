@@ -441,3 +441,22 @@ func TestRecommendationMixV2FillsMissingRankingWithNormalCandidates(t *testing.T
 		}
 	}
 }
+
+func TestRecommendationTrainingReadsWhileWriterIsInUse(t *testing.T) {
+	s := openTestStore(t)
+	const run = "training-read"
+	addRecommendationMixTestRun(t, s, run, "{}", "{}")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	writer, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, err = writer.ExecContext(ctx, "UPDATE recommendation_runs SET budget_json='{}' WHERE id=?", run); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecommendationSimilarityExamples(ctx, run); err != nil {
+		t.Fatalf("recommendation training could not read while writer was in use: %v", err)
+	}
+}

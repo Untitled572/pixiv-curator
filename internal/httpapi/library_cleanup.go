@@ -61,8 +61,14 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 		if !decodeBody(w, r, &in) {
 			return
 		}
-		round, items, kept, err := store.NextLibraryCleanup(r.Context(), in.Round)
+		ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+		defer cancel()
+		round, items, kept, err := store.NextLibraryCleanup(ctx, in.Round)
 		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				writeAPIError(w, http.StatusGatewayTimeout, "REVIEW_NEXT_TIMEOUT")
+				return
+			}
 			apiError(w, err)
 			return
 		}

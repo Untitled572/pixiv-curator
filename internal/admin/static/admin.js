@@ -268,7 +268,7 @@
     trigger.disabled = true;
     trigger.textContent = next ? "换组中…" : "读取中…";
     let timedOut = false;
-    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 10000);
+    const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, next ? 40000 : 10000);
     try {
       const result = next
         ? await api("/admin/api/library/review/next", { method: "POST", body: JSON.stringify({ round: libraryReviewRound }), signal: controller.signal })
@@ -363,7 +363,9 @@
       if (controller.signal.aborted && !timedOut) return;
       // A timed-out POST may have committed. Read the current group on retry.
       if (next) libraryReviewRound = 0;
-      if (timedOut) showMessage("读取整理图库超时，请再点一次「换一组」。", true);
+      if (timedOut || error.message === "REVIEW_NEXT_TIMEOUT") {
+        showMessage(next ? "生成新组超时，下次会先核对当前批次。" : "读取当前整理批次超时，请稍后重试。", true);
+      }
       else report(error, "读取整理建议");
       if (!hasCards) list.replaceChildren(node("p", "empty-cell", "暂时无法读取，稍后可重试。"));
     } finally {
@@ -465,10 +467,13 @@
     if (runID) query.set("run_id", runID);
     return query;
   }
-  function updateRecommendationStatus(run) {
+  function updateRecommendationStatus(run, itemCounts) {
     const status = $("#recommendation-status");
     const progress = Math.max(0, Math.min(100, Number(run.progress_percent) || 0));
-    const key = [run.id, run.state, progress, !!run.budget?.directed].join(":");
+    const sources = run.budget?.actual_source_counts;
+    const generated = sources ? ["algorithm", "independent_ranking", "independent_uniform_id"]
+      .reduce((total, source) => total + (Number(sources[source]) || 0), 0) : null;
+    const key = [run.id, run.state, progress, !!run.budget?.directed, generated, itemCounts?.pending, itemCounts?.visible].join(":");
     const running = ["pending", "running", "retry_wait"].includes(run.state);
     $("#start-recommendations").disabled = running;
     $("#start-recommendations").textContent = running ? "正在发现…" : "换一批";
@@ -477,7 +482,11 @@
     const parts = document.createDocumentFragment();
     parts.append(node("span", "run-state", run.budget?.directed ? "定向随机发现" : "为你发现的画师"));
     parts.append(node("span", `run-pill state-${run.state || "unknown"}`, runLabel(run.state)));
-    parts.append(node("span", "run-meta", `${progress}%`));
+    if (itemCounts) {
+      const counts = [generated === null ? "" : "本轮生成 " + generated + " 位", "待处理 " + itemCounts.pending + " 位"];
+      if (itemCounts.visible !== itemCounts.pending) counts.push("当前显示 " + itemCounts.visible + " 位");
+      parts.append(node("span", "run-meta", counts.filter(Boolean).join(" · ")));
+    } else parts.append(node("span", "run-meta", progress + "%"));
     status.replaceChildren(parts);
   }
   const recommendationPreviewQueue = [];
@@ -682,7 +691,7 @@
       recommendationRunID = String(run.id || runID || "");
       if (!recommendationRunID) throw new Error("NOT_FOUND");
       if (recommendationPollError) { recommendationPollError = false; showMessage(""); }
-      updateRecommendationStatus(run);
+      if (run.state !== "succeeded") updateRecommendationStatus(run);
       if (["pending", "running", "retry_wait"].includes(run.state)) {
         if (!list.querySelector(".recommendation-card") && (recommendationPendingID !== recommendationRunID || !list.children.length || invalidate)) {
           list.replaceChildren(node("p", "empty-cell", "正在收集候选与代表作，完成后一次展示；候选不会自动加入图库。"));
@@ -704,7 +713,10 @@
         list.replaceChildren(node("p", "empty-cell", run.state === "paused_auth" ? "请先在设置中检查账号，恢复任务后再查看。" : "本轮发现未完成，可以稍后重新开始。")); return;
       }
       const rating = $("#recommendation-rating").value, ai = $("#recommendation-ai").value;
-      const items = (Array.isArray(result.items) ? result.items : []).filter((item) => matchesRecommendationCategory(rating, item.content_rating) && matchesRecommendationCategory(ai, item.ai_status));
+      const pending = Array.isArray(result.items) ? result.items : [];
+      const items = pending.filter((item) => matchesRecommendationCategory(rating, item.content_rating) && matchesRecommendationCategory(ai, item.ai_status));
+      const visible = items.filter((item) => Array.isArray(item.sample_illust_ids) && item.sample_illust_ids.length).length;
+      updateRecommendationStatus(run, { pending: pending.length, visible });
       const key = JSON.stringify([run.id, recommendationQuery().toString(), items]);
       if (key === recommendationRenderedKey) { startRecommendationPolling(30000); return; }
       recommendationPreviewController?.abort();
@@ -712,7 +724,7 @@
       const fragment = prepareRecommendationCards(items);
       if (!fragment || controller.signal.aborted || activeTab !== "discover") return;
       if (!fragment.children.length) fragment.append(node("p", "empty-cell", "当前筛选下没有带代表作的候选，可调整筛选或生成下一批。"));
-      list.replaceChildren(fragment); observeRecommendationPreviews(list, previewController.signal); observeDiscoveryExposure(run.budget?.directed ? "" : recommendationRunID, list); recommendationRenderedKey = key; updateRecommendationStatus(run); startRecommendationPolling(30000);
+      list.replaceChildren(fragment); observeRecommendationPreviews(list, previewController.signal); observeDiscoveryExposure(run.budget?.directed ? "" : recommendationRunID, list); recommendationRenderedKey = key; startRecommendationPolling(30000);
     } catch (error) {
       if (controller.signal.aborted || activeTab !== "discover") return;
       $("#start-recommendations").disabled = false; $("#start-recommendations").textContent = "开始发现";
@@ -838,8 +850,8 @@
         showMessage("已加入图库，后台会自动安排采集。");
         if (exploring && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
           emitExplorationApprovalParticles(card);
-          setTimeout(() => card.remove(), 475);
-        } else card.remove();
+          setTimeout(() => { card.remove(); startRecommendationPolling(0); }, 475);
+        } else { card.remove(); startRecommendationPolling(0); }
       } catch (error) {
         decisionPending = false; delete card.dataset.decisionPending; actionButton.disabled = card.dataset.previewReady !== "true"; rejectButton.disabled = false;
         report(error, "加入图库");
@@ -850,7 +862,7 @@
       const actionButton = event.currentTarget;
       if (decisionPending) return;
       decisionPending = true; card.dataset.decisionPending = "true"; approveButton.disabled = true; rejectButton.disabled = true;
-      try { await api(`/admin/api/artists/${encodeURIComponent(id)}/reject`, { method: "POST" }); showMessage("已记录为不感兴趣。"); card.remove(); }
+      try { await api(`/admin/api/artists/${encodeURIComponent(id)}/reject`, { method: "POST" }); showMessage("已记录为不感兴趣。"); card.remove(); startRecommendationPolling(0); }
       catch (error) { decisionPending = false; delete card.dataset.decisionPending; actionButton.disabled = false; approveButton.disabled = card.dataset.previewReady !== "true"; report(error, "记录选择"); }
     });
     content.append(actions); card.append(content); return card;

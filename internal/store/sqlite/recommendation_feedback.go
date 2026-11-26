@@ -5,11 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"math"
+	"strings"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 	"github.com/Untitled572/pixiv-curator/internal/recommend"
-	"strings"
-	"time"
 )
 
 type recommendationFeatureSample struct {
@@ -163,14 +163,32 @@ func recommendationSkipWeight(ctx context.Context, tx *sql.Tx, artistID int64, n
 }
 
 func (s *Store) RecommendationSimilarityExamples(ctx context.Context, runID string) ([]recommend.SimilarityExample, error) {
-	var recentRaw string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(json_extract(budget_json,'$.recent_approved_artist_ids'),'[]') FROM recommendation_runs WHERE id=?`, runID).Scan(&recentRaw); err != nil {
+	// Recommendation training reads a catalog snapshot without occupying the writer.
+	reader, err := sql.Open("sqlite", s.selectionSnapshotDSN)
+	if err != nil {
 		return nil, err
 	}
-	positiveRows, err := s.db.QueryContext(ctx, `WITH ranked AS (
+	defer reader.Close()
+	tx, err := reader.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var recentRaw string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(json_extract(budget_json,'$.recent_approved_artist_ids'),'[]') FROM recommendation_runs WHERE id=?`, runID).Scan(&recentRaw); err != nil {
+		return nil, err
+	}
+	positiveRows, err := tx.QueryContext(ctx, `WITH eligible AS MATERIALIZED (
+ SELECT a.id FROM artists a
+ WHERE (a.review_status='approved' OR (a.review_status='pending' AND a.remote_followed=1))
+ AND NOT EXISTS(SELECT 1 FROM recommendation_decisions d WHERE d.artist_id=a.id AND d.action='approve'
+   AND d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=a.id))
+ ), ranked AS (
  SELECT w.id,w.artist_id,row_number() OVER(PARTITION BY w.artist_id ORDER BY COALESCE(w.bookmarks,0) DESC,COALESCE(w.published_at,0) DESC,w.id DESC) popular,
  row_number() OVER(PARTITION BY w.artist_id ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC) recent
- FROM artworks w JOIN artists a ON a.id=w.artist_id WHERE w.visible=1 AND w.metadata_state<>'unavailable' AND (a.review_status='approved' OR (a.review_status='pending' AND a.remote_followed=1)) AND NOT EXISTS(SELECT 1 FROM recommendation_decisions d WHERE d.artist_id=a.id AND d.action='approve' AND d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=a.id))
+ FROM eligible a CROSS JOIN artworks w INDEXED BY artworks_artist ON w.artist_id=a.id
+ WHERE w.visible=1 AND w.metadata_state<>'unavailable'
  ), chosen AS (SELECT id,artist_id FROM ranked WHERE popular<=2 OR recent=1)
  SELECT c.artist_id,json_group_array(DISTINCT t.normalized_name),CASE WHEN c.artist_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) THEN 0.2 ELSE 1 END FROM chosen c LEFT JOIN artwork_tags at ON at.illust_id=c.id LEFT JOIN tags t ON t.id=at.tag_id GROUP BY c.artist_id ORDER BY c.artist_id`, recentRaw)
 	if err != nil {
@@ -201,7 +219,7 @@ func (s *Store) RecommendationSimilarityExamples(ctx context.Context, runID stri
 	positiveRows.Close()
 	now := time.Now()
 	cutoff := now.Add(-45 * 24 * time.Hour).UnixMilli()
-	rows, err := s.db.QueryContext(ctx, `SELECT d.feature_json,d.action='reject',0,CASE WHEN d.artist_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND d.action='approve' THEN 0.2 ELSE 1.0 END FROM recommendation_decisions d JOIN artists a ON a.id=d.artist_id WHERE d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=d.artist_id) AND ((d.action='reject' AND a.review_status='rejected') OR (d.action='approve' AND a.review_status='approved'))
+	rows, err := tx.QueryContext(ctx, `SELECT d.feature_json,d.action='reject',0,CASE WHEN d.artist_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND d.action='approve' THEN 0.2 ELSE 1.0 END FROM recommendation_decisions d JOIN artists a ON a.id=d.artist_id WHERE d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=d.artist_id) AND ((d.action='reject' AND a.review_status='rejected') OR (d.action='approve' AND a.review_status='approved'))
  UNION ALL
  SELECT w.feature_json,0,1,MAX(0.0,1.0-(?-w.skipped_at)/?) FROM recommendation_weak_skips w JOIN artists a ON a.id=w.artist_id WHERE a.review_status='pending' AND w.skipped_at>? AND w.rowid IN (SELECT MAX(x.rowid) FROM recommendation_weak_skips x WHERE x.skipped_at>? GROUP BY x.artist_id ORDER BY MAX(x.skipped_at) DESC LIMIT 150)`, recentRaw, now.UnixMilli(), float64(45*24*time.Hour/time.Millisecond), cutoff, cutoff)
 	if err != nil {
