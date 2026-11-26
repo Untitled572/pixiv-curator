@@ -64,9 +64,9 @@ func (c *directedTestClient) ExplorationArtworks(_ context.Context, _, _ string,
 		return nil, nil
 	}
 	// One ranking hit per artist. The other previews come from ArtistArtworks.
-	works := make([]pixiv.RawArtwork, 0, 4)
-	for i := range 4 {
-		id := int64(100 + 4*c.rankingPages + i)
+	works := make([]pixiv.RawArtwork, 0, 5)
+	for i := range 5 {
+		id := int64(100 + 5*c.rankingPages + i)
 		works = append(works, directedArtwork(id*10+1, id))
 	}
 	return works, nil
@@ -111,7 +111,7 @@ func TestDirectedDiscoveryAppliesConditionsBeforeShowingCandidates(t *testing.T)
 	}
 }
 
-func TestDirectedRankingLooksPastSixPagesAndFillsFifteenCandidates(t *testing.T) {
+func TestDirectedRankingLooksPastSixPagesAndFillsSixteenCandidates(t *testing.T) {
 	ctx := context.Background()
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "directed-ranking.db"))
 	if err != nil {
@@ -132,10 +132,10 @@ func TestDirectedRankingLooksPastSixPagesAndFillsFifteenCandidates(t *testing.T)
 		t.Fatal(err)
 	}
 	run, items, err := service.Candidates(ctx, id)
-	if err != nil || run.State != "succeeded" || len(items) != 15 {
+	if err != nil || run.State != "succeeded" || len(items) != 16 {
 		t.Fatalf("run state=%q candidates=%d err=%v", run.State, len(items), err)
 	}
-	if client.rankingPages != legacyDirectedPages+4 || run.RequestCount != client.rankingPages+15 {
+	if client.rankingPages != legacyDirectedPages+4 || run.RequestCount != client.rankingPages+16 {
 		t.Fatalf("ranking pages=%d, requests=%d", client.rankingPages, run.RequestCount)
 	}
 	for _, item := range items {

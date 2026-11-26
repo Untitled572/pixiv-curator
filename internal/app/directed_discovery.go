@@ -23,7 +23,7 @@ const (
 	legacyDirectedPages    = 6
 	directedSearchPages    = 16
 	directedRankingPages   = 24
-	directedCandidateLimit = 15
+	directedCandidateLimit = 16
 	directedRequestLimit   = 160
 	directedSource         = "directed_random"
 )
