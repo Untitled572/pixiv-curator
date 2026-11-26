@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"math"
 	rand "math/rand/v2"
+	"slices"
 	"time"
 )
 
@@ -34,6 +35,12 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	rules, err := defaultSelectionRulesInTx(ctx, tx)
 	if err != nil {
 		return err
+	}
+	// Include both default supply and the explicit R18 branch in the same work count.
+	for _, rating := range []string{"r18", "r18g"} {
+		if !slices.Contains(rules.AllowedRatings, rating) {
+			rules.AllowedRatings = append(rules.AllowedRatings, rating)
+		}
 	}
 	where, args, err := selectionWhere(rules, 0, "", nil)
 	if err != nil {

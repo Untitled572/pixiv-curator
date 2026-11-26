@@ -294,7 +294,7 @@
         });
         keep.disabled = kept.has(id);
         card.append(heading);
-        const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "可用作品较少", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
+        const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "供图可用率偏低", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
         card.append(node("p", "field-help", (reasons[item.audit_reason] || "常规巡检") + " · " + artistSummaryText(item.summary || {})));
         const samples = node("div", "library-review-samples");
         (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
@@ -341,6 +341,18 @@
       }
     }
   }
+  function rememberLibraryPanel(panel) {
+    const key = "curator.admin." + panel.id + ".open";
+    try {
+      const saved = localStorage.getItem(key);
+      if (saved === "true" || saved === "false") panel.open = saved === "true";
+    } catch (_) { /* Storage may be unavailable in private browsing. */ }
+    panel.addEventListener("toggle", () => {
+      try { localStorage.setItem(key, String(panel.open)); } catch (_) {}
+    });
+  }
+  rememberLibraryPanel($("#library-review"));
+  rememberLibraryPanel($("#library-list-panel"));
   $("#library-review").addEventListener("toggle", () => { if ($("#library-review").open) loadLibraryReview(); else libraryReviewController?.abort(); });
   $("#reload-library-review").addEventListener("click", () => loadLibraryReview(libraryReviewRound > 0));
   $("#library-list-panel").addEventListener("toggle", () => {
@@ -937,6 +949,7 @@
       historyPages = totalPages;
       historyPage = totalPages ? page : 1;
       const fragment = document.createDocumentFragment();
+      let artistRequest = 0;
       for (const item of result.items || []) {
         const card = node("article", "history-card"); card.dataset.historyId = String(item.id);
         const open = () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, pageCount: item.page_count, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags });
@@ -954,7 +967,23 @@
           titleButton.addEventListener("click", open);
           title.append(titleButton);
         } else title.textContent = item.title || "作品 " + item.illust_id;
-        card.append(cover, title, node("p", "artwork-meta", (item.artist_name || "UID " + item.artist_id) + " · 第 " + (Number(item.page_index) + 1) + " 页"), node("p", "artwork-meta", formatTime(item.selected_at)));
+        const meta = node("p", "artwork-meta");
+        if (item.artist_id && item.artist_id !== "0") {
+          button(meta, item.artist_name || "UID " + item.artist_id, "artist-detail-link", async () => {
+            const request = ++artistRequest;
+            try {
+              const artist = await api("/admin/api/artists/" + encodeURIComponent(item.artist_id), { signal: controller.signal });
+              if (!controller.signal.aborted && activeTab === "history" && request === artistRequest) {
+                await openArtistDetails(artist);
+              }
+            } catch (error) {
+              if (!controller.signal.aborted && request === artistRequest) report(error, "读取画师详情");
+            }
+          });
+          meta.append(" · ");
+        }
+        meta.append("第 " + (Number(item.page_index) + 1) + " 页");
+        card.append(cover, title, meta, node("p", "artwork-meta", formatTime(item.selected_at)));
         const key = `${item.illust_id}:${Number(item.page_index)}`;
         if (!historyFeedbackPending.has(key)) historyFeedback.set(key, ["like", "dislike", "neutral"].includes(item.feedback) ? item.feedback : "neutral");
         const controls = node("div", "history-feedback"); controls.dataset.feedbackKey = key;

@@ -35,7 +35,12 @@ func TestPagesRenderEmbeddedHTMLWithoutCredentialValues(t *testing.T) {
 			if strings.Contains(body, "never-render-this-token") {
 				t.Fatal("rendered page included credential data")
 			}
-			if strings.Contains(body, "localStorage") || strings.Contains(body, ".innerHTML") {
+			// Allow only the two calls that persist boolean panel state.
+			withoutPanelStorage := strings.NewReplacer(
+				"localStorage.getItem(key)", "",
+				"localStorage.setItem(key, String(panel.open))", "",
+			).Replace(body)
+			if strings.Contains(withoutPanelStorage, "localStorage") || strings.Contains(body, ".innerHTML") {
 				t.Fatal("page includes unsafe credential storage or HTML injection API")
 			}
 			if tc.name == "home" {

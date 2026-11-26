@@ -187,3 +187,23 @@ func TestCleanupHistoricalSamplesUseDefaultEligibility(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanupCountsR18BranchTowardAvailability(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedArtist(t, s, 1)
+	if _, err := s.db.ExecContext(ctx, "UPDATE artists SET review_status='approved',collection_enabled=1 WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	for id := int64(101); id <= 110; id++ {
+		seedSelectionArtwork(t, s, id, 1, "r18", "non_ai", nil, 1)
+	}
+	_, items, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%v err=%v", items, err)
+	}
+	item := items[0]
+	if item.AuditReason == "low_availability" || item.Summary.EligiblePages != 0 {
+		t.Fatalf("R18 supply should count toward review without changing default eligibility: %+v", item)
+	}
+}
