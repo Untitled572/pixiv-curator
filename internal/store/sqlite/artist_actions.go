@@ -209,7 +209,12 @@ func (s *Store) setCollection(ctx context.Context, id int64, enabled, notInteres
 	}
 	var urls []string
 	if !enabled {
-		rows, queryErr := tx.QueryContext(ctx, `SELECT DISTINCT p.preview_url FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE w.artist_id=? AND p.preview_url<>''`, id)
+		rows, queryErr := tx.QueryContext(ctx, `SELECT DISTINCT p.preview_url
+			FROM artworks w JOIN image_pages p ON p.illust_id=w.id
+			WHERE w.artist_id=? AND p.preview_url<>'' AND NOT EXISTS (
+				SELECT 1 FROM image_pages other JOIN artworks owner ON owner.id=other.illust_id
+				WHERE other.preview_url=p.preview_url AND owner.artist_id<>w.artist_id
+			)`, id)
 		if queryErr != nil {
 			return queryErr
 		}
@@ -232,19 +237,6 @@ func (s *Store) setCollection(ctx context.Context, id int64, enabled, notInteres
 		}
 		if err == nil {
 			err = purgeArtistCatalog(ctx, tx, id)
-		}
-		if err == nil {
-			unique := urls[:0]
-			for _, u := range urls {
-				var referenced bool
-				if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_pages WHERE preview_url=?)`, u).Scan(&referenced); err != nil {
-					break
-				}
-				if !referenced {
-					unique = append(unique, u)
-				}
-			}
-			urls = unique
 		}
 	} else {
 		payload, _ := json.Marshal(map[string]any{"artist_id": id, "phase": "recent"})

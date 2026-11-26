@@ -20,7 +20,7 @@
   let accountStatusLoading = false;
   let accountChoices = [];
   let historyPage = 1, historyPages = 0, historyController = null;
-  let libraryReviewController = null, libraryReviewRound = 0;
+  let libraryReviewController = null, libraryReviewRound = 0, libraryRemovalPending = false;
   const historyFeedback = new Map(), historyFeedbackPending = new Set();
 
   function node(tag, className = "", text) {
@@ -258,7 +258,7 @@
   }
   function statusText(status) { return ({ approved: "已收录", pending: "正在加入", blocked: "已屏蔽", rejected: "未收录" })[status] || "已收录"; }
   async function loadLibraryReview(next = false) {
-    if (activeTab !== "library" || !$("#library-review").open) return;
+    if (libraryRemovalPending || activeTab !== "library" || !$("#library-review").open) return;
     libraryReviewController?.abort(); const controller = new AbortController(); libraryReviewController = controller;
     const list = $("#library-review-list"), trigger = $("#reload-library-review");
     const hasCards = !!list.querySelector(".library-review-card");
@@ -311,9 +311,44 @@
         const rejectLabel = node("label", "field-help");
         const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 同时在发现画师中标为不感兴趣")); actions.append(rejectLabel);
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
-          const trigger = event.currentTarget; if (trigger.disabled) return; trigger.disabled = true; trigger.textContent = "移出中…";
-          try { await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, { method: "POST", body: JSON.stringify({ not_interested: reject.checked, round: result.round }) }); card.remove(); showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。"); if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。")); if ($("#library-list-panel").open) loadLibrary(); }
-          catch (error) { report(error, "移出图库"); trigger.disabled = false; trigger.textContent = "移出图库"; }
+          const remove = event.currentTarget;
+          if (remove.disabled || libraryRemovalPending) return;
+          const controller = new AbortController();
+          const timeout = window.setTimeout(() => controller.abort(), 15000);
+          libraryRemovalPending = true;
+          remove.disabled = true;
+          remove.textContent = "移出中…";
+          trigger.disabled = true;
+          list.inert = true;
+          list.setAttribute("aria-busy", "true");
+          let reconcile = false;
+          try {
+            await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove`, {
+              method: "POST",
+              body: JSON.stringify({ not_interested: reject.checked, round: result.round }),
+              signal: controller.signal
+            });
+            card.remove();
+            showMessage("已暂停并清理该画师作品，Pixiv 关注关系保留。");
+            if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完。"));
+            if (activeTab === "library" && $("#library-list-panel").open) loadLibrary(false, true);
+          } catch (error) {
+            reconcile = controller.signal.aborted || error.message === "REMOVE_TIMEOUT" || error.message === "CONFLICT";
+            if (reconcile) showMessage("正在核对移出结果…");
+            else report(error, "移出图库");
+          } finally {
+            window.clearTimeout(timeout);
+            libraryRemovalPending = false;
+            remove.disabled = false;
+            remove.textContent = "移出图库";
+            trigger.disabled = false;
+            list.inert = false;
+            list.setAttribute("aria-busy", "false");
+            if (reconcile) {
+              libraryReviewRound = 0;
+              await loadLibraryReview();
+            }
+          }
         });
         card.append(actions); fragment.append(card);
       });

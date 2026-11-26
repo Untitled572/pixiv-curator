@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
@@ -114,6 +115,8 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			apiError(w, domain.ErrInvalid)
 			return
 		}
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
 		if in.NotInterested || in.Round != nil {
 			extended, ok := store.(interface {
 				RemoveLibraryArtistWithDecision(context.Context, int64, bool, ...int64) error
@@ -123,14 +126,18 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 				return
 			}
 			if in.Round != nil {
-				err = extended.RemoveLibraryArtistWithDecision(r.Context(), id, in.NotInterested, *in.Round)
+				err = extended.RemoveLibraryArtistWithDecision(ctx, id, in.NotInterested, *in.Round)
 			} else {
-				err = extended.RemoveLibraryArtistWithDecision(r.Context(), id, in.NotInterested)
+				err = extended.RemoveLibraryArtistWithDecision(ctx, id, in.NotInterested)
 			}
 		} else {
-			err = store.RemoveLibraryArtist(r.Context(), id)
+			err = store.RemoveLibraryArtist(ctx, id)
 		}
 		if err != nil {
+			if ctx.Err() == context.DeadlineExceeded {
+				writeAPIError(w, http.StatusGatewayTimeout, "REMOVE_TIMEOUT")
+				return
+			}
 			apiError(w, err)
 			return
 		}
