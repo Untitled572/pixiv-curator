@@ -962,18 +962,22 @@
       list.replaceChildren();
       for (const artwork of result.items || []) {
         const card = node("article", "artwork-card"), cover = node("div", "artist-cover");
-        if (artwork.visible) {
+        const pageIndices = (artwork.pages || []).filter((page) => page.media_state === "indexed").map((page) => page.page_index);
+        const canOpen = artwork.visible && pageIndices.length > 0;
+        const open = () => window.PixivCuratorViewer.open({
+          id: artwork.id, artistId: artwork.artist_id || detailArtist?.id, pageIndex: pageIndices[0], pageCount: artwork.page_count,
+          pageIndices, title: artwork.title, artistName: detailArtist?.name || "", rating: artwork.rating, aiStatus: artwork.ai_status, tags: artwork.tags
+        });
+        if (canOpen) {
           appendArtworkPreview(cover, artwork); cover.classList.add("image-open-target"); cover.tabIndex = 0; cover.setAttribute("role", "button"); cover.setAttribute("aria-label", "查看作品大图");
-          const open = () => window.PixivCuratorViewer.open({ id: artwork.id, artistId: artwork.artist_id || detailArtist?.id, pageIndex: (artwork.pages || [])[0]?.page_index || 0, title: artwork.title, artistName: detailArtist?.name || "", pageCount: artwork.page_count, rating: artwork.rating, aiStatus: artwork.ai_status, tags: artwork.tags });
           cover.addEventListener("click", open); cover.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } });
-        }
-        else cover.append(node("span", "cover-empty", "作品当前不可见"));
+        } else cover.append(node("span", "cover-empty", artwork.visible ? "暂无可用预览" : "作品当前不可见"));
         const info = node("div", "artwork-info");
         const title = node("div", "artwork-title-row");
-        if (artwork.visible) {
+        if (canOpen) {
           const titleButton = node("button", "artwork-title artwork-title-button", artwork.title || "作品 " + artwork.id);
           titleButton.type = "button"; titleButton.setAttribute("aria-label", "查看作品大图：" + (artwork.title || artwork.id));
-          titleButton.addEventListener("click", () => window.PixivCuratorViewer.open({ id: artwork.id, artistId: artwork.artist_id || detailArtist?.id, pageIndex: (artwork.pages || [])[0]?.page_index || 0, title: artwork.title, artistName: detailArtist?.name || "", pageCount: artwork.page_count, rating: artwork.rating, aiStatus: artwork.ai_status, tags: artwork.tags }));
+          titleButton.addEventListener("click", open);
           title.append(titleButton);
         } else title.append(node("span", "artwork-title", artwork.title || "作品 " + artwork.id));
         const pixivLink = node("a", "artwork-pixiv-link", "Pixiv");
@@ -1026,7 +1030,7 @@
       let artistRequest = 0;
       for (const item of result.items || []) {
         const card = node("article", "history-card"); card.dataset.historyId = String(item.id);
-        const open = () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, pageCount: item.page_count, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags });
+        const open = () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, pageCount: item.page_count, pageIndices: item.page_indices, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags });
         const cover = node("button", "history-preview"); cover.type = "button"; cover.disabled = !item.available;
         if (item.available) {
           const image = node("img"); image.alt = item.title || "历史图片"; image.loading = "lazy"; image.decoding = "async";

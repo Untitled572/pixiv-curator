@@ -45,7 +45,10 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 	offset := int64(page-1) * int64(pageSize)
 	query := `SELECT h.id,h.selected_at,h.illust_id,h.page_index,MAX(a.page_count,h.page_index+1),a.artist_id,ar.name,a.title,p.width,p.height,
 		CASE WHEN a.visible=1 AND ar.review_status<>'blocked' AND p.media_state='indexed' THEN 1 ELSE 0 END,p.original_url,a.rating,a.ai_status,COALESCE((SELECT json_group_array(t.display_name) FROM artwork_tags at JOIN tags t ON t.id=at.tag_id WHERE at.illust_id=a.id),'[]')
-		,COALESCE(f.value,'neutral'),h.delivered_at,COALESCE(h.delivery_mode,''),h.filter_preset
+		,COALESCE(f.value,'neutral'),h.delivered_at,COALESCE(h.delivery_mode,''),h.filter_preset,
+		CASE WHEN a.retained_page_indices IS NOT NULL THEN
+			(SELECT json_group_array(page_index ORDER BY page_index) FROM image_pages
+			 WHERE illust_id=a.id AND media_state='indexed') END
 		FROM distribution_history h
 		JOIN artworks a ON a.id=h.illust_id
 		JOIN artists ar ON ar.id=a.artist_id
@@ -64,12 +67,18 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 		var available int
 		var originalURL, rawTags string
 		var rawPreset []byte
+		var retainedPages sql.NullString
 		if err = rows.Scan(&item.ID, &item.SelectedAt, &item.IllustID, &item.PageIndex, &item.PageCount, &item.ArtistID,
-			&item.ArtistName, &item.Title, &item.Width, &item.Height, &available, &originalURL, &item.Rating, &item.AIStatus, &rawTags, &item.Feedback, &item.DeliveredAt, &item.DeliveryMode, &rawPreset); err != nil {
+			&item.ArtistName, &item.Title, &item.Width, &item.Height, &available, &originalURL, &item.Rating, &item.AIStatus, &rawTags, &item.Feedback, &item.DeliveredAt, &item.DeliveryMode, &rawPreset, &retainedPages); err != nil {
 			return out, err
 		}
 		if err = json.Unmarshal([]byte(rawTags), &item.Tags); err != nil {
 			return out, err
+		}
+		if retainedPages.Valid {
+			if err = json.Unmarshal([]byte(retainedPages.String), &item.PageIndices); err != nil {
+				return out, err
+			}
 		}
 		if json.Valid(rawPreset) {
 			item.FilterPreset = rawPreset

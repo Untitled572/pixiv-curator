@@ -230,14 +230,17 @@
       tagsNode.append(element("span", "pixiv-viewer-empty-tags", "暂无标签"));
     }
     pageStatus.textContent = `${state.pageIndex + 1} / ${state.pageCount}`;
-    previousButton.disabled = state.pageIndex <= 0;
-    nextButton.disabled = state.pageIndex >= state.pageCount - 1;
+    const position = state.pageIndices?.indexOf(state.pageIndex);
+    previousButton.disabled = (position ?? state.pageIndex) <= 0;
+    nextButton.disabled = (position ?? state.pageIndex) >= (state.pageIndices?.length ?? state.pageCount) - 1;
   }
 
   function changePage(delta) {
     if (!state) return;
-    const next = state.pageIndex + delta;
-    if (next < 0 || next >= state.pageCount) return;
+    const next = state.pageIndices
+      ? state.pageIndices[state.pageIndices.indexOf(state.pageIndex) + delta]
+      : state.pageIndex + delta;
+    if (!Number.isSafeInteger(next) || next < 0 || next >= state.pageCount) return;
     state.pageIndex = next;
     render();
     loadImage();
@@ -256,8 +259,12 @@
     const pageIndex = input.pageIndex;
     if (!id || !Number.isSafeInteger(pageIndex) || pageIndex < 0) return false;
     const rawCount = Number(input.pageCount);
-    const pageCount = Number.isSafeInteger(rawCount) && rawCount > 0 ? rawCount : 1;
+    const hasPageCount = Number.isSafeInteger(rawCount) && rawCount > 0;
+    const pageCount = hasPageCount ? rawCount : pageIndex + 1;
     if (pageIndex >= pageCount) return false;
+    const pageIndices = !hasPageCount ? [pageIndex] : Array.isArray(input.pageIndices)
+      ? [...new Set(input.pageIndices.filter((index) => Number.isSafeInteger(index) && index >= 0 && index < pageCount).concat(pageIndex))].sort((a, b) => a - b)
+      : null;
 
     ensureDialog();
     stopImage();
@@ -266,6 +273,7 @@
       artistId: positiveID(input.artistId),
       pageIndex,
       pageCount,
+      pageIndices,
       title: String(input.title ?? ""),
       artistName: String(input.artistName ?? ""),
       rating: String(input.rating ?? "unknown"),

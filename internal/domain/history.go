@@ -5,6 +5,7 @@ import "encoding/json"
 // DistributionHistoryItem represents a recorded image selection. Its URL is
 // constructed from the fixed artwork/page identity, never copied from storage.
 type DistributionHistoryItem struct {
+	PageIndices  []int           `json:"page_indices,omitempty"`
 	Rating       string          `json:"rating"`
 	AIStatus     string          `json:"ai_status"`
 	Tags         []string        `json:"tags"`
