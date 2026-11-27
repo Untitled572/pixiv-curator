@@ -129,19 +129,32 @@ jobs:
       REPLACE_EXISTING: ${{ inputs.replace_existing || false }}
       SOURCE_SHA: ${{ github.sha }}
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets
           path: dist
-      - name: Verify archives and prepare release notes
+      - name: Verify archives
         run: |
           (cd dist && sha256sum --check SHA256SUMS)
           test "$(find dist -maxdepth 1 \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l)" -eq 4
-          gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$VERSION" --jq .body > release-notes.md
+      - name: Generate release notes from commit history
+        run: |
+          title=$(git log --format=%s -1 "$SOURCE_SHA")
+          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude "$VERSION" "$SOURCE_SHA^" 2>/dev/null || true)
           {
+            printf '%s\n\n## 更新内容\n\n' "$title"
+            if [[ -n "$previous" ]]; then
+              git log --format='- %s' "$previous..$SOURCE_SHA"
+            else
+              printf '%s\n' '- 首次发布'
+            fi
             printf '\n## Downloads\n\nLinux and Windows: amd64 / arm64. Verify archives with SHA256SUMS.\n'
             printf '\n## Docker\n\nImage: \x60%s:%s\x60\n\nDigest: \x60%s@%s\x60\n' "$IMAGE" "$VERSION" "$IMAGE" "$DIGEST"
-          } >> release-notes.md
+          } > release-notes.md
       - name: Create or resume draft, upload all assets, then publish
         run: |
           if gh release view "$VERSION" --json isDraft --jq .isDraft > draft-state; then
