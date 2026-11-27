@@ -308,7 +308,9 @@ func (s *Recommender) Handler(ctx context.Context, j domain.Job) error {
 					}
 				} else {
 					for _, raw := range works {
-						add(raw.User, recommend.SourceRelatedArtwork)
+						if raw.Type != "manga" {
+							add(raw.User, recommend.SourceRelatedArtwork)
+						}
 					}
 				}
 			}
@@ -582,7 +584,7 @@ func haltOptional(err error) bool {
 func normalizeSamples(raw []pixiv.RawArtwork, id int64, max int) ([]domain.Artwork, error) {
 	result := []domain.Artwork{}
 	for _, work := range raw {
-		if work.User.ID != id {
+		if work.User.ID != id || work.Type == "manga" {
 			continue
 		}
 		a, err := pixiv.NormalizeArtwork(work)

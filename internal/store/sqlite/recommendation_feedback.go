@@ -219,9 +219,13 @@ func (s *Store) RecommendationSimilarityExamples(ctx context.Context, runID stri
 	positiveRows.Close()
 	now := time.Now()
 	cutoff := now.Add(-45 * 24 * time.Hour).UnixMilli()
-	rows, err := tx.QueryContext(ctx, `SELECT d.feature_json,d.action='reject',0,CASE WHEN d.artist_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND d.action='approve' THEN 0.2 ELSE 1.0 END FROM recommendation_decisions d JOIN artists a ON a.id=d.artist_id WHERE d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=d.artist_id) AND ((d.action='reject' AND a.review_status='rejected') OR (d.action='approve' AND a.review_status='approved'))
+	rows, err := tx.QueryContext(ctx, `SELECT (SELECT json_group_array(j.value) FROM json_each(d.feature_json) j WHERE NOT EXISTS (
+ SELECT 1 FROM artworks w WHERE w.id=CAST(json_extract(j.value,'$.illust_id') AS INTEGER) AND w.kind='manga'
+ )),d.action='reject',0,CASE WHEN d.artist_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?)) AND d.action='approve' THEN 0.2 ELSE 1.0 END FROM recommendation_decisions d JOIN artists a ON a.id=d.artist_id WHERE d.id=(SELECT MAX(x.id) FROM recommendation_decisions x WHERE x.artist_id=d.artist_id) AND ((d.action='reject' AND a.review_status='rejected') OR (d.action='approve' AND a.review_status='approved'))
  UNION ALL
- SELECT w.feature_json,0,1,MAX(0.0,1.0-(?-w.skipped_at)/?) FROM recommendation_weak_skips w JOIN artists a ON a.id=w.artist_id WHERE a.review_status='pending' AND w.skipped_at>? AND w.rowid IN (SELECT MAX(x.rowid) FROM recommendation_weak_skips x WHERE x.skipped_at>? GROUP BY x.artist_id ORDER BY MAX(x.skipped_at) DESC LIMIT 150)`, recentRaw, now.UnixMilli(), float64(45*24*time.Hour/time.Millisecond), cutoff, cutoff)
+ SELECT (SELECT json_group_array(j.value) FROM json_each(w.feature_json) j WHERE NOT EXISTS (
+ SELECT 1 FROM artworks a WHERE a.id=CAST(json_extract(j.value,'$.illust_id') AS INTEGER) AND a.kind='manga'
+ )),0,1,MAX(0.0,1.0-(?-w.skipped_at)/?) FROM recommendation_weak_skips w JOIN artists a ON a.id=w.artist_id WHERE a.review_status='pending' AND w.skipped_at>? AND w.rowid IN (SELECT MAX(x.rowid) FROM recommendation_weak_skips x WHERE x.skipped_at>? GROUP BY x.artist_id ORDER BY MAX(x.skipped_at) DESC LIMIT 150)`, recentRaw, now.UnixMilli(), float64(45*24*time.Hour/time.Millisecond), cutoff, cutoff)
 	if err != nil {
 		return nil, err
 	}

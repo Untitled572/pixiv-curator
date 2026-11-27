@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -27,6 +28,7 @@ type Store struct {
 	selectionSnapshotDSN     string
 	selectionSnapshotRefresh chan struct{}
 	db                       *sql.DB
+	adminReadDB              *sql.DB
 	hookMu                   sync.RWMutex
 	previewPurgeHook         func([]string) error
 }
@@ -74,10 +76,17 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	s.adminReadDB, err = sql.Open("sqlite", s.selectionSnapshotDSN)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	s.adminReadDB.SetMaxOpenConns(2)
+	s.adminReadDB.SetMaxIdleConns(1)
 	return s, nil
 }
 
-func (s *Store) Close() error                   { return s.db.Close() }
+func (s *Store) Close() error                   { return errors.Join(s.adminReadDB.Close(), s.db.Close()) }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 // Migrate rejects unknown or non-contiguous versions before applying any change.
@@ -161,7 +170,7 @@ func (s *Store) SetPreviewPurgeHook(hook func([]string) error) {
 
 // LivePreviewURLs returns catalog references for cache pruning at startup.
 func (s *Store) LivePreviewURLs(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT preview_url FROM image_pages WHERE preview_url<>''`)
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT p.preview_url FROM image_pages p JOIN artworks a ON a.id=p.illust_id WHERE p.preview_url<>'' AND a.kind<>'manga'`)
 	if err != nil {
 		return nil, err
 	}

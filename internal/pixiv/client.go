@@ -376,6 +376,16 @@ func (c *Client) ArtistArtworks(ctx context.Context, id int64, next string) (Art
 	if next == "" {
 		next = apiOrigin + "/v1/user/illusts?filter=for_ios&type=illust&user_id=" + strconv.FormatInt(id, 10)
 	}
+	u, err := url.Parse(next)
+	if err != nil {
+		return ArtworkPage{}, &Error{Code: "INVALID_NEXT_URL"}
+	}
+	if err := validateAPIURL(next); err != nil {
+		return ArtworkPage{}, err
+	}
+	if u.Query().Get("type") == "manga" {
+		return ArtworkPage{}, nil
+	}
 	var raw struct {
 		Artworks []RawArtwork `json:"illusts"`
 		Next     string       `json:"next_url"`
@@ -388,14 +398,11 @@ func (c *Client) ArtistArtworks(ctx context.Context, id int64, next string) (Art
 			return ArtworkPage{}, err
 		}
 	}
-	current, _ := url.Parse(next)
-	if raw.Next == "" && (current.Query().Get("type") == "illust" || current.Query().Get("type") == "") {
-		manga := *current
-		q := manga.Query()
-		q.Set("type", "manga")
-		q.Del("offset")
-		manga.RawQuery = q.Encode()
-		raw.Next = manga.String()
+	if raw.Next != "" {
+		u, _ := url.Parse(raw.Next)
+		if u.Query().Get("type") == "manga" {
+			raw.Next = ""
+		}
 	}
 	return ArtworkPage{Artworks: raw.Artworks, Next: raw.Next}, nil
 }
@@ -457,7 +464,7 @@ func (c *Client) Authenticate(ctx context.Context) (int64, error) {
 	return c.accountID, nil
 }
 
-// NextArtworkSection skips already indexed older pages while still checking manga.
+// NextArtworkSection ends an incremental scan once its illustration page is known.
 func NextArtworkSection(current, next string) (string, error) {
 	if next == "" {
 		return "", nil
@@ -469,18 +476,6 @@ func NextArtworkSection(current, next string) (string, error) {
 		if err := validateAPIURL(current); err != nil {
 			return "", err
 		}
-		u, _ := url.Parse(current)
-		if u.Query().Get("type") == "manga" {
-			return "", nil
-		}
 	}
-	u, _ := url.Parse(next)
-	if u.Query().Get("type") == "manga" {
-		return next, nil
-	}
-	q := u.Query()
-	q.Set("type", "manga")
-	q.Del("offset")
-	u.RawQuery = q.Encode()
-	return u.String(), nil
+	return "", nil
 }

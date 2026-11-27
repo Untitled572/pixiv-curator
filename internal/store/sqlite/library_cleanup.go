@@ -313,7 +313,7 @@ func (s *Store) LibraryArtistSummary(ctx context.Context, id int64) (domain.Libr
 
 func libraryArtistSummary(ctx context.Context, tx *sql.Tx, id int64, where string, args []any) (domain.LibraryCleanupSummary, error) {
 	var summary domain.LibraryCleanupSummary
-	err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0) FROM artworks WHERE artist_id=? AND visible=1`, id).Scan(&summary.Artworks, &summary.R18, &summary.KnownRating, &summary.AI, &summary.KnownAI, &summary.LatestPublished)
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(rating IN ('r18','r18g')),0),COALESCE(SUM(rating<>'unknown'),0),COALESCE(SUM(ai_status='ai'),0),COALESCE(SUM(ai_status<>'unknown'),0),COALESCE(MAX(published_at),0),EXISTS(SELECT 1 FROM artworks WHERE artist_id=? AND kind<>'manga' AND retained_page_indices IS NOT NULL) FROM artworks WHERE artist_id=? AND visible=1`, id, id).Scan(&summary.Artworks, &summary.R18, &summary.KnownRating, &summary.AI, &summary.KnownAI, &summary.LatestPublished, &summary.PagesTrimmed)
 	if err != nil {
 		return summary, err
 	}
@@ -321,7 +321,7 @@ func libraryArtistSummary(ctx context.Context, tx *sql.Tx, id int64, where strin
 	if err != nil {
 		return summary, err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(f.value='like'),0),COALESCE(SUM(f.value='dislike'),0) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=?`, id).Scan(&summary.Likes, &summary.Dislikes)
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(f.value='like'),0),COALESCE(SUM(f.value='dislike'),0) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=? AND w.kind<>'manga'`, id).Scan(&summary.Likes, &summary.Dislikes)
 	if err != nil {
 		return summary, err
 	}

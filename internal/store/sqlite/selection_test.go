@@ -412,7 +412,7 @@ func TestSelectUnknownRequiresExplicitGlobalPermissionAndKeepsHardExclusions(t *
 	}
 }
 
-func TestExcludeMangaLegacyRuleCombination(t *testing.T) {
+func TestExcludeMangaEvenWhenLegacyRuleIsOff(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	seedEligibleArtist(t, s, 1800, "approved")
@@ -426,8 +426,8 @@ func TestExcludeMangaLegacyRuleCombination(t *testing.T) {
 	global.ExcludeManga = false
 	putSelectionRules(t, s, global)
 	base := domain.SelectionRequest{SelectionRules: domain.SelectionRules{AllowedRatings: []string{"safe"}, AllowedAI: []string{"non_ai"}, Orientation: "any"}, ArtistID: 1800}
-	if got, err := s.Select(ctx, base); err != nil || got.IllustID != 1810 {
-		t.Fatalf("default false must preserve manga: selected=%+v err=%v", got, err)
+	if _, err := s.Select(ctx, base); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("legacy false must not admit manga: %v", err)
 	}
 
 	base.ExcludeManga = true

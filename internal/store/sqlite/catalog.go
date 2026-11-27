@@ -74,7 +74,11 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 	if a.ID <= 0 || a.ArtistID <= 0 || a.PageCount < 0 {
 		return domain.ErrInvalid
 	}
-	a.Kind = enum(a.Kind, "illust", "manga", "ugoira")
+	if a.Kind == "manga" {
+		_, err := tx.ExecContext(ctx, `UPDATE artworks SET kind='manga',visible=0 WHERE id=? AND artist_id=? AND (kind<>'manga' OR visible<>0)`, a.ID, a.ArtistID)
+		return err
+	}
+	a.Kind = enum(a.Kind, "illust", "ugoira")
 	a.Rating = enum(a.Rating, "safe", "r18", "r18g")
 	a.AIStatus = enum(a.AIStatus, "non_ai", "ai")
 	if a.MetadataState == "" {
@@ -98,7 +102,7 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 	}
 	now := time.Now().UnixMilli()
 	_, err := tx.ExecContext(ctx, `INSERT INTO artworks(id,artist_id,title,caption,kind,page_count,rating,ai_status,bookmarks,views,published_at,metadata_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
- ON CONFLICT(id) DO UPDATE SET title=excluded.title,caption=excluded.caption,kind=excluded.kind,page_count=CASE WHEN excluded.metadata_state='complete' THEN excluded.page_count ELSE artworks.page_count END,rating=excluded.rating,ai_status=excluded.ai_status,bookmarks=excluded.bookmarks,views=excluded.views,published_at=excluded.published_at,metadata_state=excluded.metadata_state,updated_at=excluded.updated_at WHERE artworks.artist_id=excluded.artist_id`, a.ID, a.ArtistID, a.Title, a.Caption, a.Kind, a.PageCount, a.Rating, a.AIStatus, a.Bookmarks, a.Views, a.PublishedAt, a.MetadataState, now, now)
+ ON CONFLICT(id) DO UPDATE SET title=excluded.title,caption=excluded.caption,kind=excluded.kind,page_count=CASE WHEN excluded.metadata_state='complete' THEN excluded.page_count ELSE artworks.page_count END,rating=excluded.rating,ai_status=excluded.ai_status,bookmarks=excluded.bookmarks,views=excluded.views,published_at=excluded.published_at,metadata_state=excluded.metadata_state,visible=CASE WHEN artworks.kind='manga' THEN 1 ELSE artworks.visible END,updated_at=excluded.updated_at WHERE artworks.artist_id=excluded.artist_id`, a.ID, a.ArtistID, a.Title, a.Caption, a.Kind, a.PageCount, a.Rating, a.AIStatus, a.Bookmarks, a.Views, a.PublishedAt, a.MetadataState, now, now)
 	if err != nil {
 		return err
 	}
@@ -121,7 +125,7 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 		}
 	}
 	if a.MetadataState == "complete" {
-		if _, err = tx.ExecContext(ctx, `UPDATE image_pages SET media_state='unavailable',updated_at=? WHERE illust_id=?`, now, a.ID); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE image_pages SET media_state='unavailable',updated_at=? WHERE illust_id=? AND page_index>=? AND media_state<>'unavailable'`, now, a.ID, a.PageCount); err != nil {
 			return err
 		}
 	}
@@ -132,7 +136,10 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 		if p.State == "" {
 			p.State = "indexed"
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO image_pages(illust_id,page_index,original_url,preview_url,width,height,media_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(illust_id,page_index) DO UPDATE SET original_url=excluded.original_url,preview_url=excluded.preview_url,width=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.width WHEN image_pages.original_url=excluded.original_url THEN image_pages.width ELSE 0 END,height=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.height WHEN image_pages.original_url=excluded.original_url THEN image_pages.height ELSE 0 END,media_state=excluded.media_state,updated_at=excluded.updated_at`, a.ID, p.Index, p.OriginalURL, p.PreviewURL, p.Width, p.Height, p.State, now, now)
+		_, err = tx.ExecContext(ctx, `INSERT INTO image_pages(illust_id,page_index,original_url,preview_url,width,height,media_state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(illust_id,page_index) DO UPDATE SET original_url=excluded.original_url,preview_url=excluded.preview_url,width=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.width WHEN image_pages.original_url=excluded.original_url THEN image_pages.width ELSE 0 END,height=CASE WHEN excluded.width>0 AND excluded.height>0 THEN excluded.height WHEN image_pages.original_url=excluded.original_url THEN image_pages.height ELSE 0 END,media_state=excluded.media_state,updated_at=excluded.updated_at
+WHERE image_pages.original_url<>excluded.original_url OR image_pages.preview_url<>excluded.preview_url
+OR image_pages.media_state<>excluded.media_state
+OR (excluded.width>0 AND excluded.height>0 AND (image_pages.width<>excluded.width OR image_pages.height<>excluded.height))`, a.ID, p.Index, p.OriginalURL, p.PreviewURL, p.Width, p.Height, p.State, now, now)
 		if err != nil {
 			return err
 		}

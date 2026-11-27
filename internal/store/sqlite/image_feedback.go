@@ -20,7 +20,7 @@ func (s *Store) SetImageFeedback(ctx context.Context, illustID int64, pageIndex 
 	}
 	defer tx.Rollback()
 	var exists bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_pages WHERE illust_id=? AND page_index=?)`, illustID, pageIndex).Scan(&exists); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM image_pages p JOIN artworks w ON w.id=p.illust_id WHERE p.illust_id=? AND p.page_index=? AND w.kind<>'manga')`, illustID, pageIndex).Scan(&exists); err != nil {
 		return "", err
 	}
 	if !exists {

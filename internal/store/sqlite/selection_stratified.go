@@ -110,7 +110,7 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 
 	votes := map[int64]*tagVote{}
 	artistVotes := map[int64][2]float64{}
-	rows, err = tx.QueryContext(ctx, `SELECT f.value,at.tag_id FROM image_feedback f JOIN artwork_tags at ON at.illust_id=f.illust_id`)
+	rows, err = tx.QueryContext(ctx, `SELECT f.value,at.tag_id FROM image_feedback f JOIN artworks a ON a.id=f.illust_id AND a.kind<>'manga' JOIN artwork_tags at ON at.illust_id=f.illust_id`)
 	if err != nil {
 		return selectionPage{}, err
 	}
@@ -138,7 +138,7 @@ func (s *Store) chooseStratified(ctx context.Context, tx *sql.Tx, rules domain.S
 	if err = rows.Err(); err != nil {
 		return selectionPage{}, err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT a.artist_id,SUM(CASE f.value WHEN 'like' THEN 1 ELSE 0 END),SUM(CASE f.value WHEN 'dislike' THEN 1 ELSE 0 END) FROM image_feedback f JOIN artworks a ON a.id=f.illust_id GROUP BY a.artist_id`)
+	rows, err = tx.QueryContext(ctx, `SELECT a.artist_id,SUM(CASE f.value WHEN 'like' THEN 1 ELSE 0 END),SUM(CASE f.value WHEN 'dislike' THEN 1 ELSE 0 END) FROM image_feedback f JOIN artworks a ON a.id=f.illust_id WHERE a.kind<>'manga' GROUP BY a.artist_id`)
 	if err != nil {
 		return selectionPage{}, err
 	}

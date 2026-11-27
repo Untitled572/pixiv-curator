@@ -231,7 +231,7 @@ func (s *Recommender) recallIndependent(ctx context.Context, j domain.Job, run d
 }
 
 func normalizeIndependentArtwork(raw pixiv.RawArtwork, requestedID int64) (domain.Artist, domain.Artwork, bool) {
-	if requestedID <= 0 || raw.ID != requestedID || (raw.Type != "illust" && raw.Type != "manga") {
+	if requestedID <= 0 || raw.ID != requestedID || raw.Type != "illust" {
 		return domain.Artist{}, domain.Artwork{}, false
 	}
 	artist, err := pixiv.NormalizeArtist(raw.User)

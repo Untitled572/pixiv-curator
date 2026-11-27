@@ -74,6 +74,7 @@
     image.className = "pixiv-viewer-image";
     image.alt = "Pixiv 作品原图";
     image.decoding = "async";
+    image.fetchPriority = "high";
     image.hidden = true;
     status = element("p", "pixiv-viewer-status", "尚未加载图片");
     dimensions = element("p", "pixiv-viewer-dimensions", "");

@@ -34,7 +34,7 @@ func previewFixture(t *testing.T, transport http.RoundTripper, cacheDir ...strin
 		t.Fatal(err)
 	}
 	if err := store.UpsertArtwork(ctx, domain.Artwork{
-		ID: 991, ArtistID: 99, Kind: "manga", PageCount: 2, Rating: "safe", AIStatus: "non_ai",
+		ID: 991, ArtistID: 99, Kind: "illust", PageCount: 2, Rating: "safe", AIStatus: "non_ai",
 		MetadataState: "complete", Visible: true, Pages: []domain.Page{
 			{Index: 0, OriginalURL: previewOriginal, PreviewURL: previewThumbnail, State: "indexed"},
 			{Index: 1, OriginalURL: "https://i.pximg.net/img-original/991_p1.jpg", State: "indexed"},

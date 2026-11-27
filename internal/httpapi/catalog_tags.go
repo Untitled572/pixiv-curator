@@ -118,7 +118,7 @@ func RegisterLibrary(mux *http.ServeMux, store libraryTagStore, auth *Auth) {
 			apiError(w, domain.ErrInvalid)
 			return
 		}
-		if hasCollectionFilter && collectionEnabled != "0" && collectionEnabled != "1" {
+		if hasCollectionFilter && collectionEnabled != "0" && collectionEnabled != "1" && collectionEnabled != "trimmed" {
 			apiError(w, domain.ErrInvalid)
 			return
 		}

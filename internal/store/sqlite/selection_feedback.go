@@ -15,6 +15,7 @@ func imageFeedbackInTx(ctx context.Context, tx *sql.Tx) (map[string]float64, err
 	rows, err := tx.QueryContext(ctx, `SELECT t.normalized_name,
 		SUM(CASE f.value WHEN 'like' THEN 1.0 ELSE -1.0 END) score
 		FROM image_feedback f
+		CROSS JOIN artworks w ON w.id=f.illust_id AND w.kind<>'manga'
 		CROSS JOIN artwork_tags at ON at.illust_id=f.illust_id
 		CROSS JOIN tags t ON t.id=at.tag_id
 		GROUP BY t.normalized_name ORDER BY ABS(score) DESC,t.normalized_name LIMIT 10000`)

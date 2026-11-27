@@ -420,3 +420,53 @@ func TestPausedArtistRejectsLateUnavailableAndRepairCommits(t *testing.T) {
 		t.Fatalf("paused repair commit error=%v; want ErrConflict (job %s)", err, repairID)
 	}
 }
+
+func TestIncrementalScanReusesRecentArtworkDetails(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedArtist(t, s, 5431)
+	if _, err := s.DecideArtist(ctx, 5431, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := claimJobByKey(t, s, "artist:5431")
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := domain.Artwork{ID: 54310, ArtistID: 5431, Kind: "illust", Rating: "unknown", AIStatus: "unknown", MetadataState: "complete"}
+	if err = s.CommitArtistBatch(ctx, initial, 5431, initial.ID, "recent", "", []domain.Artwork{work}); err != nil {
+		t.Fatal(err)
+	}
+	hydrate, err := claimJobByKey(t, s, "hydrate:54310")
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := work
+	details.Rating = "safe"
+	if err = s.CommitHydration(ctx, hydrate, details); err != nil {
+		t.Fatal(err)
+	}
+	for i, age := range []time.Duration{24 * time.Hour, 8 * 24 * time.Hour} {
+		if _, err = s.db.Exec(`UPDATE jobs SET updated_at=? WHERE id=?`, time.Now().Add(-age).UnixMilli(), hydrate.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Enqueue(ctx, "sync_artist", "artist:5431", json.RawMessage(`{"artist_id":5431,"phase":"incremental"}`)); err != nil {
+			t.Fatal(err)
+		}
+		incremental, err := claimJobByKey(t, s, "artist:5431")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.CommitArtistBatch(ctx, incremental, 5431, incremental.ID, "incremental", "", []domain.Artwork{work}); err != nil {
+			t.Fatal(err)
+		}
+		var pending int
+		var rating string
+		if err = s.db.QueryRow(`SELECT rating,(SELECT count(*) FROM jobs WHERE dedupe_key='hydrate:54310' AND state='pending') FROM artworks WHERE id=54310`).Scan(&rating, &pending); err != nil {
+			t.Fatal(err)
+		}
+		wantRating := []string{"safe", "unknown"}[i]
+		if pending != i || rating != wantRating {
+			t.Fatalf("hydration age=%s: pending=%d rating=%s", age, pending, rating)
+		}
+	}
+}

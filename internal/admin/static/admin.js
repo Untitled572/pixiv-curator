@@ -8,7 +8,7 @@
   let libraryGeneration = 0;
   const libraryArtists = new Map();
   let preferenceVersion = 0;
-  let activeTab = "stats";
+  let activeTab = "stats", activeSettingsSection = "accounts";
   let recommendationRunID = "";
   let recommendationTimer = null;
   let recommendationController = null;
@@ -85,7 +85,12 @@
       tab.tabIndex = selected ? 0 : -1;
     });
     $$(".tab-panel").forEach((panel) => { panel.hidden = panel.dataset.panel !== tabName; });
-    if (tabName !== "discover") { stopRecommendationPolling(); recommendationController?.abort(); }
+    if (tabName !== "discover") {
+      stopRecommendationPolling();
+      recommendationController?.abort();
+      recommendationPreviewController?.abort();
+      recommendationPreviewController = null;
+    }
     if (tabName !== "settings") stopAccountPolling();
     if (tabName !== "history") historyController?.abort();
     if (tabName === "history") loadHistory();
@@ -95,8 +100,31 @@
     } else { libraryReviewController?.abort(); }
     if (tabName === "stats") { loadStats(); loadAPIAccounts(); updateAPIURL(); }
     if (tabName === "discover") loadLatestRecommendations();
-    if (tabName === "settings") { loadAccounts(); loadNetwork(); loadPreferences(); startAccountPolling(); }
+    if (tabName === "settings") setSettingsSection(activeSettingsSection);
   }
+  function setSettingsSection(section) {
+    activeSettingsSection = section;
+    $$("[data-settings-section]").forEach((button) => {
+      const selected = button.dataset.settingsSection === section;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    $$("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== section; });
+    if (section === "accounts") {
+      loadAccounts();
+      startAccountPolling();
+    } else {
+      stopAccountPolling();
+      if (section === "collection") loadCollectionSchedule();
+      if (section === "network") loadNetwork();
+      if (section === "preferences") loadPreferences();
+    }
+  }
+  $$("[data-settings-section]").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.settingsSection !== activeSettingsSection) setSettingsSection(button.dataset.settingsSection);
+    });
+  });
   const mobileNavigation = window.matchMedia("(max-width: 767px)");
   function updateNavigationOrientation() {
     $(".tabs").setAttribute("aria-orientation", mobileNavigation.matches ? "horizontal" : "vertical");
@@ -307,11 +335,17 @@
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
-        const rejectLabel = node("label", "field-help");
-        const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 不感兴趣")); actions.append(rejectLabel);
-        const trim = button(actions, item.trimmed ? "本轮已减半" : "减半收录", "button button-quiet button-small", async () => {
+        const rejectLabel = node("label", "field-help library-review-reject");
+        const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode("不感兴趣")); actions.append(rejectLabel);
+        let confirmTrim = false;
+        const trim = button(actions, item.trimmed ? "本轮已减半" : "减半收录", "button button-small library-trim-button", async () => {
           if (trim.disabled || libraryRemovalPending) return;
-          if (!window.confirm("保留最新的 90% 首图，再随机用次页补到原图片数的一半。清理后，被删图片的固定链接将失效。确定减半收录？")) return;
+          if (!confirmTrim) {
+            confirmTrim = true;
+            trim.textContent = "确认减半?";
+            return;
+          }
+          confirmTrim = false;
           libraryRemovalPending = true;
           trigger.disabled = true;
           list.inert = true;
@@ -705,6 +739,11 @@
     fragment.querySelectorAll("[data-reuse-artist]").forEach((stub) => { const old = oldCards.get(stub.dataset.reuseArtist); if (old?.isConnected) stub.replaceWith(old); else stub.remove(); });
     return fragment;
   }
+  function resumeRecommendationPreviews(list) {
+    if (recommendationPreviewController) return;
+    recommendationPreviewController = new AbortController();
+    observeRecommendationPreviews(list, recommendationPreviewController.signal);
+  }
   async function readRecommendations(runID = "", invalidate = false) {
     stopRecommendationPolling(); recommendationController?.abort();
     const controller = new AbortController(); recommendationController = controller;
@@ -733,6 +772,7 @@
             if (!controller.signal.aborted) { list.replaceChildren(carriedFragment); observeRecommendationPreviews(list, previewController.signal); }
           }
         }
+        if (list.querySelector(".recommendation-card")) resumeRecommendationPreviews(list);
         startRecommendationPolling(); return;
       }
       recommendationPendingID = "";
@@ -745,7 +785,11 @@
       const visible = items.filter((item) => Array.isArray(item.sample_illust_ids) && item.sample_illust_ids.length).length;
       updateRecommendationStatus(run, { pending: pending.length, visible });
       const key = JSON.stringify([run.id, recommendationQuery().toString(), items]);
-      if (key === recommendationRenderedKey) { startRecommendationPolling(30000); return; }
+      if (key === recommendationRenderedKey) {
+        resumeRecommendationPreviews(list);
+        startRecommendationPolling(30000);
+        return;
+      }
       recommendationPreviewController?.abort();
       const previewController = new AbortController(); recommendationPreviewController = previewController;
       const fragment = prepareRecommendationCards(items);
@@ -814,7 +858,7 @@
   function stopRecommendationPolling() { if (recommendationTimer !== null) { window.clearTimeout(recommendationTimer); recommendationTimer = null; } }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") { stopRecommendationPolling(); stopAccountPolling(); }
-    else { if (activeTab === "discover") loadLatestRecommendations(); if (activeTab === "settings") { refreshAccountStatuses(); startAccountPolling(); } }
+    else { if (activeTab === "discover") loadLatestRecommendations(); if (activeTab === "settings" && activeSettingsSection === "accounts") { refreshAccountStatuses(); startAccountPolling(); } }
   });
   function runLabel(state) { return ({ pending: "排队中", running: "正在发现", retry_wait: "稍后重试", succeeded: "已完成", failed: "未完成", paused_auth: "需要检查账号" })[state] || "状态更新中"; }
   function renderRecommendation(item) {
@@ -927,7 +971,11 @@
     const line = $("#artist-detail-summary");
     try {
       const summary = await api("/admin/api/library/artists/" + encodeURIComponent(artist.id) + "/summary");
-      if (detailArtist === artist && line.isConnected) line.textContent = artistSummaryText(summary);
+      if (detailArtist === artist && line.isConnected) {
+        line.textContent = artistSummaryText(summary);
+        const restore = $("#artist-restore-pages");
+        if (restore && !restore.disabled) restore.hidden = !summary.pages_trimmed || !artist.collection_enabled;
+      }
     } catch (_) {
       if (detailArtist === artist && line.isConnected) line.textContent = "作品统计暂时不可用。";
     }
@@ -941,12 +989,26 @@
     const summary = node("p", "field-help", "正在读取作品统计…");
     summary.id = "artist-detail-summary";
     info.append(summary);
-    loadArtistSummary(artist);
     const tags = node("div", "tag-list");
     (artist.tags || []).forEach((tag) => tags.append(node("span", "tag-chip", tag))); info.append(tags);
     const link = node("a", "button button-secondary button-small", "在 Pixiv 查看画师");
     link.href = "https://www.pixiv.net/users/" + encodeURIComponent(artist.id);
     link.target = "_blank"; link.rel = "noopener noreferrer"; info.append(link);
+    const restore = button(info, "恢复原始数量", "button button-secondary button-small", async () => {
+      restore.disabled = true;
+      try {
+        await api(`/admin/api/library/artists/${encodeURIComponent(artist.id)}/restore-pages`, { method: "POST", body: "{}" });
+        restore.textContent = "已安排恢复";
+        showMessage("已安排后台重新采集，可用分页会逐步补回。");
+        if (activeTab === "library" && $("#library-collection").value === "trimmed") loadLibrary(false, true);
+      } catch (error) {
+        restore.disabled = false;
+        report(error, "恢复原始数量");
+      }
+    });
+    restore.id = "artist-restore-pages";
+    restore.hidden = true;
+    loadArtistSummary(artist);
     $("#artwork-dialog").showModal(); await loadArtistDetails();
   }
   async function loadArtistDetails() {
@@ -1033,7 +1095,7 @@
         const open = () => window.PixivCuratorViewer.open({ id: item.illust_id, artistId: item.artist_id, pageIndex: item.page_index, pageCount: item.page_count, pageIndices: item.page_indices, title: item.title, artistName: item.artist_name, rating: item.rating, aiStatus: item.ai_status, tags: item.tags });
         const cover = node("button", "history-preview"); cover.type = "button"; cover.disabled = !item.available;
         if (item.available) {
-          const image = node("img"); image.alt = item.title || "历史图片"; image.loading = "lazy"; image.decoding = "async";
+          const image = node("img"); image.alt = item.title || "历史图片"; image.loading = "lazy"; image.decoding = "async"; image.fetchPriority = "low";
           image.src = `/admin/api/previews/${encodeURIComponent(item.illust_id)}/${Number(item.page_index)}`;
           image.addEventListener("error", () => image.replaceWith(node("span", "cover-empty", "图片暂不可用")), { once: true }); cover.append(image);
           cover.addEventListener("click", open);
@@ -1168,7 +1230,6 @@
     }
     $("#api-include-tags").value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean).forEach((v) => query.append("included_tags", v));
     $("#api-exclude-tags").value.split(/[,，\r\n]+/).map((v) => v.trim()).filter(Boolean).forEach((v) => query.append("excluded_tags", v));
-    if (!$("#api-exclude-manga").checked) query.set("exclude_manga", "0");
     if ($("#api-orientation-fallback").checked) query.set("orientation_fallback", "first_page");
     return query;
   }
@@ -1332,7 +1393,7 @@
   }
   function startAccountPolling() {
     stopAccountPolling();
-    if (activeTab === "settings" && document.visibilityState === "visible") accountTimer = window.setInterval(refreshAccountStatuses, 5000);
+    if (activeTab === "settings" && activeSettingsSection === "accounts" && document.visibilityState === "visible") accountTimer = window.setInterval(refreshAccountStatuses, 5000);
   }
   function stopAccountPolling() { if (accountTimer !== null) { window.clearInterval(accountTimer); accountTimer = null; } }
   function accountStatus(status) {
@@ -1368,6 +1429,40 @@
 
   let savedProxyAddress = "";
   let proxyHasCredentials = false;
+  let collectionScheduleVersion = 0;
+  async function loadCollectionSchedule() {
+    const field = $("#collection-interval"), status = $("#collection-schedule-status");
+    const submit = $("#collection-schedule-form button[type=submit]");
+    field.disabled = true; submit.disabled = true;
+    try {
+      const result = await api("/admin/api/settings/sync");
+      field.value = String(result.interval_hours);
+      collectionScheduleVersion = result.version;
+      status.textContent = "";
+      field.disabled = false; submit.disabled = false;
+    } catch (error) {
+      status.textContent = "采集频率暂不可用。";
+      report(error, "读取采集频率");
+    }
+  }
+  $("#collection-schedule-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.currentTarget.querySelector("button[type=submit]");
+    if (submit.disabled) return;
+    const status = $("#collection-schedule-status");
+    submit.disabled = true; status.textContent = "保存中…";
+    try {
+      const result = await api("/admin/api/settings/sync", {
+        method: "PUT", body: JSON.stringify({ interval_hours: Number($("#collection-interval").value), version: collectionScheduleVersion })
+      });
+      collectionScheduleVersion = result.version;
+      status.textContent = `已保存，每 ${result.interval_hours} 小时排队扫描。`;
+    } catch (error) {
+      status.textContent = "";
+      if (error.message === "CONFLICT") await loadCollectionSchedule();
+      report(error, "保存采集频率");
+    } finally { submit.disabled = false; }
+  });
   async function loadNetwork() {
     try {
       const result = await api("/admin/api/settings/network");
@@ -1407,7 +1502,6 @@
       preferenceVersion = Number(result.version) || 0;
       setChecked("rating", (rules.allowed_ratings || []).map((v) => v === "r18g" ? "r18" : v)); setChecked("ai", rules.allowed_ai);
       $("#min-width").value = String(rules.min_width || 0); $("#min-height").value = String(rules.min_height || 0);
-      $("#exclude-manga").checked = !!rules.exclude_manga;
       $("#orientation").value = rules.orientation || "any"; $("#strategy").value = rules.strategy || "stratified";
       $("#include-tags").value = (rules.included_tags || []).map((group) => group.join(", ")).join("\n");
       $("#exclude-tags").value = (rules.excluded_tags || []).join(", ");
@@ -1419,7 +1513,7 @@
     if (submit.disabled) return;
     submit.disabled = true;
     const rules = {
-      allowed_ratings: checkedValues("rating").flatMap((value) => value === "r18" ? ["r18", "r18g"] : [value]), allowed_ai: checkedValues("ai"), exclude_manga: $("#exclude-manga").checked,
+      allowed_ratings: checkedValues("rating").flatMap((value) => value === "r18" ? ["r18", "r18g"] : [value]), allowed_ai: checkedValues("ai"), exclude_manga: true,
       min_width: Number($("#min-width").value), min_height: Number($("#min-height").value),
       orientation: $("#orientation").value, strategy: $("#strategy").value,
       included_tags: parseTagGroups($("#include-tags").value),

@@ -41,6 +41,7 @@ type LibraryCleanupSample struct {
 }
 
 type LibraryCleanupSummary struct {
+	PagesTrimmed    bool  `json:"pages_trimmed"`
 	Artworks        int64 `json:"artworks"`
 	Pages           int64 `json:"pages"`
 	EligiblePages   int64 `json:"eligible_pages"`

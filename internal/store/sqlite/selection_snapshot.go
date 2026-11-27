@@ -89,7 +89,7 @@ func (s *Store) rebuildSelectionSnapshotWith(ctx context.Context, reader *sql.DB
 	if current := s.selectionSnapshot.Load(); current != nil && current.revision == revision {
 		return
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,a.created_at,a.bookmarks,a.views,a.kind,a.rating,a.ai_status FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed'`)
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,a.created_at,a.bookmarks,a.views,a.kind,a.rating,a.ai_status FROM artists ar JOIN artworks a ON a.artist_id=ar.id JOIN image_pages p ON p.illust_id=a.id WHERE ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind='illust' AND p.media_state='indexed'`)
 	if err != nil {
 		return
 	}
@@ -208,7 +208,7 @@ func snapshotCommonWorks(ctx context.Context, tx *sql.Tx, snap *selectionSnapsho
 			if meta == nil {
 				return nil, false, nil
 			}
-			if recent[id] || excluded[id] || (rules.ExcludeManga && meta.kind == "manga") || !allowedSnapshot(meta.rating, rules.AllowedRatings) || !allowedSnapshot(meta.ai, rules.AllowedAI) {
+			if recent[id] || excluded[id] || !allowedSnapshot(meta.rating, rules.AllowedRatings) || !allowedSnapshot(meta.ai, rules.AllowedAI) {
 				continue
 			}
 			for _, page := range pages {

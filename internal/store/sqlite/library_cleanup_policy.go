@@ -28,7 +28,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		return err
 	}
 	// Latch new evidence until the artist actually enters a batch.
-	_, err = tx.ExecContext(ctx, `UPDATE library_cleanup_skip SET pending_reason=CASE WHEN (SELECT COUNT(*) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=library_cleanup_skip.artist_id AND f.value='dislike' AND f.updated_at>library_cleanup_skip.started_at)>=2 THEN 'new_dislikes' ELSE 'new_ai' END, pending_ai_id=(SELECT w.id FROM artworks w WHERE w.artist_id=library_cleanup_skip.artist_id AND w.visible=1 AND w.ai_status='ai' AND w.created_at>library_cleanup_skip.started_at ORDER BY w.created_at DESC,w.id DESC LIMIT 1) WHERE started_at IS NOT NULL AND pending_reason='' AND (EXISTS(SELECT 1 FROM artworks w WHERE w.artist_id=library_cleanup_skip.artist_id AND w.visible=1 AND w.ai_status='ai' AND w.created_at>library_cleanup_skip.started_at) OR (SELECT COUNT(*) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=library_cleanup_skip.artist_id AND f.value='dislike' AND f.updated_at>library_cleanup_skip.started_at)>=2)`)
+	_, err = tx.ExecContext(ctx, `UPDATE library_cleanup_skip SET pending_reason=CASE WHEN (SELECT COUNT(*) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=library_cleanup_skip.artist_id AND w.kind<>'manga' AND f.value='dislike' AND f.updated_at>library_cleanup_skip.started_at)>=2 THEN 'new_dislikes' ELSE 'new_ai' END, pending_ai_id=(SELECT w.id FROM artworks w WHERE w.artist_id=library_cleanup_skip.artist_id AND w.visible=1 AND w.ai_status='ai' AND w.created_at>library_cleanup_skip.started_at ORDER BY w.created_at DESC,w.id DESC LIMIT 1) WHERE started_at IS NOT NULL AND pending_reason='' AND (EXISTS(SELECT 1 FROM artworks w WHERE w.artist_id=library_cleanup_skip.artist_id AND w.visible=1 AND w.ai_status='ai' AND w.created_at>library_cleanup_skip.started_at) OR (SELECT COUNT(*) FROM image_feedback f JOIN artworks w ON w.id=f.illust_id WHERE w.artist_id=library_cleanup_skip.artist_id AND w.kind<>'manga' AND f.value='dislike' AND f.updated_at>library_cleanup_skip.started_at)>=2)`)
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
     ), feedback_stats AS (
       SELECT w.artist_id,SUM(f.value='like') AS likes,SUM(f.value='dislike') AS dislikes,
         SUM(f.value='dislike' AND f.updated_at>=?) AS recent_dislikes
-      FROM image_feedback f CROSS JOIN artworks w ON f.illust_id=w.id GROUP BY w.artist_id
+      FROM image_feedback f CROSS JOIN artworks w ON f.illust_id=w.id WHERE w.kind<>'manga' GROUP BY w.artist_id
     ) SELECT c.id,c.cleanup_enabled_at,c.last_synced_at,c.last_batch_round,c.pending_reason,c.pending_ai_id,
       COALESCE(ast.total,0),COALESCE(ast.recent_manga,0),COALESCE(ast.recent_works,0),COALESCE(ast.recent_ai,0),COALESCE(ast.pages,0),COALESCE(ast.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(ast.qualified,0)
       FROM candidates c LEFT JOIN artwork_stats ast ON ast.artist_id=c.id LEFT JOIN feedback_stats fs ON fs.artist_id=c.id`, queryArgs...)

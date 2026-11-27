@@ -9,7 +9,6 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/jobs"
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 	"log/slog"
-	"time"
 )
 
 type PixivClient interface {
@@ -189,7 +188,12 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 			return taskInvalid()
 		}
 		works := make([]domain.Artwork, 0, len(page.Artworks))
+		indexedItems := 0
 		for _, raw := range page.Artworks {
+			if raw.Type == "manga" {
+				works = append(works, domain.Artwork{ID: raw.ID, ArtistID: raw.User.ID, Kind: "manga"})
+				continue
+			}
 			a, err := pixiv.NormalizeArtwork(raw)
 			if err != nil {
 				return classify(err)
@@ -198,6 +202,7 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 				return taskInvalid()
 			}
 			works = append(works, a)
+			indexedItems++
 		}
 		if phase == "incremental" {
 			if indexed, ok := s.store.(interface {
@@ -205,7 +210,9 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 			}); ok {
 				ids := make([]int64, 0, len(works))
 				for _, work := range works {
-					ids = append(ids, work.ID)
+					if work.Kind != "manga" {
+						ids = append(ids, work.ID)
+					}
 				}
 				known, err := indexed.KnownArtworkPage(ctx, payload.ArtistID, ids)
 				if err != nil {
@@ -222,8 +229,8 @@ func (s *Ingest) artist(ctx context.Context, j domain.Job) error {
 		if err = s.store.CommitArtistBatch(ctx, j, payload.ArtistID, j.ID, phase, page.Next, works); err != nil {
 			return classify(err)
 		}
-		slog.Info("artwork page indexed", "job_id", j.ID, "artist_id", payload.ArtistID, "phase", phase, "items", len(works))
-		processed += int64(len(works))
+		slog.Info("artwork page indexed", "job_id", j.ID, "artist_id", payload.ArtistID, "phase", phase, "items", indexedItems)
+		processed += int64(indexedItems)
 		if page.Next == "" || ((phase == "recent" || phase == "incremental") && processed >= 100) {
 			return nil
 		}
@@ -293,6 +300,3 @@ func classify(err error) error {
 	}
 	return &jobs.JobError{Class: jobs.Retry, Code: "STORE_ERROR", Err: fmt.Errorf("catalog operation failed")}
 }
-
-// SyncInterval is the initial conservative scheduler interval.
-const SyncInterval = 6 * time.Hour

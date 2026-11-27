@@ -9,7 +9,7 @@ func (s *Store) Artworks(ctx context.Context, after int64, limit int, artistID i
 	if after < 0 || artistID < 0 || limit < 1 || limit > 200 {
 		return nil, domain.ErrInvalid
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,artist_id,title,caption,kind,page_count,rating,ai_status,bookmarks,views,published_at,metadata_state,visible FROM artworks WHERE id>? AND (?=0 OR artist_id=?) ORDER BY id LIMIT ?`, after, artistID, artistID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,artist_id,title,caption,kind,page_count,rating,ai_status,bookmarks,views,published_at,metadata_state,visible FROM artworks WHERE kind<>'manga' AND id>? AND (?=0 OR artist_id=?) ORDER BY id LIMIT ?`, after, artistID, artistID, limit)
 	if err != nil {
 		return nil, err
 	}

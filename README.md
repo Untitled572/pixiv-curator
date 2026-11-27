@@ -101,7 +101,7 @@ curl 'http://127.0.0.1:5722/i/12345678/0?format=image'
 | `ai_type=0` / `1` | 分别选择非 AI / AI。 |
 | `ai_type=any` / `unknown` | 所有已知 AI 状态 / 未知 AI 状态；未知值仍受全局偏好限制。 |
 
-还可使用 `account_id`、`included_tags`、`orientation`、`min_width`、`min_height` 和 `exclude_manga` 组合筛选。屏蔽、显式踩图和其他硬排除不会被请求参数放宽。`format=redirect` 和默认 JSON 不会先下载图片；只有图片请求会拉取图像字节。`delivery=original` 保留旧式原图地址模式，消费端需自行处理 Pixiv 图片访问要求。
+还可使用 `account_id`、`included_tags`、`orientation`、`min_width`、`min_height` 组合筛选。Pixiv 标记为漫画的作品不收录、不供图，也不计入目录统计，普通多页插画照常收录。屏蔽、显式踩图和其他硬排除不会被请求参数放宽。`format=redirect` 和默认 JSON 不会先下载图片；只有图片请求会拉取图像字节。`delivery=original` 保留旧式原图地址模式，消费端需自行处理 Pixiv 图片访问要求。
 
 ## 开发与文档
 

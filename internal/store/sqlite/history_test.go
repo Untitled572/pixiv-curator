@@ -261,3 +261,33 @@ func TestHistoryIncludesCurrentAIClassificationAndTags(t *testing.T) {
 		t.Fatalf("missing viewer metadata: %+v", page.Items[0])
 	}
 }
+
+func TestHistoryAndOriginalLookupProceedWhileWriterIsOccupied(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 8040, "approved")
+	seedSelectionArtwork(t, s, 80401, 8040, "safe", "non_ai", nil, 1)
+	if _, err := s.Select(ctx, domain.SelectionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	// Keep the writer and its uncommitted visibility update busy. The viewer
+	// must read the last committed catalog state without waiting for this job.
+	if _, err = writer.ExecContext(ctx, `UPDATE artworks SET visible=0 WHERE id=80401`); err != nil {
+		t.Fatal(err)
+	}
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	page, err := s.EligibleAdminPage(readCtx, 80401, 0)
+	if err != nil || page.IllustID != 80401 {
+		t.Fatalf("original lookup blocked on writer: page=%+v err=%v", page, err)
+	}
+	history, err := s.History(readCtx, 1, 24)
+	if err != nil || len(history.Items) != 1 || !history.Items[0].Available {
+		t.Fatalf("history lookup blocked on writer: history=%+v err=%v", history, err)
+	}
+}

@@ -174,9 +174,9 @@ func (s *Store) EligibleAdminPage(ctx context.Context, id int64, index int) (dom
 	}
 	var result domain.SelectedPage
 	var previewURL string
-	err := s.db.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
+	err := s.adminReadDB.QueryRowContext(ctx, `SELECT a.id,a.artist_id,p.page_index,p.width,p.height,p.original_url,p.preview_url
 		FROM artworks a JOIN artists ar ON ar.id=a.artist_id JOIN image_pages p ON p.illust_id=a.id
-		WHERE a.id=? AND p.page_index=? AND p.media_state='indexed' AND a.visible=1 AND ar.review_status<>'blocked'`, id, index).
+		WHERE a.id=? AND p.page_index=? AND p.media_state='indexed' AND a.visible=1 AND a.kind<>'manga' AND ar.review_status<>'blocked'`, id, index).
 		Scan(&result.IllustID, &result.ArtistID, &result.PageIndex, &result.Width, &result.Height, &result.OriginalURL, &previewURL)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -507,15 +507,12 @@ func (s *Store) choosePage(ctx context.Context, tx *sql.Tx, rules domain.Selecti
 }
 
 func selectionWhere(rules domain.SelectionRules, artistID int64, accountID string, recentIDs []int64) (string, []any, error) {
-	where := `ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind IN ('illust','manga') AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
+	where := `ar.review_status='approved' AND ar.collection_enabled=1 AND a.visible=1 AND a.metadata_state='complete' AND a.kind='illust' AND p.media_state='indexed' AND a.rating IN ('safe','r18','r18g','unknown') AND a.ai_status IN ('non_ai','ai','unknown') AND NOT EXISTS (SELECT 1 FROM artwork_preferences pref WHERE pref.illust_id=a.id AND pref.value='dislike')`
 	where = appendAnd(where, `NOT EXISTS(SELECT 1 FROM image_feedback f WHERE f.illust_id=a.id AND f.page_index=p.page_index AND f.value='dislike')`)
 	var args []any
 	if artistID > 0 {
 		where = appendAnd(where, `a.artist_id=?`)
 		args = append(args, artistID)
-	}
-	if rules.ExcludeManga {
-		where = appendAnd(where, `a.kind<>'manga'`)
 	}
 	if accountID != "" {
 		where = appendAnd(where, `EXISTS (SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.account_id=? AND aa.artist_id=a.artist_id AND ac.deleted=0)`)

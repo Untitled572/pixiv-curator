@@ -347,3 +347,34 @@ func TestRenewFinalizesCancellationWithoutWaitingForExpiry(t *testing.T) {
 		t.Fatal("canceled worker overwrote terminal state")
 	}
 }
+
+func TestJobLanesClaimIndependently(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	recID, err := s.Enqueue(ctx, "recommend_artists", "discover", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	syncID, err := s.Enqueue(ctx, "sync_artist", "collect", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	discovery := s.JobLane(true)
+	collection := s.JobLane(false)
+	rec, err := discovery.Claim(ctx, now)
+	if err != nil || rec.ID != recID {
+		t.Fatalf("discovery claim: %s, %v", rec.ID, err)
+	}
+	job, err := collection.Claim(ctx, now)
+	if err != nil || job.ID != syncID {
+		t.Fatalf("collection claim while discovery runs: %s, %v", job.ID, err)
+	}
+	if _, err = discovery.Claim(ctx, now.Add(91*time.Second)); err != nil {
+		t.Fatalf("recover discovery lease: %v", err)
+	}
+	var syncLeaseUntil int64
+	if err = s.db.QueryRow(`SELECT lease_until FROM jobs WHERE id=?`, syncID).Scan(&syncLeaseUntil); err != nil || syncLeaseUntil != job.LeaseUntil {
+		t.Fatalf("discovery changed collection lease: %d, %v", syncLeaseUntil, err)
+	}
+}

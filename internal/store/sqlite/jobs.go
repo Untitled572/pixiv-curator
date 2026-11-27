@@ -49,18 +49,41 @@ func enqueue(ctx context.Context, tx *sql.Tx, kind, key string, payload json.Raw
 	return id, err
 }
 
+// JobLane restricts a worker to discovery jobs or to the remaining jobs.
+func (s *Store) JobLane(discovery bool) jobLane {
+	const discoveryKinds = "('recommend_artists','recommendation_refill')"
+	filter := " AND kind NOT IN " + discoveryKinds
+	if discovery {
+		filter = " AND kind IN " + discoveryKinds
+	}
+	return jobLane{Store: s, filter: filter}
+}
+
+type jobLane struct {
+	*Store
+	filter string
+}
+
+func (lane jobLane) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
+	return lane.claim(ctx, now, lane.filter)
+}
+
 // Claim recovers expired leases and grants one new lease in the same transaction.
 func (s *Store) Claim(ctx context.Context, now time.Time) (domain.Job, error) {
+	return s.claim(ctx, now, "")
+}
+
+func (s *Store) claim(ctx context.Context, now time.Time, kindFilter string) (domain.Job, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return domain.Job{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' WHEN attempt>=5 THEN 'failed' ELSE 'retry_wait' END,lease_token='',lease_until=0,available_at=?,updated_at=?,error_code=CASE WHEN cancel_requested=1 THEN '' ELSE 'LEASE_EXPIRED' END WHERE state='running' AND lease_until<=?`, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
+	_, err = tx.ExecContext(ctx, `UPDATE jobs SET state=CASE WHEN cancel_requested=1 THEN 'canceled' WHEN attempt>=5 THEN 'failed' ELSE 'retry_wait' END,lease_token='',lease_until=0,available_at=?,updated_at=?,error_code=CASE WHEN cancel_requested=1 THEN '' ELSE 'LEASE_EXPIRED' END WHERE state='running' AND lease_until<=?`+kindFilter, now.UnixMilli(), now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return domain.Job{}, err
 	}
-	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0 ORDER BY CASE WHEN kind='sync_following' THEN 0 WHEN kind='follow_artist' THEN 1 WHEN kind IN ('recommend_artists','recommendation_refill') THEN 2 WHEN json_extract(payload_json,'$.phase')='history' THEN 4 ELSE 3 END,available_at,id LIMIT 1`, now.UnixMilli()))
+	j, err := scanJob(tx.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE state IN ('pending','retry_wait') AND available_at<=? AND cancel_requested=0`+kindFilter+` ORDER BY CASE WHEN kind='sync_following' THEN 0 WHEN kind='follow_artist' THEN 1 WHEN kind IN ('recommend_artists','recommendation_refill') THEN 2 WHEN kind='sync_artist' AND json_extract(payload_json,'$.phase') IN ('incremental','recent') THEN 3 WHEN kind='sync_artist' AND json_extract(payload_json,'$.phase')='history' THEN 5 ELSE 4 END,available_at,id LIMIT 1`, now.UnixMilli()))
 	if err != nil {
 		if err == domain.ErrNotFound {
 			if commitErr := tx.Commit(); commitErr != nil {

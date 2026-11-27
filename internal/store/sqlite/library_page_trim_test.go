@@ -10,7 +10,7 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
-func TestTrimLibraryArtistPagesKeepsNewestFirstPagesAndFencesResync(t *testing.T) {
+func TestTrimLibraryArtistPagesKeepsAllFirstPagesAndFencesResync(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	seedArtist(t, s, 1)
@@ -31,7 +31,8 @@ func TestTrimLibraryArtistPagesKeepsNewestFirstPagesAndFencesResync(t *testing.T
 	}
 	if _, err := s.db.Exec(`UPDATE artists SET cleanup_enabled_at=NULL;
 INSERT INTO image_feedback VALUES (101,0,'like',1);
-INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id) VALUES ('trim','preferred',101,0,1,'trim')`); err != nil {
+INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id)
+SELECT printf('trim/%d/%d',illust_id,page_index),'preferred',illust_id,page_index,1,'trim' FROM image_pages`); err != nil {
 		t.Fatal(err)
 	}
 	round, batch, _, err := s.LibraryCleanupReview(ctx)
@@ -81,7 +82,7 @@ INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,
 	if err = rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if want := []int64{102, 103, 104, 105, 106, 107, 108, 109, 110}; !reflect.DeepEqual(first, want) {
+	if want := []int64{101, 102, 103, 104, 105, 106, 107, 108, 109, 110}; !reflect.DeepEqual(first, want) {
 		t.Fatalf("first-page works=%v want %v", first, want)
 	}
 	var newlyCollected, history int
@@ -93,7 +94,33 @@ INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,
 	if err = s.db.QueryRow(`SELECT count(*) FROM image_pages WHERE illust_id=?`, newWork.ID).Scan(&newlyCollected); err != nil || newlyCollected != newWork.PageCount {
 		t.Fatalf("new work pages=%d err=%v", newlyCollected, err)
 	}
-	if err = s.db.QueryRow(`SELECT count(*) FROM distribution_history WHERE id='trim'`).Scan(&history); err != nil || history != 0 {
-		t.Fatalf("pruned page history rows=%d err=%v", history, err)
+	if err = s.db.QueryRow(`SELECT count(*) FROM distribution_history WHERE request_id='trim'`).Scan(&history); err != nil || history != 15 {
+		t.Fatalf("retained history rows=%d err=%v", history, err)
+	}
+
+	artists, total, _, _, _, err := s.ArtistLibraryPage(ctx, "", "", "trimmed", "", "", 1, 10)
+	if err != nil || total != 1 || len(artists) != 1 || artists[0].ID != 1 || !batch[0].Summary.PagesTrimmed {
+		t.Fatalf("trimmed filter: total=%d, items=%v, err=%v", total, artists, err)
+	}
+	jobID, err := s.RestoreLibraryArtistPages(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kind, phase string
+	if err = s.db.QueryRow(`SELECT kind,json_extract(payload_json,'$.phase') FROM jobs WHERE id=?`, jobID).Scan(&kind, &phase); err != nil || kind != "sync_artist" || phase != "history" {
+		t.Fatalf("restore job: kind=%s, phase=%s, err=%v", kind, phase, err)
+	}
+	artists, total, _, _, _, err = s.ArtistLibraryPage(ctx, "", "", "trimmed", "", "", 1, 10)
+	if err != nil || total != 0 || len(artists) != 0 {
+		t.Fatalf("restored filter: total=%d, items=%v, err=%v", total, artists, err)
+	}
+	for _, a := range catalog {
+		if err = s.UpsertArtwork(ctx, a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var restored int
+	if err = s.db.QueryRow(`SELECT count(*) FROM image_pages`).Scan(&restored); err != nil || restored != 33 {
+		t.Fatalf("restored pages: %d, err=%v", restored, err)
 	}
 }

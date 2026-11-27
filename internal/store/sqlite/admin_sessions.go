@@ -31,7 +31,7 @@ func (s *Store) RememberedSession(ctx context.Context, session [32]byte) ([32]by
 	var hash [32]byte
 	var csrf []byte
 	var expires int64
-	err := s.db.QueryRowContext(ctx, "SELECT csrf_hash,expires_at FROM remembered_sessions WHERE session_hash=?", session[:]).Scan(&csrf, &expires)
+	err := s.adminReadDB.QueryRowContext(ctx, "SELECT csrf_hash,expires_at FROM remembered_sessions WHERE session_hash=?", session[:]).Scan(&csrf, &expires)
 	if err == sql.ErrNoRows {
 		return hash, time.Time{}, nil
 	}

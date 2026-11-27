@@ -33,7 +33,7 @@ func TestRequestOverridesR18KeepHardExclusions(t *testing.T) {
 	}
 }
 
-func TestRequestOverrideCanIncludeMangaAndFixedPageUsesIt(t *testing.T) {
+func TestRequestCannotRestoreMangaInSelectionOrFixedPages(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t)
 	seedEligibleArtist(t, s, 9200, "approved")
@@ -46,12 +46,15 @@ func TestRequestOverrideCanIncludeMangaAndFixedPageUsesIt(t *testing.T) {
 		t.Fatalf("default fixed manga page error=%v, want ErrNotFound", err)
 	}
 	req := domain.SelectionRequest{SelectionRules: domain.SelectionRules{ExcludeManga: false}, Overrides: map[string]bool{"exclude_manga": true}}
-	if _, err := s.EligiblePageWithRequest(ctx, 9210, 0, req); err != nil {
-		t.Fatalf("explicit manga fixed page: %v", err)
+	if _, err := s.EligiblePageWithRequest(ctx, 9210, 0, req); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("legacy override exposed fixed manga page: %v", err)
 	}
-	got, err := s.Select(ctx, req)
-	if err != nil || got.IllustID != 9210 {
-		t.Fatalf("explicit manga selection=%+v err=%v", got, err)
+	if _, err := s.Select(ctx, req); !errors.Is(err, domain.ErrNoMatch) {
+		t.Fatalf("legacy override exposed manga via random selection: %v", err)
+	}
+	stats, err := s.CatalogStats(ctx)
+	if err != nil || stats.Artworks != 0 || stats.ImagePages != 0 || stats.IndexedPages != 0 {
+		t.Fatalf("legacy manga counted in catalog stats: %+v, %v", stats, err)
 	}
 }
 

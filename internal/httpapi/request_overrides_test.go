@@ -12,31 +12,35 @@ import (
 	"github.com/Untitled572/pixiv-curator/internal/domain"
 )
 
-func TestRandomMangaOverrideSurvivesFixedURLAndStreams(t *testing.T) {
+func TestLegacyMangaOverrideCannotStreamArchivedPages(t *testing.T) {
 	ctx := context.Background()
+	upstream := 0
 	store, mux := previewFixture(t, imageRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		h := make(http.Header)
-		h.Set("Content-Type", "image/jpeg")
-		return &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader("jpeg")), ContentLength: 4}, nil
+		upstream++
+		return nil, nil
 	}))
 	if _, err := store.DecideArtist(ctx, 99, "approve"); err != nil {
 		t.Fatal(err)
 	}
-	rec := previewRequest(mux, http.MethodGet, "/random?exclude_manga=0&excluded_tags=first&excluded_tags=second", false)
-	var out app.ImageResult
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
-		t.Fatalf("random status=%d body=%s", rec.Code, rec.Body)
+	if err := store.UpsertArtwork(ctx, domain.Artwork{ID: 991, ArtistID: 99, Kind: "manga"}); err != nil {
+		t.Fatal(err)
 	}
-	if out.IllustID != 991 || !strings.Contains(out.URL, "exclude_manga=0") {
-		t.Fatalf("selection=%+v; URL must preserve manga override", out)
+	for _, tc := range []struct {
+		path   string
+		status int
+	}{
+		{"/random?exclude_manga=0", http.StatusNotFound},
+		{"/i/991/0?format=image&exclude_manga=0", http.StatusNotFound},
+		{"/admin/api/previews/991/0", http.StatusNotFound},
+	} {
+		if rec := previewRequest(mux, http.MethodGet, tc.path, true); rec.Code != tc.status {
+			t.Fatalf("request %s status=%d body=%s", tc.path, rec.Code, rec.Body)
+		}
 	}
-	path := strings.TrimPrefix(out.URL, "https://curator.test")
-	stream := previewRequest(mux, http.MethodGet, path, false)
-	if stream.Code != http.StatusOK || stream.Body.String() != "jpeg" {
-		t.Fatalf("fixed stream status=%d body=%q", stream.Code, stream.Body.String())
+	if upstream != 0 {
+		t.Fatalf("archived manga reached upstream: %d requests", upstream)
 	}
 }
-
 func TestRandomR18OverrideFixedURLAndHardExclusions(t *testing.T) {
 	ctx := context.Background()
 	store, mux := previewFixture(t, imageRoundTripFunc(func(*http.Request) (*http.Response, error) {

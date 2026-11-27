@@ -25,13 +25,13 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 		return out, domain.ErrInvalid
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.adminReadDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return out, err
 	}
 	defer tx.Rollback()
 
-	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM distribution_history WHERE collection=?`, historyCollection).Scan(&out.Total); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM distribution_history h JOIN artworks a ON a.id=h.illust_id WHERE h.collection=? AND a.kind<>'manga'`, historyCollection).Scan(&out.Total); err != nil {
 		return out, err
 	}
 	if out.Total == 0 {
@@ -54,7 +54,7 @@ func (s *Store) History(ctx context.Context, page, pageSize int) (domain.Distrib
 		JOIN artists ar ON ar.id=a.artist_id
 		JOIN image_pages p ON p.illust_id=h.illust_id AND p.page_index=h.page_index
 		LEFT JOIN image_feedback f ON f.illust_id=h.illust_id AND f.page_index=h.page_index
-		WHERE h.collection=?
+		WHERE h.collection=? AND a.kind<>'manga'
 		ORDER BY h.selected_at DESC,h.id DESC LIMIT ? OFFSET ?`
 	args := []any{historyCollection, pageSize, offset}
 	rows, err := tx.QueryContext(ctx, query, args...)

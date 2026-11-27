@@ -106,7 +106,8 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	snapshotDone := store.StartSelectionSnapshots(workerCtx)
 	observationDone := images.StartImageObservations(workerCtx)
-	workerDone := make(chan struct{})
+	collectionDone := make(chan struct{})
+	discoveryDone := make(chan struct{})
 	maintenanceDone := make(chan struct{})
 	go func() {
 		defer close(maintenanceDone)
@@ -118,12 +119,22 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 		logger.Warn("recommendation refill bootstrap failed")
 	}
 	handlers := ingestion.Handlers()
-	handlers["recommend_artists"] = recommender.Handler
-	handlers["recommendation_refill"] = recommender.Refill
 	handlers["follow_artist"] = app.NewRemoteFollows(store, client).Handler
-	worker := jobs.NewWorker(store, handlers)
-	go func() { defer close(workerDone); _ = worker.Run(workerCtx) }()
-	defer func() { stopWorker(); <-workerDone; <-maintenanceDone; <-observationDone; <-snapshotDone }()
+	collection := jobs.NewWorker(store.JobLane(false), handlers)
+	discovery := jobs.NewWorker(store.JobLane(true), map[string]jobs.Handler{
+		"recommend_artists":     recommender.Handler,
+		"recommendation_refill": recommender.Refill,
+	})
+	go func() { defer close(collectionDone); _ = collection.Run(workerCtx) }()
+	go func() { defer close(discoveryDone); _ = discovery.Run(workerCtx) }()
+	defer func() {
+		stopWorker()
+		<-collectionDone
+		<-discoveryDone
+		<-maintenanceDone
+		<-observationDone
+		<-snapshotDone
+	}()
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
@@ -143,6 +154,7 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 			httpapi.RegisterLibraryCleanup(mux, store, auth)
 			httpapi.RegisterImageFeedback(mux, store, auth)
 			httpapi.RegisterNetwork(mux, networkSettings, auth)
+			httpapi.RegisterCollectionSchedule(mux, store, auth)
 			mux.HandleFunc("GET /admin/login", admin.Login)
 			mux.Handle("GET /admin/{$}", auth.BrowserMiddleware(http.HandlerFunc(admin.Home)))
 			httpapi.RegisterImages(mux, images, previewProxy, auth)
@@ -153,7 +165,9 @@ func run(ctx context.Context, logger *slog.Logger, cfg config.Config) error {
 				defer cancel()
 				ready := store.Ping(checkCtx) == nil
 				select {
-				case <-workerDone:
+				case <-collectionDone:
+					ready = false
+				case <-discoveryDone:
 					ready = false
 				default:
 				}

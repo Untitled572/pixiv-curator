@@ -30,8 +30,13 @@ func (s *Store) RecommendationRegressionExamples(ctx context.Context, runID stri
 	if runID == "" {
 		return nil, domain.ErrInvalid
 	}
+	reader, err := sql.Open("sqlite", s.selectionSnapshotDSN)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
 	var budgetJSON string
-	err := s.db.QueryRowContext(ctx, `SELECT budget_json FROM recommendation_runs WHERE id=?`, runID).Scan(&budgetJSON)
+	err = reader.QueryRowContext(ctx, `SELECT budget_json FROM recommendation_runs WHERE id=?`, runID).Scan(&budgetJSON)
 	if err == sql.ErrNoRows {
 		return nil, domain.ErrNotFound
 	}
@@ -52,7 +57,7 @@ func (s *Store) RecommendationRegressionExamples(ctx context.Context, runID stri
 		}
 	}
 
-	selectedIDs, statuses, err := s.regressionTrainingArtists(ctx)
+	selectedIDs, statuses, err := regressionTrainingArtists(ctx, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +68,11 @@ func (s *Store) RecommendationRegressionExamples(ctx context.Context, runID stri
 	if err != nil {
 		return nil, err
 	}
-	tagsByArtist, err := s.regressionTrainingTags(ctx, string(idsJSON))
+	tagsByArtist, err := regressionTrainingTags(ctx, reader, string(idsJSON))
 	if err != nil {
 		return nil, err
 	}
-	sourcesByArtist, err := s.regressionTrainingSources(ctx, string(idsJSON))
+	sourcesByArtist, err := regressionTrainingSources(ctx, reader, string(idsJSON))
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +101,7 @@ func (s *Store) RecommendationRegressionExamples(ctx context.Context, runID stri
 	return examples, nil
 }
 
-func (s *Store) regressionTrainingArtists(ctx context.Context) ([]int64, map[int64]string, error) {
+func regressionTrainingArtists(ctx context.Context, reader *sql.DB) ([]int64, map[int64]string, error) {
 	query := `WITH qualified AS (
 		SELECT a.id,a.review_status FROM artists a
 		WHERE a.review_status IN ('approved','rejected')
@@ -112,7 +117,7 @@ func (s *Store) regressionTrainingArtists(ctx context.Context) ([]int64, map[int
 	)
 	SELECT id,review_status FROM ranked WHERE status_rank<=? ORDER BY id`
 	args := []any{regressionOfficialSources[0], regressionOfficialSources[1], regressionOfficialSources[2], regressionOfficialSources[3], regressionArtistsPerStatus}
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,7 +144,7 @@ func (s *Store) regressionTrainingArtists(ctx context.Context) ([]int64, map[int
 	return ids, statuses, nil
 }
 
-func (s *Store) regressionTrainingTags(ctx context.Context, idsJSON string) (map[int64][]string, error) {
+func regressionTrainingTags(ctx context.Context, reader *sql.DB, idsJSON string) (map[int64][]string, error) {
 	query := `WITH selected AS (
 		SELECT CAST(value AS INTEGER) AS artist_id FROM json_each(?)
 	), recent AS (
@@ -155,7 +160,7 @@ func (s *Store) regressionTrainingTags(ctx context.Context, idsJSON string) (map
 		FROM frequency
 	)
 	SELECT artist_id,normalized_name FROM ranked WHERE tag_rank<=? ORDER BY artist_id,tag_rank`
-	rows, err := s.db.QueryContext(ctx, query, idsJSON, regressionRecentWorks, regressionTagsPerArtist)
+	rows, err := reader.QueryContext(ctx, query, idsJSON, regressionRecentWorks, regressionTagsPerArtist)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +185,7 @@ func (s *Store) regressionTrainingTags(ctx context.Context, idsJSON string) (map
 	return tags, nil
 }
 
-func (s *Store) regressionTrainingSources(ctx context.Context, idsJSON string) (map[int64][]string, error) {
+func regressionTrainingSources(ctx context.Context, reader *sql.DB, idsJSON string) (map[int64][]string, error) {
 	query := `SELECT DISTINCT r.artist_id,src.value
 		FROM recommendations r
 		JOIN json_each(r.sources_json) src
@@ -188,7 +193,7 @@ func (s *Store) regressionTrainingSources(ctx context.Context, idsJSON string) (
 		WHERE json_type(r.sources_json)='array' AND src.type='text' AND src.value IN (?,?,?,?)
 		ORDER BY r.artist_id,src.value`
 	args := []any{idsJSON, regressionOfficialSources[0], regressionOfficialSources[1], regressionOfficialSources[2], regressionOfficialSources[3]}
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	rows, err := reader.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -122,6 +122,27 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			writeJSON(w, http.StatusOK, map[string]int64{"before": before, "after": after})
 		})))
 	}
+	if restoring, ok := store.(interface {
+		RestoreLibraryArtistPages(context.Context, int64) (string, error)
+	}); ok {
+		mux.Handle("POST /admin/api/library/artists/{id}/restore-pages", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil || id <= 0 || r.URL.RawQuery != "" {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			var in struct{}
+			if !decodeBody(w, r, &in) {
+				return
+			}
+			jobID, err := restoring.RestoreLibraryArtistPages(r.Context(), id)
+			if err != nil {
+				apiError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusAccepted, map[string]string{"job_id": jobID})
+		})))
+	}
 	mux.Handle("POST /admin/api/library/artists/{id}/remove", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil || len(q) != 0 {

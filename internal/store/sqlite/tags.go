@@ -14,7 +14,7 @@ import (
 
 const artistTagsCTEs = `, recent AS (
  SELECT w.id,w.artist_id,ROW_NUMBER() OVER(PARTITION BY w.artist_id ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC) AS rn
- FROM artworks w JOIN selected_artists a ON a.id=w.artist_id
+ FROM artworks w JOIN selected_artists a ON a.id=w.artist_id WHERE w.kind<>'manga'
 ), automatic_counts AS (
  SELECT r.artist_id,t.normalized_name,t.display_name,COUNT(*) AS n
  FROM recent r JOIN artwork_tags at ON at.illust_id=r.id JOIN tags t ON t.id=at.tag_id
@@ -32,14 +32,16 @@ const artistTagsCTEs = `, recent AS (
 
 const libraryArtistFilter = ` FROM artists a WHERE a.review_status IN ('approved','blocked')
  AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0))
- AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))`
+ AND CASE ? WHEN '' THEN 1 WHEN 'trimmed' THEN EXISTS (
+   SELECT 1 FROM artworks w WHERE w.artist_id=a.id AND w.kind<>'manga' AND w.retained_page_indices IS NOT NULL
+ ) ELSE a.collection_enabled=CAST(? AS INTEGER) END`
 
 // ArtistTagPage returns the legacy keyset page, including one extra row when present.
 func (s *Store) ArtistTagPage(ctx context.Context, tag, accountID string, after int64, limit int) ([]domain.Artist, error) {
 	return s.ArtistTagPageFiltered(ctx, tag, accountID, "", after, limit)
 }
 
-// ArtistTagPageFiltered applies an optional collection enabled filter ("1" or "0").
+// ArtistTagPageFiltered applies an optional collection filter ("1", "0", or "trimmed").
 func (s *Store) ArtistTagPageFiltered(ctx context.Context, tag, accountID, collectionEnabled string, after int64, limit int) ([]domain.Artist, error) {
 	if after < 0 || limit < 1 || limit > 200 || strings.TrimSpace(tag) != tag || strings.TrimSpace(accountID) != accountID || !validCollectionFilter(collectionEnabled) {
 		return nil, domain.ErrInvalid
@@ -73,7 +75,7 @@ func (s *Store) ArtistLibraryPage(ctx context.Context, tag, accountID, collectio
 	case "created_asc", "created_desc":
 		sortExpr = "a.created_at"
 	case "artworks_asc", "artworks_desc":
-		sortExpr = "(SELECT COUNT(*) FROM artworks w WHERE w.artist_id=a.id)"
+		sortExpr = "(SELECT COUNT(*) FROM artworks w WHERE w.artist_id=a.id AND w.kind<>'manga')"
 	default:
 		return nil, 0, 0, 0, "", domain.ErrInvalid
 	}
@@ -97,8 +99,7 @@ func (s *Store) ArtistLibraryPage(ctx context.Context, tag, accountID, collectio
 		return nil, 0, 0, 0, "", err
 	}
 	if tag == "" {
-		countSQL := `SELECT COUNT(*) FROM artists a WHERE a.review_status IN ('approved','blocked') AND (?='' OR EXISTS(SELECT 1 FROM account_artists aa JOIN accounts ac ON ac.id=aa.account_id WHERE aa.artist_id=a.id AND aa.account_id=? AND ac.deleted=0)) AND (?='' OR a.collection_enabled=CAST(? AS INTEGER))`
-		if err := s.db.QueryRowContext(ctx, countSQL, accountID, accountID, collectionEnabled, collectionEnabled).Scan(&total); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)`+where, args...).Scan(&total); err != nil {
 			return nil, 0, 0, 0, "", err
 		}
 		items, err = s.queryLibraryArtists(ctx, "", where, args, sortExpr, direction, offset, pageSize)
@@ -197,7 +198,7 @@ func (s *Store) queryLibraryArtists(ctx context.Context, tag, where string, args
 }
 
 func validCollectionFilter(value string) bool {
-	return value == "" || value == "0" || value == "1"
+	return value == "" || value == "0" || value == "1" || value == "trimmed"
 }
 
 // SetArtistTagOverride sets a manual value, including an explicit empty list.

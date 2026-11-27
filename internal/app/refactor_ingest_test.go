@@ -4,14 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"testing"
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/pixiv"
 )
 
-func TestIncrementalKnownIllustrationPageContinuesToManga(t *testing.T) {
+func TestIncrementalKnownIllustrationStopsWithoutRequestingManga(t *testing.T) {
 	ctx := context.Background()
 	s, _ := openIngestTestStore(t)
 	const artistID int64 = 401
@@ -46,16 +45,9 @@ func TestIncrementalKnownIllustrationPageContinuesToManga(t *testing.T) {
 			if cursor != "" {
 				t.Fatalf("initial cursor=%q; want empty", cursor)
 			}
-			return pixiv.ArtworkPage{Artworks: []pixiv.RawArtwork{rawArtwork(knownID, artistID)}, Next: illustPage}, nil
-		case 2:
-			u, parseErr := url.Parse(cursor)
-			if parseErr != nil || u.Query().Get("type") != "manga" || u.Query().Get("offset") != "" {
-				t.Fatalf("known illustration page should jump to manga start, cursor=%q err=%v", cursor, parseErr)
-			}
 			manga := rawArtwork(mangaID, artistID)
 			manga.Type = "manga"
-			manga.Title = "updated manga"
-			return pixiv.ArtworkPage{Artworks: []pixiv.RawArtwork{manga}}, nil
+			return pixiv.ArtworkPage{Artworks: []pixiv.RawArtwork{rawArtwork(knownID, artistID), manga}, Next: illustPage}, nil
 		default:
 			t.Fatalf("unexpected artwork request %d", len(cursors))
 			return pixiv.ArtworkPage{}, nil
@@ -69,21 +61,15 @@ func TestIncrementalKnownIllustrationPageContinuesToManga(t *testing.T) {
 	if err = NewIngest(s, client).Handlers()["sync_artist"](ctx, job); err != nil {
 		t.Fatalf("incremental handler: %v", err)
 	}
-	if len(cursors) != 2 {
-		t.Fatalf("requested cursors=%q; want illustration then manga", cursors)
+	if len(cursors) != 1 {
+		t.Fatalf("requested cursors=%q; want only the first illustration page", cursors)
 	}
 	artworks, err := catalog.Artworks(ctx, 0, 10, artistID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var title, kind string
-	for _, artwork := range artworks {
-		if artwork.ID == mangaID {
-			title, kind = artwork.Title, artwork.Kind
-		}
-	}
-	if title != "updated manga" || kind != "manga" {
-		t.Fatalf("manga update not indexed: title=%q kind=%q", title, kind)
+	if len(artworks) != 1 || artworks[0].ID != knownID {
+		t.Fatalf("stored artwork list included manga or lost the illustration: %+v", artworks)
 	}
 }
 

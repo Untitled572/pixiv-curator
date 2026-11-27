@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,31 +11,57 @@ import (
 )
 
 type MaintenanceRepository interface {
+	collectionScheduleReader
 	Artists(context.Context, int64, int) ([]domain.Artist, error)
 	Enqueue(context.Context, string, string, json.RawMessage) (string, error)
 	CleanupSelectionHistory(context.Context) error
 	ReclaimFreePages(context.Context) error
 }
 
-// RunMaintenance starts periodic work after the first interval, giving newly
-// installed accounts time for a small initial collection before the full schedule.
+type collectionScheduleReader interface {
+	Setting(context.Context, string) (json.RawMessage, int64, error)
+}
+
+func ReadCollectionSchedule(ctx context.Context, reader collectionScheduleReader) (domain.CollectionSchedule, int64, error) {
+	raw, version, err := reader.Setting(ctx, "sync")
+	if errors.Is(err, domain.ErrNotFound) {
+		return domain.CollectionSchedule{IntervalHours: domain.DefaultCollectionIntervalHours}, 0, nil
+	}
+	if err != nil {
+		return domain.CollectionSchedule{}, 0, err
+	}
+	var schedule domain.CollectionSchedule
+	if err = json.Unmarshal(raw, &schedule); err != nil || !schedule.Valid() {
+		return domain.CollectionSchedule{}, 0, domain.ErrInvalid
+	}
+	return schedule, version, nil
+}
+
+// RunMaintenance checks the stored interval each minute starting from launch.
 func RunMaintenance(ctx context.Context, s MaintenanceRepository, onError func(error)) {
 	history := time.NewTicker(time.Minute)
 	defer history.Stop()
-	syncTick := time.NewTicker(SyncInterval)
-	defer syncTick.Stop()
+	lastScheduled := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-history.C:
+		case now := <-history.C:
 			if err := s.CleanupSelectionHistory(ctx); err != nil {
 				onError(err)
 			}
 			if err := s.ReclaimFreePages(ctx); err != nil {
 				onError(err)
 			}
-		case <-syncTick.C:
+			schedule, _, err := ReadCollectionSchedule(ctx, s)
+			if err != nil {
+				onError(err)
+				continue
+			}
+			if now.Sub(lastScheduled) < time.Duration(schedule.IntervalHours)*time.Hour {
+				continue
+			}
+			lastScheduled = now
 			if accounts, ok := s.(interface {
 				Accounts(context.Context) ([]domain.Account, error)
 				SyncAccount(context.Context, string) (string, error)

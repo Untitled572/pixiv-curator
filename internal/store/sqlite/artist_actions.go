@@ -122,7 +122,7 @@ func (s *Store) ValidateCollectionJob(ctx context.Context, j domain.Job) error {
 	case "sync_artist":
 		query = `SELECT a.review_status='approved' AND a.collection_enabled=1 FROM artists a WHERE a.id=json_extract(?, '$.artist_id')`
 	case "hydrate_artwork", "repair_media":
-		query = `SELECT (a.review_status='approved' AND a.collection_enabled=1) OR (?='repair_media' AND a.review_status='pending') FROM artists a JOIN artworks w ON w.artist_id=a.id WHERE w.id=json_extract(?, '$.illust_id')`
+		query = `SELECT (a.review_status='approved' AND a.collection_enabled=1) OR (?='repair_media' AND a.review_status='pending') FROM artists a JOIN artworks w ON w.artist_id=a.id WHERE w.id=json_extract(?, '$.illust_id') AND w.kind<>'manga'`
 	default:
 		return domain.ErrInvalid
 	}
@@ -309,21 +309,51 @@ func (s *Store) CommitArtistBatch(ctx context.Context, j domain.Job, artistID in
 	if err == nil && savedPhase == phase && savedCursor == cursor && savedRun == runID {
 		return tx.Commit()
 	}
+	indexedItems := 0
 	for _, a := range artworks {
 		if a.ArtistID != artistID {
 			return domain.ErrInvalid
 		}
+		if a.Kind == "manga" {
+			if err = upsertArtwork(ctx, tx, a); err != nil {
+				return err
+			}
+			continue
+		}
+		indexedItems++
+		hydrateKey := fmt.Sprintf("hydrate:%d", a.ID)
+		needsHydration := a.MetadataState != "complete" || a.Rating == "unknown" || a.AIStatus == "unknown"
+		if needsHydration && a.MetadataState == "complete" {
+			var rating, ai string
+			err = tx.QueryRowContext(ctx, `SELECT rating,ai_status FROM artworks
+WHERE id=? AND artist_id=? AND metadata_state='complete'
+AND EXISTS(SELECT 1 FROM jobs WHERE dedupe_key=? AND state='succeeded' AND updated_at>?)`,
+				a.ID, artistID, hydrateKey, time.Now().Add(-7*24*time.Hour).UnixMilli()).Scan(&rating, &ai)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil {
+				// The recent details result can be more complete than the list response.
+				if a.Rating == "unknown" {
+					a.Rating = rating
+				}
+				if a.AIStatus == "unknown" {
+					a.AIStatus = ai
+				}
+				needsHydration = false
+			}
+		}
 		if err = upsertArtwork(ctx, tx, a); err != nil {
 			return err
 		}
-		if a.MetadataState != "complete" || a.Rating == "unknown" || a.AIStatus == "unknown" {
+		if needsHydration {
 			payload, _ := json.Marshal(map[string]any{"illust_id": a.ID, "account_id": domain.ContextAccount(ctx)})
-			if _, err = enqueue(ctx, tx, "hydrate_artwork", fmt.Sprintf("hydrate:%d", a.ID), payload); err != nil {
+			if _, err = enqueue(ctx, tx, "hydrate_artwork", hydrateKey, payload); err != nil {
 				return err
 			}
 		}
 	}
-	if err = incrementJobProgress(ctx, tx, j, len(artworks)); err != nil {
+	if err = incrementJobProgress(ctx, tx, j, indexedItems); err != nil {
 		return err
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO artist_sync_state(artist_id,phase,cursor,run_id,last_full_sync_at,last_incremental_at) VALUES(?,?,?,?,?,?) ON CONFLICT(artist_id) DO UPDATE SET phase=excluded.phase,cursor=excluded.cursor,run_id=excluded.run_id,last_full_sync_at=COALESCE(excluded.last_full_sync_at,artist_sync_state.last_full_sync_at),last_incremental_at=COALESCE(excluded.last_incremental_at,artist_sync_state.last_incremental_at)`, artistID, phase, cursor, runID, finishedAt(cursor, phase == "full" || phase == "history" || phase == "recent"), finishedAt(cursor, phase == "incremental"))
