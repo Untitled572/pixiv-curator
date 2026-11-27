@@ -307,9 +307,36 @@
         });
         if (samples.children.length) card.append(samples);
         const actions = node("div", "library-review-actions");
-        actions.append(node("p", "field-help", "移出与暂停相同：停止采集和供图，删除作品、链接及相关历史；不会取关。"));
         const rejectLabel = node("label", "field-help");
-        const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 同时在发现画师中标为不感兴趣")); actions.append(rejectLabel);
+        const reject = node("input"); reject.type = "checkbox"; rejectLabel.append(reject, document.createTextNode(" 不感兴趣")); actions.append(rejectLabel);
+        const trim = button(actions, item.trimmed ? "本轮已减半" : "减半收录", "button button-quiet button-small", async () => {
+          if (trim.disabled || libraryRemovalPending) return;
+          if (!window.confirm("保留最新的 90% 首图，再随机用次页补到原图片数的一半。清理后，被删图片的固定链接将失效。确定减半收录？")) return;
+          libraryRemovalPending = true;
+          trigger.disabled = true;
+          list.inert = true;
+          trim.textContent = "处理中…";
+          let refresh = false;
+          try {
+            const trimmed = await api(`/admin/api/library/artists/${encodeURIComponent(id)}/trim`, {
+              method: "POST", body: JSON.stringify({ round: result.round })
+            });
+            refresh = true;
+            showMessage(trimmed.before === trimmed.after
+              ? "当前图片数已达到保留首图的下限。"
+              : `图片收录已从 ${trimmed.before} 页减至 ${trimmed.after} 页。`);
+          } catch (error) {
+            refresh = error.message === "CONFLICT";
+            report(error, "减半收录");
+          } finally {
+            libraryRemovalPending = false;
+            trigger.disabled = false;
+            list.inert = false;
+            trim.textContent = "减半收录";
+            if (refresh) await loadLibraryReview();
+          }
+        });
+        trim.disabled = item.trimmed || Number(item.summary?.pages || 0) < 2;
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
           const remove = event.currentTarget;
           if (remove.disabled || libraryRemovalPending) return;

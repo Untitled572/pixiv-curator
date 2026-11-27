@@ -27,6 +27,7 @@ type LibraryCleanupItem struct {
 	Artist          Artist                 `json:"artist"`
 	SampleIllustIDs []string               `json:"sample_illust_ids"`
 	Samples         []LibraryCleanupSample `json:"samples"`
+	Trimmed         bool                   `json:"trimmed"`
 	SlotType        string                 `json:"slot_type"`
 	AuditReason     string                 `json:"audit_reason"`
 	Summary         LibraryCleanupSummary  `json:"summary"`

@@ -103,11 +103,22 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 		return err
 	}
 	var owner int64
-	if err = tx.QueryRowContext(ctx, `SELECT artist_id FROM artworks WHERE id=?`, a.ID).Scan(&owner); err != nil {
+	var retainedPagesJSON sql.NullString
+	if err = tx.QueryRowContext(ctx, `SELECT artist_id,retained_page_indices FROM artworks WHERE id=?`, a.ID).Scan(&owner, &retainedPagesJSON); err != nil {
 		return err
 	}
 	if owner != a.ArtistID {
 		return domain.ErrConflict
+	}
+	retainedPages := map[int]bool{}
+	if retainedPagesJSON.Valid {
+		var indices []int
+		if err := json.Unmarshal([]byte(retainedPagesJSON.String), &indices); err != nil {
+			return err
+		}
+		for _, index := range indices {
+			retainedPages[index] = true
+		}
 	}
 	if a.MetadataState == "complete" {
 		if _, err = tx.ExecContext(ctx, `UPDATE image_pages SET media_state='unavailable',updated_at=? WHERE illust_id=?`, now, a.ID); err != nil {
@@ -115,6 +126,9 @@ func upsertArtwork(ctx context.Context, tx *sql.Tx, a domain.Artwork) error {
 		}
 	}
 	for _, p := range a.Pages {
+		if retainedPagesJSON.Valid && !retainedPages[p.Index] {
+			continue
+		}
 		if p.State == "" {
 			p.State = "indexed"
 		}

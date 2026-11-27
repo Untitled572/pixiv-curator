@@ -97,6 +97,31 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": strconv.FormatInt(id, 10), "kept": true})
 	})))
+	if trimming, ok := store.(interface {
+		TrimLibraryArtistPages(context.Context, int64, int64) (int64, int64, error)
+	}); ok {
+		mux.Handle("POST /admin/api/library/artists/{id}/trim", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil || id <= 0 || r.URL.RawQuery != "" {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			var in struct {
+				Round int64 `json:"round"`
+			}
+			if !decodeBody(w, r, &in) {
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			defer cancel()
+			before, after, err := trimming.TrimLibraryArtistPages(ctx, id, in.Round)
+			if err != nil {
+				apiError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]int64{"before": before, "after": after})
+		})))
+	}
 	mux.Handle("POST /admin/api/library/artists/{id}/remove", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil || len(q) != 0 {

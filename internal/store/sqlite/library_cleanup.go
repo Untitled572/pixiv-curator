@@ -40,7 +40,7 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) (int64, []domain.Libra
 }
 
 func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem, []string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.slot_type,b.audit_reason,b.trigger_ai_id FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.trimmed,b.slot_type,b.audit_reason,b.trigger_ai_id FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,7 +51,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		var item domain.LibraryCleanupItem
 		var isKept bool
 		var trigger sql.NullInt64
-		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept, &item.SlotType, &item.AuditReason, &trigger); err != nil {
+		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept, &item.Trimmed, &item.SlotType, &item.AuditReason, &trigger); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
