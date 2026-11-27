@@ -42,18 +42,20 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) (int64, []domain.Libra
 }
 
 func cleanupItems(ctx context.Context, tx *sql.Tx, round int64) ([]domain.LibraryCleanupItem, []string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.trimmed,b.slot_type,b.audit_reason,b.trigger_ai_id FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
+	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.trimmed,b.slot_type,b.audit_reason,b.trigger_ai_id,b.samples_json FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
 	if err != nil {
 		return nil, nil, err
 	}
 	items := []domain.LibraryCleanupItem{}
 	kept := []string{}
 	triggers := map[int64]sql.NullInt64{}
+	savedSamples := map[int64][]byte{}
 	for rows.Next() {
 		var item domain.LibraryCleanupItem
 		var isKept bool
 		var trigger sql.NullInt64
-		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept, &item.Trimmed, &item.SlotType, &item.AuditReason, &trigger); err != nil {
+		var saved []byte
+		if err = rows.Scan(&item.Artist.ID, &item.Artist.Name, &item.Artist.Account, &item.Artist.AvatarURL, &item.Artist.ReviewStatus, &item.Artist.CollectionEnabled, &item.Artist.RemoteFollowed, &isKept, &item.Trimmed, &item.SlotType, &item.AuditReason, &trigger, &saved); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -61,6 +63,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx, round int64) ([]domain.Librar
 			kept = append(kept, fmt.Sprint(item.Artist.ID))
 		}
 		triggers[item.Artist.ID] = trigger
+		savedSamples[item.Artist.ID] = saved
 		items = append(items, item)
 	}
 	err = rows.Err()
@@ -87,6 +90,16 @@ func cleanupItems(ctx context.Context, tx *sql.Tx, round int64) ([]domain.Librar
 		}
 		item.SampleIllustIDs = []string{}
 		item.Samples = []domain.LibraryCleanupSample{}
+		if saved := savedSamples[item.Artist.ID]; saved != nil {
+			item.Samples, err = cleanupSavedSamples(ctx, tx, saved)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, sample := range item.Samples {
+				item.SampleIllustIDs = append(item.SampleIllustIDs, sample.IllustID)
+			}
+			continue
+		}
 		seen := map[string]bool{}
 		if item.AuditReason == cleanupShortWorkReason {
 			item.Samples, err = cleanupShortWorkSamples(ctx, tx, item.Artist.ID, round)
@@ -203,12 +216,55 @@ func cleanupItems(ctx context.Context, tx *sql.Tx, round int64) ([]domain.Librar
 		if err != nil {
 			return nil, nil, err
 		}
+		saved, err := json.Marshal(item.Samples)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE library_cleanup_batch SET samples_json=? WHERE artist_id=?`, string(saved), item.Artist.ID); err != nil {
+			return nil, nil, err
+		}
 	}
 	return items, kept, nil
 }
 
-// cleanupShortWorkSamples samples a recent pool, using the review round so
-// refreshing the same group doesn't reshuffle an unchanged catalog.
+func cleanupSavedSamples(ctx context.Context, tx *sql.Tx, saved []byte) ([]domain.LibraryCleanupSample, error) {
+	var samples []domain.LibraryCleanupSample
+	if err := json.Unmarshal(saved, &samples); err != nil {
+		return nil, err
+	}
+	available := samples[:0]
+	for _, sample := range samples {
+		var pages []byte
+		err := tx.QueryRowContext(ctx, `SELECT json_group_array(p.page_index ORDER BY p.page_index)
+ FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.media_state='indexed'
+ WHERE w.id=? AND w.visible=1 AND p.page_index<w.page_count AND (? OR p.page_index IN (0,?))`,
+			sample.IllustID, sample.PageCount > 0, sample.PageIndex).Scan(&pages)
+		if err != nil {
+			return nil, err
+		}
+		var indices []int
+		if err := json.Unmarshal(pages, &indices); err != nil {
+			return nil, err
+		}
+		if len(indices) == 0 {
+			continue
+		}
+		if sample.PageCount > 0 {
+			sample.PageIndices = indices
+		}
+		// Short works show their last retained page. Ordinary samples keep
+		// the exact page when available, falling back to the first page.
+		page := indices[len(indices)-1]
+		if sample.PageCount == 0 && page != sample.PageIndex {
+			sample.Reason = ""
+		}
+		sample.PageIndex = page
+		available = append(available, sample)
+	}
+	return available, nil
+}
+
+// cleanupShortWorkSamples draws from the most recent pageable short works.
 func cleanupShortWorkSamples(ctx context.Context, tx *sql.Tx, artistID, round int64) ([]domain.LibraryCleanupSample, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT),w.page_count,
   (SELECT json_group_array(p.page_index ORDER BY p.page_index)
@@ -233,7 +289,7 @@ func cleanupShortWorkSamples(ctx context.Context, tx *sql.Tx, artistID, round in
 		if err := json.Unmarshal(pages, &sample.PageIndices); err != nil {
 			return nil, err
 		}
-		sample.PageIndex = sample.PageIndices[0]
+		sample.PageIndex = sample.PageIndices[len(sample.PageIndices)-1]
 		samples = append(samples, sample)
 	}
 	if err := rows.Err(); err != nil {

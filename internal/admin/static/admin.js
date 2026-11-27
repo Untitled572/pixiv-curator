@@ -393,13 +393,7 @@
               const removed = await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove-last-pages`, {
                 method: "POST", body: JSON.stringify({ round: result.round })
               });
-              if (removed.removed > 0) {
-                (Array.isArray(item.samples) ? item.samples : []).forEach((sample) => {
-                  if ((sample.page_count === 2 || sample.page_count === 3) && Array.isArray(sample.page_indices)) {
-                    sample.page_indices = sample.page_indices.filter((index) => index !== sample.page_count - 1);
-                  }
-                });
-              }
+              refresh = true;
               showMessage(removed.removed ? `已去掉 ${removed.removed} 页末页。` : "没有可清理的末页。");
             } catch (error) {
               refresh = error.message === "CONFLICT";

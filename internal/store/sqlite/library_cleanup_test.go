@@ -263,14 +263,14 @@ VALUES ('first','preferred',101,0,1,'trim-test'),('last','preferred',101,2,1,'tr
 	samples := items[0].Samples[:3]
 	for _, sample := range samples {
 		id, err := strconv.ParseInt(sample.IllustID, 10, 64)
-		if err != nil || (id != 140 && (id < 107 || id > 135)) || sample.PageIndex != 0 {
+		if err != nil || (id != 140 && (id < 107 || id > 135)) {
 			t.Fatalf("sample outside latest 30 pageable short works: %+v err=%v", sample, err)
 		}
 		want := []int{0, 2}
 		if id == 140 {
 			want = []int{0, 1}
 		}
-		if !reflect.DeepEqual(sample.PageIndices, want) {
+		if !reflect.DeepEqual(sample.PageIndices, want) || sample.PageIndex != want[len(want)-1] {
 			t.Fatalf("sample indices=%v want=%v", sample.PageIndices, want)
 		}
 	}
@@ -289,6 +289,16 @@ VALUES ('first','preferred',101,0,1,'trim-test'),('last','preferred',101,2,1,'tr
 	}
 	if removed, err := s.RemoveLibraryArtistLastPages(ctx, 1, round); err != nil || removed != 0 {
 		t.Fatalf("retry removed=%d err=%v, want 0", removed, err)
+	}
+	seedSelectionArtwork(t, s, 142, 1, "safe", "non_ai", nil, 3)
+	_, refreshed, _, err = s.LibraryCleanupReview(ctx)
+	if err != nil || len(refreshed) == 0 || !reflect.DeepEqual(refreshed[0].SampleIllustIDs, items[0].SampleIllustIDs) {
+		t.Fatalf("the catalog changed the saved preview order: %+v err=%v", refreshed, err)
+	}
+	for _, sample := range refreshed[0].Samples[:3] {
+		if sample.PageIndex != 0 || !reflect.DeepEqual(sample.PageIndices, []int{0}) {
+			t.Fatalf("removed last page is still in the preview: %+v", sample)
+		}
 	}
 	seedSelectionArtwork(t, s, 101, 1, "safe", "non_ai", nil, 3)
 	for id, want := range map[int64]int{101: 1, 140: 1, 141: 4, 201: 2} {
