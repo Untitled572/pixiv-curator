@@ -3,7 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"math/rand/v2"
 	"time"
 
 	"github.com/Untitled572/pixiv-curator/internal/domain"
@@ -29,7 +31,7 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) (int64, []domain.Libra
 			return 0, nil, nil, err
 		}
 	}
-	items, kept, err := cleanupItems(ctx, tx)
+	items, kept, err := cleanupItems(ctx, tx, round)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -39,7 +41,7 @@ func (s *Store) LibraryCleanupReview(ctx context.Context) (int64, []domain.Libra
 	return round, items, kept, nil
 }
 
-func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem, []string, error) {
+func cleanupItems(ctx context.Context, tx *sql.Tx, round int64) ([]domain.LibraryCleanupItem, []string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT a.id,a.name,a.account,a.avatar_url,a.review_status,a.collection_enabled,a.remote_followed,b.kept,b.trimmed,b.slot_type,b.audit_reason,b.trigger_ai_id FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id WHERE a.review_status='approved' AND a.collection_enabled=1 ORDER BY b.position`)
 	if err != nil {
 		return nil, nil, err
@@ -86,6 +88,17 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		item.SampleIllustIDs = []string{}
 		item.Samples = []domain.LibraryCleanupSample{}
 		seen := map[string]bool{}
+		if item.AuditReason == cleanupShortWorkReason {
+			item.Samples, err = cleanupShortWorkSamples(ctx, tx, item.Artist.ID, round)
+			if err != nil {
+				return nil, nil, err
+			}
+			for _, sample := range item.Samples {
+				item.SampleIllustIDs = append(item.SampleIllustIDs, sample.IllustID)
+				seen[sample.IllustID] = true
+			}
+		}
+		prefix := len(item.Samples)
 		add := func(id string, page int, reason string) {
 			if len(item.Samples) >= 6 || seen[id] {
 				return
@@ -115,7 +128,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 				rows.Close()
 				return nil, nil, err
 			}
-			if len(item.Samples) < 2 {
+			if len(item.Samples)-prefix < 2 {
 				add(id, page, "dislike")
 			}
 		}
@@ -124,7 +137,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		if err != nil {
 			return nil, nil, err
 		}
-		if len(item.Samples) < 2 && (len(item.Samples) == 0 || item.Samples[0].Reason != "ai") {
+		if len(item.Samples)-prefix < 2 && (len(item.Samples) == prefix || item.Samples[prefix].Reason != "ai") {
 			rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 AND w.ai_status='ai' AND w.published_at>=? ORDER BY w.published_at DESC,w.id DESC`, item.Artist.ID, time.Now().Add(-30*24*time.Hour).UnixMilli())
 			if err != nil {
 				return nil, nil, err
@@ -146,11 +159,8 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 				return nil, nil, err
 			}
 		}
-		risk := len(item.Samples)
-		recentLimit := 3
-		if risk == 2 {
-			recentLimit = 2
-		}
+		risk := len(item.Samples) - prefix
+		recentLimit := min(3, max(0, (7-prefix-risk)/2))
 		rows, err = tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT) FROM artworks w JOIN image_pages p ON p.illust_id=w.id AND p.page_index=0 AND p.media_state='indexed' WHERE w.artist_id=? AND w.visible=1 ORDER BY COALESCE(w.published_at,0) DESC,w.id DESC,CASE WHEN w.kind='illust' THEN 0 ELSE 1 END LIMIT 6`, item.Artist.ID)
 		if err != nil {
 			return nil, nil, err
@@ -170,7 +180,7 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 			return nil, nil, err
 		}
 		for _, id := range recent {
-			if len(item.Samples) >= risk+recentLimit {
+			if len(item.Samples) >= prefix+risk+recentLimit {
 				break
 			}
 			add(id, 0, "")
@@ -195,6 +205,43 @@ func cleanupItems(ctx context.Context, tx *sql.Tx) ([]domain.LibraryCleanupItem,
 		}
 	}
 	return items, kept, nil
+}
+
+// cleanupShortWorkSamples samples a recent pool, using the review round so
+// refreshing the same group doesn't reshuffle an unchanged catalog.
+func cleanupShortWorkSamples(ctx context.Context, tx *sql.Tx, artistID, round int64) ([]domain.LibraryCleanupSample, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT CAST(w.id AS TEXT),w.page_count,
+  (SELECT json_group_array(p.page_index ORDER BY p.page_index)
+   FROM image_pages p WHERE p.illust_id=w.id AND p.media_state='indexed' AND p.page_index<w.page_count)
+ FROM artworks w INDEXED BY artworks_artist
+ WHERE w.artist_id=? AND w.visible=1 AND w.kind='illust' AND w.metadata_state='complete'
+   AND w.page_count IN (2,3)
+   AND EXISTS(SELECT 1 FROM image_pages p WHERE p.illust_id=w.id AND p.media_state='indexed'
+      AND p.page_index<w.page_count LIMIT 1 OFFSET 1)
+ ORDER BY w.published_at DESC,w.id DESC LIMIT 30`, artistID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	samples := make([]domain.LibraryCleanupSample, 0, 30)
+	for rows.Next() {
+		var sample domain.LibraryCleanupSample
+		var pages []byte
+		if err := rows.Scan(&sample.IllustID, &sample.PageCount, &pages); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(pages, &sample.PageIndices); err != nil {
+			return nil, err
+		}
+		sample.PageIndex = sample.PageIndices[0]
+		samples = append(samples, sample)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rng := rand.New(rand.NewPCG(uint64(round), uint64(artistID)))
+	rng.Shuffle(len(samples), func(i, j int) { samples[i], samples[j] = samples[j], samples[i] })
+	return samples[:min(3, len(samples))], nil
 }
 
 // NextLibraryCleanup advances only from the caller's current round.
@@ -228,7 +275,7 @@ func (s *Store) NextLibraryCleanup(ctx context.Context, expected int64) (int64, 
 	if err = fillCleanupBatch(ctx, tx, round); err != nil {
 		return 0, nil, nil, err
 	}
-	items, kept, err := cleanupItems(ctx, tx)
+	items, kept, err := cleanupItems(ctx, tx, round)
 	if err != nil {
 		return 0, nil, nil, err
 	}

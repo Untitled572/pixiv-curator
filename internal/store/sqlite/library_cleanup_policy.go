@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const cleanupShortWorkReason = "mostly_two_three_pages"
+
 type cleanupCandidate struct {
 	id       int64
 	priority bool
@@ -123,7 +125,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 			c.priority = true
 			c.weight += 1.5
 			if c.reason == "" {
-				c.reason = "mostly_two_three_pages"
+				c.reason = cleanupShortWorkReason
 			}
 		}
 		c.weight += math.Min(4, .5*math.Log1p(float64(pages)))
@@ -167,10 +169,10 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		candidates = append(candidates, c)
 	}
 	// Weighted sampling without replacement, capped at four priority slots.
-	choose := func(priority bool) int {
+	choose := func(priority, allowShort bool) int {
 		total := 0.0
 		for _, c := range candidates {
-			if (priority && c.priority) || (!priority && !c.pending) {
+			if (allowShort || c.reason != cleanupShortWorkReason) && ((priority && c.priority) || (!priority && !c.pending)) {
 				if priority {
 					total += c.weight
 				} else {
@@ -187,7 +189,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		}
 		pick := rand.Float64() * total
 		for i, c := range candidates {
-			if (priority && !c.priority) || (!priority && c.pending) {
+			if (!allowShort && c.reason == cleanupShortWorkReason) || (priority && !c.priority) || (!priority && c.pending) {
 				continue
 			}
 			w := c.weight
@@ -205,12 +207,17 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		}
 		return -1
 	}
+	shortReasons := 0
 	for pos := 1; pos <= 6; pos++ {
 		priority := pos <= 4
-		idx := choose(priority)
+		allowShort := shortReasons < 2
+		idx := choose(priority, allowShort)
 		if idx < 0 && priority {
 			priority = false
-			idx = choose(false)
+			idx = choose(false, allowShort)
+		}
+		if idx < 0 && !allowShort {
+			idx = choose(false, true)
 		}
 		if idx < 0 {
 			break
@@ -222,6 +229,9 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 		if priority {
 			slot = "priority"
 			reason = c.reason
+			if reason == cleanupShortWorkReason {
+				shortReasons++
+			}
 		}
 		_, err = tx.ExecContext(ctx, `INSERT INTO library_cleanup_batch(artist_id,position,slot_type,audit_reason,trigger_ai_id) VALUES(?,?,?,?,?)`, c.id, pos, slot, reason, c.aiID)
 		if err != nil {

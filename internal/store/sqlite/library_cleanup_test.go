@@ -206,3 +206,99 @@ func TestCleanupBatchPersistsAndUsesAdaptiveCooldown(t *testing.T) {
 		t.Fatalf("cooldown: %d %d %d", until, minAt, maxAt)
 	}
 }
+
+func TestLibraryCleanupCapsShortWorkReasonPerBatch(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	for id := int64(1); id <= 10; id++ {
+		seedEligibleArtist(t, s, id, "approved")
+		works, pages := int64(1), 1
+		if id <= 6 {
+			works, pages = 10, 2
+		}
+		for i := range works {
+			seedSelectionArtwork(t, s, id*100+i, id, "safe", "non_ai", nil, pages)
+		}
+	}
+	_, items, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(items) != 6 {
+		t.Fatalf("items=%d err=%v", len(items), err)
+	}
+	short := 0
+	for _, item := range items {
+		if item.Artist.ID <= 6 {
+			if item.AuditReason != cleanupShortWorkReason {
+				t.Fatalf("expected other artists before more short-work cards: %+v", item)
+			}
+			short++
+		}
+	}
+	if short != 2 {
+		t.Fatalf("short-work cards=%d, want 2", short)
+	}
+}
+
+func TestLibraryCleanupShortSamplesAndRemoveLastPages(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	seedEligibleArtist(t, s, 1, "approved")
+	seedEligibleArtist(t, s, 2, "approved")
+	for id := int64(101); id <= 135; id++ {
+		seedSelectionArtwork(t, s, id, 1, "safe", "non_ai", nil, 3)
+	}
+	seedSelectionArtwork(t, s, 140, 1, "safe", "non_ai", nil, 2)
+	seedSelectionArtwork(t, s, 141, 1, "safe", "non_ai", nil, 4)
+	seedSelectionArtwork(t, s, 201, 2, "safe", "non_ai", nil, 2)
+	if _, err := s.db.ExecContext(ctx, `UPDATE artworks SET published_at=id;
+UPDATE artworks SET retained_page_indices='[0,2]' WHERE artist_id=1 AND page_count=3;
+DELETE FROM image_pages WHERE illust_id BETWEEN 101 AND 135 AND page_index=1;
+INSERT INTO distribution_history(id,collection,illust_id,page_index,selected_at,request_id)
+VALUES ('first','preferred',101,0,1,'trim-test'),('last','preferred',101,2,1,'trim-test')`); err != nil {
+		t.Fatal(err)
+	}
+	round, items, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(items) != 2 || items[0].Artist.ID != 1 || len(items[0].Samples) < 3 {
+		t.Fatalf("round=%d items=%+v err=%v", round, items, err)
+	}
+	samples := items[0].Samples[:3]
+	for _, sample := range samples {
+		id, err := strconv.ParseInt(sample.IllustID, 10, 64)
+		if err != nil || (id != 140 && (id < 107 || id > 135)) || sample.PageIndex != 0 {
+			t.Fatalf("sample outside latest 30 pageable short works: %+v err=%v", sample, err)
+		}
+		want := []int{0, 2}
+		if id == 140 {
+			want = []int{0, 1}
+		}
+		if !reflect.DeepEqual(sample.PageIndices, want) {
+			t.Fatalf("sample indices=%v want=%v", sample.PageIndices, want)
+		}
+	}
+	_, refreshed, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(refreshed) == 0 || len(refreshed[0].Samples) < 3 || !reflect.DeepEqual(refreshed[0].Samples[:3], samples) {
+		t.Fatalf("same round reshuffled the previews: %+v err=%v", refreshed, err)
+	}
+	if _, err := s.RemoveLibraryArtistLastPages(ctx, 1, round+1); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("stale round: %v", err)
+	}
+	if _, err := s.RemoveLibraryArtistLastPages(ctx, 2, round); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("unrelated review reason: %v", err)
+	}
+	if removed, err := s.RemoveLibraryArtistLastPages(ctx, 1, round); err != nil || removed != 36 {
+		t.Fatalf("removed=%d err=%v, want 36", removed, err)
+	}
+	if removed, err := s.RemoveLibraryArtistLastPages(ctx, 1, round); err != nil || removed != 0 {
+		t.Fatalf("retry removed=%d err=%v, want 0", removed, err)
+	}
+	seedSelectionArtwork(t, s, 101, 1, "safe", "non_ai", nil, 3)
+	for id, want := range map[int64]int{101: 1, 140: 1, 141: 4, 201: 2} {
+		var count int
+		if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM image_pages WHERE illust_id=?`, id).Scan(&count); err != nil || count != want {
+			t.Fatalf("work %d pages=%d want=%d err=%v", id, count, want, err)
+		}
+	}
+	var retained string
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM distribution_history WHERE request_id='trim-test'`).Scan(&retained); err != nil || retained != "first" {
+		t.Fatalf("history=%q err=%v, want only the retained first page", retained, err)
+	}
+}

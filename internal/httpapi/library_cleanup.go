@@ -122,6 +122,31 @@ func RegisterLibraryCleanup(mux *http.ServeMux, store libraryCleanupStore, auth 
 			writeJSON(w, http.StatusOK, map[string]int64{"before": before, "after": after})
 		})))
 	}
+	if removing, ok := store.(interface {
+		RemoveLibraryArtistLastPages(context.Context, int64, int64) (int64, error)
+	}); ok {
+		mux.Handle("POST /admin/api/library/artists/{id}/remove-last-pages", auth.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+			if err != nil || id <= 0 || r.URL.RawQuery != "" {
+				apiError(w, domain.ErrInvalid)
+				return
+			}
+			var in struct {
+				Round int64 `json:"round"`
+			}
+			if !decodeBody(w, r, &in) {
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+			defer cancel()
+			removed, err := removing.RemoveLibraryArtistLastPages(ctx, id, in.Round)
+			if err != nil {
+				apiError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]int64{"removed": removed})
+		})))
+	}
 	if restoring, ok := store.(interface {
 		RestoreLibraryArtistPages(context.Context, int64) (string, error)
 	}); ok {

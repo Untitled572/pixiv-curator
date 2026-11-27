@@ -331,7 +331,7 @@
         (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
           const illustID = String(sample.illust_id), pageIndex = Number(sample.page_index) || 0;
           const tile = node("button", "sample-tile"); tile.type = "button"; tile.setAttribute("aria-label", "查看作品 " + illustID + " 第 " + (pageIndex + 1) + " 页大图");
-          tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex, title: "代表作 " + illustID, artistName: artist.name || "" }));
+          tile.addEventListener("click", () => window.PixivCuratorViewer.open({ id: illustID, artistId: id, pageIndex, pageCount: sample.page_count, pageIndices: sample.page_indices, title: "代表作 " + illustID, artistName: artist.name || "" }));
           const image = node("img", "cover-image"); image.loading = "lazy"; image.decoding = "async"; image.alt = "代表作 " + illustID; image.src = `/admin/api/previews/${encodeURIComponent(illustID)}/${pageIndex}`; tile.append(image);
           if (sample.reason) tile.append(node("span", "sample-badge", sample.reason === "dislike" ? "已踩" : "AI"));
           samples.append(tile);
@@ -374,6 +374,40 @@
           }
         });
         trim.disabled = item.trimmed || Number(item.summary?.pages || 0) < 2;
+        if (item.audit_reason === "mostly_two_three_pages") {
+          let confirmRemoveLastPages = false;
+          const removeLastPages = button(actions, "去掉末页", "button button-small library-trim-button", async () => {
+            if (removeLastPages.disabled || libraryRemovalPending) return;
+            if (!confirmRemoveLastPages) {
+              confirmRemoveLastPages = true;
+              removeLastPages.textContent = "确认去掉末页?";
+              return;
+            }
+            confirmRemoveLastPages = false;
+            libraryRemovalPending = true;
+            trigger.disabled = true;
+            list.inert = true;
+            removeLastPages.textContent = "处理中…";
+            let refresh = false;
+            try {
+              const removed = await api(`/admin/api/library/artists/${encodeURIComponent(id)}/remove-last-pages`, {
+                method: "POST", body: JSON.stringify({ round: result.round })
+              });
+              refresh = true;
+              showMessage(removed.removed ? `已去掉 ${removed.removed} 页末页。` : "没有可清理的末页。");
+            } catch (error) {
+              refresh = error.message === "CONFLICT";
+              report(error, "去掉末页");
+            } finally {
+              libraryRemovalPending = false;
+              trigger.disabled = false;
+              list.inert = false;
+              removeLastPages.textContent = "去掉末页";
+              if (refresh) await loadLibraryReview();
+            }
+          });
+          removeLastPages.title = "清理该画师已收录的所有两到三页插画的末页";
+        }
         button(actions, "移出图库", "button button-danger button-small", async (event) => {
           const remove = event.currentTarget;
           if (remove.disabled || libraryRemovalPending) return;

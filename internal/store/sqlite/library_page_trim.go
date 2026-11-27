@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -59,23 +60,84 @@ UPDATE artworks SET retained_page_indices=limits.page_indices FROM limits WHERE 
 	if err != nil {
 		return 0, 0, err
 	}
-	// History rows reference the exact page. Keep independent feedback and work metadata
-	// for discovery, while removing the history references that would outlive a page.
-	pruned := `(illust_id,page_index) IN (
- SELECT p.illust_id,p.page_index FROM artworks w JOIN image_pages p ON p.illust_id=w.id
- WHERE w.artist_id=? AND w.kind<>'manga' AND w.retained_page_indices IS NOT NULL
- AND p.page_index NOT IN (SELECT value FROM json_each(w.retained_page_indices))
-)`
-	for _, table := range []string{"selection_history", "distribution_history", "image_pages"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+pruned, id); err != nil {
-			return 0, 0, err
-		}
+	if _, err = deleteExcludedArtistPages(ctx, tx, id, false); err != nil {
+		return 0, 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, 0, err
 	}
 	s.RequestSelectionSnapshotRefresh()
 	return total, target, nil
+}
+
+// RemoveLibraryArtistLastPages prunes the stored final page of each visible
+// two- or three-page illustration for the current review card.
+func (s *Store) RemoveLibraryArtistLastPages(ctx context.Context, id, round int64) (int64, error) {
+	if id <= 0 || round <= 0 {
+		return 0, domain.ErrInvalid
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	var eligible bool
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(
+ SELECT 1 FROM library_cleanup_batch b JOIN artists a ON a.id=b.artist_id
+ JOIN library_cleanup_state state ON state.id=1 AND state.initialized=1 AND state.round=?
+ WHERE b.artist_id=? AND b.kept=0 AND b.audit_reason=?
+ AND a.review_status='approved' AND a.collection_enabled=1
+ AND NOT EXISTS(SELECT 1 FROM jobs WHERE dedupe_key=? AND state IN ('pending','running','retry_wait','paused_auth'))
+)`, round, id, cleanupShortWorkReason, fmt.Sprintf("artist-restore:%d", id)).Scan(&eligible)
+	if err != nil {
+		return 0, err
+	}
+	if !eligible {
+		return 0, domain.ErrConflict
+	}
+
+	_, err = tx.ExecContext(ctx, `UPDATE artworks AS w SET retained_page_indices=(
+ SELECT json_group_array(p.page_index ORDER BY p.page_index)
+ FROM image_pages p WHERE p.illust_id=w.id AND p.page_index<>w.page_count-1
+)
+WHERE w.artist_id=? AND w.visible=1 AND w.kind='illust' AND w.page_count IN(2,3)
+AND EXISTS(SELECT 1 FROM image_pages p WHERE p.illust_id=w.id AND p.page_index=w.page_count-1)`, id)
+	if err != nil {
+		return 0, err
+	}
+	removed, err := deleteExcludedArtistPages(ctx, tx, id, true)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	if removed > 0 {
+		s.RequestSelectionSnapshotRefresh()
+	}
+	return removed, nil
+}
+
+// History rows reference the exact page. Leave independent feedback and work
+// metadata in the catalog while removing references that need the old page.
+func deleteExcludedArtistPages(ctx context.Context, tx *sql.Tx, artistID int64, onlyLast bool) (int64, error) {
+	pruned := `(illust_id,page_index) IN (
+ SELECT p.illust_id,p.page_index FROM artworks w JOIN image_pages p ON p.illust_id=w.id
+ WHERE w.artist_id=? AND w.kind<>'manga' AND w.retained_page_indices IS NOT NULL
+ AND (?=0 OR (w.visible=1 AND w.kind='illust' AND w.page_count IN(2,3) AND p.page_index=w.page_count-1))
+ AND p.page_index NOT IN (SELECT value FROM json_each(w.retained_page_indices))
+)`
+	for _, table := range []string{"selection_history", "distribution_history"} {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+pruned, artistID, onlyLast); err != nil {
+			return 0, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM image_pages WHERE `+pruned, artistID, onlyLast)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // RestoreLibraryArtistPages removes the trim limits and queues a full artwork

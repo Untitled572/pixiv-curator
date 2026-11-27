@@ -35,9 +35,11 @@ type LibraryCleanupItem struct {
 
 // LibraryCleanupSample identifies the exact preview page selected for review.
 type LibraryCleanupSample struct {
-	IllustID  string `json:"illust_id"`
-	PageIndex int    `json:"page_index"`
-	Reason    string `json:"reason,omitempty"`
+	IllustID    string `json:"illust_id"`
+	PageIndex   int    `json:"page_index"`
+	PageCount   int    `json:"page_count,omitempty"`
+	PageIndices []int  `json:"page_indices,omitempty"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 type LibraryCleanupSummary struct {
