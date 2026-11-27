@@ -207,3 +207,36 @@ func TestCleanupCountsR18BranchTowardAvailability(t *testing.T) {
 		t.Fatalf("R18 supply should count toward review without changing default eligibility: %+v", item)
 	}
 }
+
+func TestCleanupPrioritizesArtistsWithMostlyTwoOrThreeRecentPages(t *testing.T) {
+	ctx := context.Background()
+	s := openTestStore(t)
+	for artist, count := range []int{120, 10, 9} {
+		id := int64(artist + 1)
+		seedEligibleArtist(t, s, id, "approved")
+		for i := range count {
+			pages := 1
+			// Artist 1 has 51 short works in the latest 100, even though
+			// they are less than half of its 120 works overall.
+			if artist == 0 && i >= 69 || artist == 1 && i >= 5 || artist == 2 {
+				pages = 2 + i%2
+			}
+			seedSelectionArtwork(t, s, id*1000+int64(i), id, "safe", "non_ai", nil, pages)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE artworks SET published_at=id`); err != nil {
+		t.Fatal(err)
+	}
+	_, items, _, err := s.LibraryCleanupReview(ctx)
+	if err != nil || len(items) != 3 {
+		t.Fatalf("review items=%+v err=%v", items, err)
+	}
+	if first := items[0]; first.Artist.ID != 1 || first.SlotType != "priority" || first.AuditReason != "mostly_two_three_pages" {
+		t.Fatalf("expected short-work priority, got %+v", first)
+	}
+	for _, item := range items[1:] {
+		if item.AuditReason == "mostly_two_three_pages" {
+			t.Fatalf("artist below the sample or proportion threshold matched: %+v", item)
+		}
+	}
+}

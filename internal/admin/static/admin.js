@@ -305,24 +305,27 @@
       if (controller.signal.aborted || !$("#library-review").open) return;
       libraryReviewRound = result.round;
       const kept = new Set(result.kept_ids || []);
+      const items = Array.isArray(result.items) ? result.items : [];
       const fragment = document.createDocumentFragment();
-      (Array.isArray(result.items) ? result.items : []).slice(0, 6).forEach((item) => {
+      items.filter((item) => !kept.has(String(item.artist?.id || ""))).slice(0, 6).forEach((item) => {
         const artist = item.artist || {}, id = String(artist.id || "");
         const card = node("article", "library-review-card"); card.dataset.artistId = id;
         const heading = node("div", "library-review-heading");
         const identity = node("div"), name = node("h3", "artist-name"), profile = node("a", "candidate-title-button", artist.name || "Pixiv UID " + id); profile.href = `https://www.pixiv.net/users/${encodeURIComponent(id)}`; profile.target = "_blank"; profile.rel = "noopener noreferrer"; name.append(profile); identity.append(name, node("p", "artist-id", "UID " + id)); heading.append(identity);
-        const keep = button(heading, kept.has(id) ? "已标记保留" : "保留", "button button-quiet button-small", async () => {
+        const keep = button(heading, "保留", "button button-quiet button-small", async () => {
           keep.disabled = true;
           try {
             await api(`/admin/api/library/artists/${encodeURIComponent(id)}/keep`, {
               method: "POST", body: JSON.stringify({ round: result.round })
             });
-            keep.textContent = "已标记保留";
+            if (card.parentNode === list) {
+              card.remove();
+              if (!list.querySelector(".library-review-card")) list.replaceChildren(node("p", "empty-cell", "本组已整理完，可以换一组。"));
+            }
           } catch (error) { keep.disabled = false; report(error, "保留画师"); }
         });
-        keep.disabled = kept.has(id);
         card.append(heading);
-        const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", low_availability: "供图可用率偏低", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
+        const reasons = { dislikes: "净踩较多", large_catalog: "图库较大", mostly_two_three_pages: "近期 2–3 页作品居多", low_availability: "供图可用率偏低", recent_ai: "近期出现 AI", recent_manga: "近期漫画较多", no_preview: "长期无图", new_ai: "冷却期间出现 AI", new_dislikes: "冷却期间新增踩", routine: "常规巡检" };
         card.append(node("p", "field-help", (reasons[item.audit_reason] || "常规巡检") + " · " + artistSummaryText(item.summary || {})));
         const samples = node("div", "library-review-samples");
         (Array.isArray(item.samples) ? item.samples : (item.sample_illust_ids || []).map((illust_id) => ({ illust_id, page_index: 0 }))).slice(0, 6).forEach((sample) => {
@@ -413,7 +416,7 @@
         });
         card.append(actions); fragment.append(card);
       });
-      if (!fragment.children.length) fragment.append(node("p", "empty-cell", "这轮没有可整理的画师，可以换一组。"));
+      if (!fragment.children.length) fragment.append(node("p", "empty-cell", items.length ? "本组已整理完，可以换一组。" : "这轮没有可整理的画师，可以换一组。"));
       list.replaceChildren(fragment);
     } catch (error) {
       if (libraryReviewController !== controller) return;

@@ -48,7 +48,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	}
 	queryArgs := append([]any{now, round, now, round}, args...)
 	cutoff := now - 30*day
-	queryArgs = append(queryArgs, cutoff, cutoff, cutoff, cutoff)
+	queryArgs = append(queryArgs, cutoff, cutoff)
 	rows, err := tx.QueryContext(ctx, `WITH candidates AS MATERIALIZED (
       SELECT ar.id,ar.cleanup_enabled_at,ar.last_synced_at,COALESCE(s.last_batch_round,0) AS last_batch_round,
         COALESCE(s.pending_reason,'') AS pending_reason,s.pending_ai_id
@@ -59,15 +59,14 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
         (s.started_at IS NULL AND COALESCE(s.until_round,0)<?)
       )
     ), work_stats AS (
-      SELECT a.artist_id,a.published_at,a.kind,a.ai_status,
+      SELECT a.artist_id,a.published_at,a.ai_status,
         COUNT(p.illust_id) AS pages,SUM(CASE WHEN p.page_index=0 THEN 1 ELSE 0 END) AS previews,
         MAX(CASE WHEN `+where+` THEN 1 ELSE 0 END) AS qualified
       FROM candidates c CROSS JOIN artworks a INDEXED BY artworks_artist ON a.artist_id=c.id JOIN artists ar ON ar.id=c.id
       LEFT JOIN image_pages p ON p.illust_id=a.id AND p.media_state='indexed'
-      WHERE a.visible=1 GROUP BY a.id
+      WHERE a.visible=1 AND a.kind<>'manga' GROUP BY a.id
     ), artwork_stats AS (
-      SELECT artist_id,COUNT(*) AS total,SUM(kind='manga' AND published_at>=?) AS recent_manga,
-        SUM(published_at>=?) AS recent_works,SUM(ai_status='ai' AND published_at>=?) AS recent_ai,
+      SELECT artist_id,COUNT(*) AS total,SUM(ai_status='ai' AND published_at>=?) AS recent_ai,
         SUM(pages) AS pages,SUM(previews) AS previews,SUM(qualified) AS qualified
       FROM work_stats GROUP BY artist_id
     ), feedback_stats AS (
@@ -75,22 +74,28 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
         SUM(f.value='dislike' AND f.updated_at>=?) AS recent_dislikes
       FROM image_feedback f CROSS JOIN artworks w ON f.illust_id=w.id WHERE w.kind<>'manga' GROUP BY w.artist_id
     ) SELECT c.id,c.cleanup_enabled_at,c.last_synced_at,c.last_batch_round,c.pending_reason,c.pending_ai_id,
-      COALESCE(ast.total,0),COALESCE(ast.recent_manga,0),COALESCE(ast.recent_works,0),COALESCE(ast.recent_ai,0),COALESCE(ast.pages,0),COALESCE(ast.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(ast.qualified,0)
+      COALESCE(ast.total,0),COALESCE(ast.recent_ai,0),COALESCE(ast.pages,0),COALESCE(ast.previews,0),COALESCE(fs.likes,0),COALESCE(fs.dislikes,0),COALESCE(fs.recent_dislikes,0),COALESCE(ast.qualified,0),
+      (SELECT CASE WHEN count(*)>=10 THEN 2*sum(page_count IN (2,3))>count(*) ELSE 0 END
+        FROM (SELECT w.page_count FROM artworks w INDEXED BY artworks_artist
+              WHERE w.artist_id=c.id AND w.visible=1 AND w.kind='illust'
+                AND w.metadata_state='complete' AND w.page_count>0
+              ORDER BY w.published_at DESC,w.id DESC LIMIT 100)) AS mostly_short
       FROM candidates c LEFT JOIN artwork_stats ast ON ast.artist_id=c.id LEFT JOIN feedback_stats fs ON fs.artist_id=c.id`, queryArgs...)
 	if err != nil {
 		return err
 	}
 	type base struct {
-		id                                                                                                     int64
-		enabled, synced, ai                                                                                    sql.NullInt64
-		last                                                                                                   int64
-		pending                                                                                                string
-		total, recentManga, recentWorks, recentAI, pages, previews, likes, dislikes, recentDislikes, qualified int64
+		id                                                                           int64
+		enabled, synced, ai                                                          sql.NullInt64
+		last                                                                         int64
+		pending                                                                      string
+		total, recentAI, pages, previews, likes, dislikes, recentDislikes, qualified int64
+		mostlyShort                                                                  bool
 	}
 	bases := []base{}
 	for rows.Next() {
 		var b base
-		if err = rows.Scan(&b.id, &b.enabled, &b.synced, &b.last, &b.pending, &b.ai, &b.total, &b.recentManga, &b.recentWorks, &b.recentAI, &b.pages, &b.previews, &b.likes, &b.dislikes, &b.recentDislikes, &b.qualified); err != nil {
+		if err = rows.Scan(&b.id, &b.enabled, &b.synced, &b.last, &b.pending, &b.ai, &b.total, &b.recentAI, &b.pages, &b.previews, &b.likes, &b.dislikes, &b.recentDislikes, &b.qualified, &b.mostlyShort); err != nil {
 			rows.Close()
 			return err
 		}
@@ -103,7 +108,7 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 	}
 	candidates := []cleanupCandidate{}
 	for _, b := range bases {
-		total, pages, previews, likes, dislikes, recentDislikes, recentWorks, recentManga, recentAI, qualified := b.total, b.pages, b.previews, b.likes, b.dislikes, b.recentDislikes, b.recentWorks, b.recentManga, b.recentAI, b.qualified
+		total, pages, previews, likes, dislikes, recentDislikes, recentAI, qualified := b.total, b.pages, b.previews, b.likes, b.dislikes, b.recentDislikes, b.recentAI, b.qualified
 		if b.enabled.Valid && !(b.synced.Valid && b.synced.Int64 >= b.enabled.Int64) && previews < 3 {
 			continue
 		}
@@ -113,6 +118,13 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 			c.priority = true
 			c.reason = "dislikes"
 			c.weight += math.Min(8, float64(net)*3)
+		}
+		if b.mostlyShort {
+			c.priority = true
+			c.weight += 1.5
+			if c.reason == "" {
+				c.reason = "mostly_two_three_pages"
+			}
 		}
 		c.weight += math.Min(4, .5*math.Log1p(float64(pages)))
 		if pages >= 1000 {
@@ -133,12 +145,6 @@ func fillCleanupBatch(ctx context.Context, tx *sql.Tx, round int64) error {
 			c.weight += 2.5
 			if c.reason == "" {
 				c.reason = "recent_ai"
-			}
-		} else if recentWorks >= 5 && float64(recentManga)/float64(recentWorks) >= .8 {
-			c.priority = true
-			c.weight += 1.5
-			if c.reason == "" {
-				c.reason = "recent_manga"
 			}
 		}
 		if b.enabled.Valid && now-b.enabled.Int64 >= 30*day && previews == 0 {
